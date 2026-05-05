@@ -43,7 +43,7 @@ Read these in order, deeply. Don't skim — the context layer exists BECAUSE of 
    - `<project>/continuation/context.md` (running-log style, in `continuation/` dir)
    - `<project-root>/CONTEXT.md` (CONTEXT-style, running log with variant filename; companion dir is `<project>/context/`)
    - In monolithic-handoff projects, HANDOFF.md doubles as wiki + handoff — there's no separate wiki doc. Read HANDOFF.md fully.
-   - If the wiki doc is > 500 lines, **read in chunks from offset=1 to EOF** — don't skip the top (latest pickup point). Sparse reads WILL miss the state.
+   - If the wiki doc exceeds the Read tool's default 2000-line return, **chunk procedurally**: `Read(file, offset=1, limit=2000)`, then `Read(file, offset=2001, limit=2000)`, continue until a Read returns < 2000 lines (= EOF). Do NOT stop after the first chunk because "the current pickup point is at the top" — the docket, locked decisions, and known issues live below it. Stopping early is the #1 historical failure mode of this skill (see Fail modes). Token cost of a full read IS the expected cost of starting a session — budget for it.
 4. **Master index / roadmap** (if present) — `<project>/continuation/INDEX.md` (running-log) OR docket file in `<project>/context/` like `<topic>_docket.md` (CONTEXT-style). Look for explicit `roadmap.md` / `docket.md` / `INDEX.md` / `*_docket.md` filenames.
 
 ### Tier 2 — read if present
@@ -180,7 +180,8 @@ After delivering the briefing, the skill's job is done. The user now drives:
 
 ## Fail modes to watch
 
-- **Skimming context.md** → the #1 failure. Read top-to-bottom of the current pickup point at minimum.
+- **Skimming context.md** → the #1 failure. The trap looks like this announcement: *"context.md is too large for one read. Reading the top entry (current pickup point) and the docket."* That sentence IS the violation — it sounds reasonable but it's the exact behavior the chunk-read rule was added to prevent. Read top-to-bottom procedurally (see Tier 1 reading instructions for the exact `Read` calls).
+  - **Verification ritual before producing the briefing**: pick three concrete facts to quote — one from the file's top third (the latest pickup point), one from the middle third (older pickup points or wiki sections), one from the bottom third (oldest history or initial decisions). If you can only quote from the top, you only read the top — re-chunk before synthesizing. Files read in full (< 2000 lines) pass trivially. The check is hard to fake because the bottom-third fact has to come from text the model couldn't have inferred from the pickup-point summary alone.
 - **Trusting one tier only** → HANDOFF.md's "next session" pointer can go stale if a memory file captures a more recent decision. Cross-check.
 - **Regurgitation** → producing a briefing that's literally just concatenated file contents. Synthesis is the product. If you couldn't answer "what's the next concrete move" after reading, you didn't synthesize.
 - **Tier-3 creep** → reading every archived pickup point to feel thorough. Wastes tokens and dilutes the briefing. Only dip into archive if the user asks.

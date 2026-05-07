@@ -239,6 +239,38 @@ This file-list + summary lets the user verify post-hoc what was done without re-
 
 Write the planned changes. Verify each file is coherent after write (re-read the edited sections; check wiki-links and path references still resolve).
 
+### Optional: Lifecycle direct-push exemption (per-project opt-in)
+
+Some projects with multi-worktree workflows benefit from `HANDOFF.md` and the wiki doc (`continuation/context.md` or `CONTEXT.md`) landing directly on `main` rather than the current worktree's feature branch. This prevents **state fragmentation** — where lifecycle docs live in unmerged feature branches and a sibling worktree's `analyze-context` reads stale state from a worktree that never received the previous session's update.
+
+**Per-project opt-in.** This is NOT default. A project opts in via either:
+
+- A marker file at `<project>/.claude/lifecycle-direct-push.flag` (presence = opt-in)
+- A `## Lifecycle direct-push exemption` subsection in CLAUDE.md naming `HANDOFF.md` and `context.md` / `CONTEXT.md` as the only files exempt from no-auto-push
+
+**When opted in**: replace Step 5's commit step with the branch-switch-stash-commit-push-restore sequence — the same shape used by direct-push slash commands like `/tell-collaborator` writing to a coordination feed. The exemption applies to **only** the lifecycle docs (HANDOFF + context.md/CONTEXT.md). All other update-context writes (memory files, project skill SKILL.md, roadmap.md, decision docs) commit on the current branch per default Step 6.
+
+Canonical bash flow:
+
+```bash
+ORIGINAL_BRANCH=$(git symbolic-ref --short HEAD)
+STASH_CREATED=false
+if ! git diff --quiet || ! git diff --cached --quiet; then
+  git stash push -m "update-context-autostash" && STASH_CREATED=true
+fi
+
+git checkout main && git pull --ff-only origin main
+# ... write/commit lifecycle docs ...
+git push origin main || (git pull --rebase origin main && git push origin main)
+
+git checkout "$ORIGINAL_BRANCH"
+[ "$STASH_CREATED" = true ] && git stash pop
+```
+
+**Trade-off**: direct-push removes the worktree-fragmentation failure mode but requires the same atomic-stash discipline (`git stash push`, NOT `git stash create`/`store`) to handle dirty worktrees safely. Race-with-another-writer requires `git pull --rebase` + retry-once. Opt in only if the worktree-mismatch problem is actually biting in practice.
+
+**When NOT opted in (default)**: fall through to Step 6's "stop before commit/push" rule as written.
+
 ### Step 6 — Stop before committing
 
 Do NOT run `git commit` or `git push` automatically. Default to no-auto-push. Report:

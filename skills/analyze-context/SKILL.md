@@ -83,18 +83,72 @@ Don't read upfront; read if the user asks about something specific:
 - Memory lives at `<project>/context/memory/` in-repo (not out-of-repo)
 - All other workflow steps (tier-2 reads, briefing synthesis, drill-down discipline) proceed identically to running-log style
 
+### Step 1.5 — Verify worktree state (skip if not in a worktree-per-session workflow)
+
+If the project uses git worktrees (multiple working directories sharing one `.git` directory), the lifecycle docs you're about to read may not reflect the project's actual current state — sibling worktrees can have newer commits with newer HANDOFF/context content. Run this check before reading content files:
+
+```bash
+# List all worktrees + their HEADs
+git worktree list
+
+# Identify newer siblings on the same .git
+CURRENT_WT=$(git rev-parse --show-toplevel)
+CURRENT_HEAD=$(git rev-parse HEAD)
+CURRENT_TS=$(git log -1 --format=%ct HEAD)
+
+git worktree list --porcelain | awk '/^worktree/ {wt=$2} /^HEAD/ {print wt, $2}' | \
+while read wt head; do
+  if [ "$wt" != "$CURRENT_WT" ]; then
+    OTHER_TS=$(git -C "$wt" log -1 --format=%ct "$head" 2>/dev/null)
+    if [ -n "$OTHER_TS" ] && [ "$OTHER_TS" -gt "$CURRENT_TS" ]; then
+      echo "newer-sibling: $wt at $head (ts $OTHER_TS vs current $CURRENT_TS)"
+    fi
+  fi
+done
+
+# Also check origin for unpulled commits on the current branch
+git fetch --all --quiet 2>/dev/null
+git log HEAD..@{upstream} --oneline 2>/dev/null | head -5
+```
+
+**If the check surfaces a newer sibling worktree or unpulled origin commits**: STOP and ask the user before proceeding. Don't synthesize a briefing from files in a stale worktree. Sample message:
+
+> *"I'm running in worktree `<name>` at HEAD `<hash>` (timestamp X). Sibling worktree `<name>` has a newer HEAD `<hash>` (timestamp Y, ~N hours newer). Should I read from there, or is this worktree authoritative? If the latest work is in the sibling, point me at that path before I synthesize."*
+
+**If the check is clean**: proceed to Step 2. Mention nothing — silence is the success case.
+
+**Why this matters**: in a worktree-per-session workflow, each session creates a fresh worktree from main. If a previous session's `update-context` commits stayed on its worktree's branch (not merged to main), the new session's worktree starts at the older main HEAD and reads outdated lifecycle docs. The skill's "current state" reads will be silently wrong. This is the **wrong-worktree failure mode** — fundamentally different from sparse-read or doc-drift, and undetectable without explicit worktree enumeration.
+
 ### Step 2 — Read the tier-1 set fully
 
 Run file reads in parallel where possible. Respect the "read in full, not sparse chunks" rule — especially for running logs like `continuation/context.md` that accrete detail at the top.
 
 If a file exceeds single-read limits, chunk it. Do not skip sections to fit context. The token cost of a full read IS the expected cost of starting a session.
 
-### Step 3 — Index tier-2, read selectively
+### Step 3 — Index tier-2, read strategically
 
-From the memory index (`MEMORY.md`):
-- Scan one-liners
-- Click into files that relate to the session's apparent purpose (the first user message, or the most recent pickup point's "next session" plan)
-- Don't open all 20+ memory files; that's noise
+The default approach ("scan MEMORY.md, click into relevant files") works for small memory directories. For larger ones (50+ files), the index itself encodes navigation signals you must read carefully:
+
+**Section structure**: if MEMORY.md uses heading-divided sections (e.g., `## Clinical & content rules`, `## Project infrastructure`, `## Behavioral rules`), identify which section maps to the user's task domain. Read **all** files in that section, not just files whose names obviously match. Section membership is the project's curated "what's relevant when" signal — trust it over filename heuristics.
+
+**Priority markers**: if entries use markers like ⚡, ⚡⚡, ⭐, 🔴, 🟡, 🟢, etc., treat marked entries as must-read for any session in their domain. Single-marker = high priority; double-marker = critical / load-bearing for current work. Don't skip marked entries based on filename heuristics — markers exist precisely because the filename underspecifies the importance.
+
+**Inline update patches**: index entries are NOT one-liners on mature memory dirs — they often contain embedded `**LATE+N UPDATE**`, `**Updated YYYY-MM-DD (N corrections)**`, or `**As of YYYY-MM-DD**` patches that supersede the linked file's body. **Read the FULL TEXT of each index entry, not just the first sentence.** The most recent state often lives in the index entry, not in the linked file.
+
+**Sibling cross-references**: entries may link to related rules: *"Sibling: feedback_X.md"*, *"Sibling rules: clinic_X.md, project_Y.md, feedback_Z.md"*, or inline `[link](file)` references in body text. Follow these links transitively. Stop only when the cluster's domain coverage feels complete — don't stop at the first hop.
+
+**Prefix-based reading discipline** — differentiate the read rule by file prefix:
+
+| Prefix | Reading discipline |
+|---|---|
+| `clinic_*`, `business_*`, `scope_*`, `domain_*` | **Always read** when writing content in scope. Non-negotiable business rules; missing them produces compliance violations, not just imperfect output. |
+| `feedback_*` | Read if the rule applies to current work (use prefix + filename + index entry to judge). |
+| `research_*` | Read the **most-recent-dated** file in the relevant domain. Older research files are tier-3 (only if user asks). |
+| `project_*` | Read when implementing patterns in the project's domain. |
+| `memory_*` (verdicts) | Read for locked decisions; rarely re-read once locked, but check the index entry for any inline supersession note. |
+| `plan_*`, `intake_*`, `page_intent_*` | Treat as project conventions; read at session start if relevant to the work. |
+
+**Calibration**: don't pad to read every memory file every session (still wasteful). But don't under-read either — if the index has 50+ files and your heuristic produces 0 reads, something's wrong. **At minimum** read the section matching the user's task + all ⚡⚡ entries + any `clinic_*` / scope-prefix files for content-writing tasks.
 
 ### Step 4 — Build the briefing
 
@@ -182,6 +236,8 @@ After delivering the briefing, the skill's job is done. The user now drives:
 
 - **Skimming context.md** → the #1 failure. The trap looks like this announcement: *"context.md is too large for one read. Reading the top entry (current pickup point) and the docket."* That sentence IS the violation — it sounds reasonable but it's the exact behavior the chunk-read rule was added to prevent. Read top-to-bottom procedurally (see Tier 1 reading instructions for the exact `Read` calls).
   - **Verification ritual before producing the briefing**: pick three concrete facts to quote — one from the file's top third (the latest pickup point), one from the middle third (older pickup points or wiki sections), one from the bottom third (oldest history or initial decisions). If you can only quote from the top, you only read the top — re-chunk before synthesizing. Files read in full (< 2000 lines) pass trivially. The check is hard to fake because the bottom-third fact has to come from text the model couldn't have inferred from the pickup-point summary alone.
+- **HANDOFF references commits not in this worktree's git log** → strong signal of a worktree mismatch. If `HANDOFF.md` cites commit hashes that `git log` can't find from this worktree's HEAD, the file was authored in a sibling worktree at a different branch tip. STOP — don't synthesize a briefing from a worktree that's missing referenced commits. Run Step 1.5's worktree check, ask the user which worktree to read from, then restart.
+- **Wrong-worktree silent staleness** → in worktree-per-session workflows, you may be reading lifecycle docs from a worktree whose branch never received a previous session's `update-context` commits. Step 1.5's check is the only reliable detection. Skipping Step 1.5 is the canonical way this failure mode reaches the briefing undetected.
 - **Trusting one tier only** → HANDOFF.md's "next session" pointer can go stale if a memory file captures a more recent decision. Cross-check.
 - **Regurgitation** → producing a briefing that's literally just concatenated file contents. Synthesis is the product. If you couldn't answer "what's the next concrete move" after reading, you didn't synthesize.
 - **Tier-3 creep** → reading every archived pickup point to feel thorough. Wastes tokens and dilutes the briefing. Only dip into archive if the user asks.

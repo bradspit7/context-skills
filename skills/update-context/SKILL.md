@@ -90,6 +90,31 @@ Combine with the conversation's narrative. Build a session summary:
 - **Deferred** — acknowledged-but-not-done; belongs in next-session docket
 - **Pending user** — things that need user input (API keys, push approvals, scope decisions)
 
+### Step 2.5 — Untracked-file triage gate (mandatory)
+
+**Every file returned by `git ls-files --others --exclude-standard` MUST be explicitly classified before Step 3.** No untracked file is allowed to be silently skipped. This is the gate the skill historically lacked — agent memory of Edit/Write tool calls is an incomplete view of the working tree because Bash-tool side effects (heredoc-redirected file writes, script output captures, `gh`/`curl` downloads, `>` redirects) create files that never appear in the Edit/Write audit trail. The post-mortem canonical incident: a wrap-up missed 3 `.superpowers_*`-prefixed research artifacts produced by an in-session Python extraction script, ~30-45 min of work + a tool-reinstall away from being unrecoverable.
+
+For each untracked file, run:
+
+```bash
+git check-ignore -v <path>
+```
+
+…and classify into exactly one of:
+
+| Class | Action | Audit-artifact line |
+|---|---|---|
+| **(a) Commit** — relevant work artifact | Stage + include in this session's commit | `<path>  [commit]  <one-line: what this file is, why it belongs in history>` |
+| **(b) Delete** — intentional scratch, no future value | `rm <path>` before Step 3 | `<path>  [delete]  <one-line: why scratch, not session output>` |
+| **(c) Leave untracked** — pre-existing project clutter, explicitly throwaway, or session-private debugging | Keep on disk, do not stage | `<path>  [leave-untracked]  <one-line justification>` |
+| **(d) Already gitignored** — `git check-ignore` returned the matching rule | No action; surface the rule for verification | `<path>  [gitignored: <.gitignore:LINE: PATTERN>]` |
+
+**Do not trust agent-side pattern-matching for gitignore decisions.** A file named `.superpowers_extract_ultratap.py` LOOKS gitignored if you scanned `.gitignore` and saw `.superpowers/` — but the directory pattern and the filename-prefix are different rules and the file is NOT ignored. Always defer to `git check-ignore -v`'s exit code: zero = ignored (and the rule + line number is printed), non-zero = NOT ignored, file must be triaged into (a)/(b)/(c).
+
+**Symmetric trap to watch for: Bash-tool-created files in directories the agent doesn't think of as "this session's output."** Project root `.foo`-prefixed scratch, `/tmp` writes that got copied into the project dir, sibling-directory writes from a script run with the wrong CWD. Run `git ls-files --others --exclude-standard` from the project root; trust its output over any mental model of "where I wrote files."
+
+The classified list flows into Step 4's audit artifact as additional rows beyond the obviously-edited HANDOFF / context / memory files. **The Step 4 audit artifact is incomplete if it does not enumerate Step 2.5's classifications.**
+
 ### Step 3 — Plan updates per file
 
 #### Universal rule — always produce/update `<project-root>/HANDOFF.md`
@@ -227,18 +252,36 @@ Then build the chosen scaffold at minimum: HANDOFF.md with placeholder sections,
 
 **Invoking the skill IS the authorization.** Do NOT stop to ask for per-run confirmation before writing. The user already expressed intent by triggering the skill; asking again is friction without safety gain.
 
-For each file about to be updated, emit an **audit artifact** in the response:
-```
-**<path>** — <one-line summary of what's changing>
+**Build the audit artifact from `git status --porcelain` ground truth, NOT from agent memory of edits.** Memory of Edit/Write calls is an incomplete view because Bash-tool side effects (script output captures, heredoc writes, `gh`/`curl` downloads) create real files invisible to the Edit/Write audit trail. The canonical failure mode the audit artifact prevents: agent reports "wrap complete" with a HANDOFF entry mentioning some research, but the empirical data files that ground the research were left untracked on the working tree and lost on next `git clean`.
+
+Concrete derivation:
+
+```bash
+git status --porcelain         # every staged, unstaged, untracked path
+git diff --stat HEAD            # what changed vs last commit (line-counts)
+# Plus Step 2.5's classified untracked-file list
 ```
 
-This file-list + summary lets the user verify post-hoc what was done without re-deriving from `git diff`. Then **apply the writes immediately** without waiting for further confirmation.
+Then emit a row-per-path artifact covering EVERY path the above returns. Format:
+
+```
+<path>  [<class>]  <one-line reason / what's changing>
+```
+
+Where `<class>` is one of: `commit-edit` (file changed via Edit/Write this session), `commit-new` (Step 2.5 class (a)), `delete` (Step 2.5 class (b)), `leave-untracked` (Step 2.5 class (c)), `gitignored: <rule>` (Step 2.5 class (d)), `pre-existing-unstaged` (modified before this session — flag, don't auto-stage; see Step 6 exception 3), `already-tracked-no-change` (in status but actually unchanged).
+
+**Files don't get to escape this listing.** If `git status --porcelain` returns a path and the audit artifact doesn't, that's a bug — the wrap is incomplete and the report must NOT claim "wrap complete." This rule supersedes any temptation to summarize-as-narrative without enumerating the git state.
+
+This file-list + classification lets the user verify post-hoc what was done without re-deriving from `git diff`. Then **apply the writes immediately** without waiting for further confirmation.
 
 **Exceptions — STOP and ask before writing:**
 1. **Three-source conflict detected** (per Step 2's triangulation rule): conversation, git, and TodoWrite disagree. Don't silently pick a side — ask the user to adjudicate.
 2. **Destructive edit** outside the normal rewrite pattern: deleting a memory file, truncating HANDOFF.md's wiki-content sections, removing historical pickup points. Ask before executing.
 3. **Uncertain ground truth** flagged by Step 2: e.g., test count where conversation says 210, git log shows 186, and no commit explains the jump. Ask rather than write a wrong number.
 4. **Anything surprising or non-routine** — catch-all for edge cases the specific exceptions above don't cover. If the session's planned writes don't match the expected "persist what was discussed / built / decided" pattern — scope expanded beyond this project's root, file locations unusual, pattern detection seems wrong, memory file content feels speculative rather than grounded in the conversation — **stop and ask.** `/update-context` invocation authorizes routine context persistence; anything non-routine gets a pause. Default to caution when confidence is low.
+5. **Untracked-file classification incomplete or uncertain** — Step 2.5 returned files the agent cannot confidently classify into (a)/(b)/(c)/(d). Surface the ambiguous paths to the user and ask. Common cause: scratch-prefixed files that LOOK gitignored but `git check-ignore` proves are not — the user is the authority on whether they're keepers or trash, and silently picking either is a data-loss-vs-noise hazard.
+
+**Named anti-pattern — "narrative-summary persistence test."** If the agent thinks *"my HANDOFF entry mentions X, so X is preserved"* — that's WRONG unless X is committed-as-data, not just mentioned-as-prose. Persistence is a property of git state, not of narrative content. A HANDOFF.md paragraph naming a research artifact does NOT preserve the artifact; only a commit containing the artifact (or a `git add` then commit) does. The audit artifact's git-state derivation (above) is the antidote — it forces ground-truth enumeration rather than narrative-summary trust.
 
 **Exceptions — do NOT stop to ask:**
 - Routine file list, content summary, memory-index update
@@ -295,6 +338,8 @@ Local commit is non-destructive (reversible via `reset`, `revert`, amend) and th
 
 If `git diff --cached` is empty after `git add` (writes produced no effective change), skip the commit and report *"No effective changes — nothing to commit."*
 
+**Pre-report tree-cleanliness assertion.** Before printing the "Committed as <sha>" report, re-run `git status --porcelain` and confirm every remaining path is in one of: `leave-untracked` (Step 2.5 class (c)), `pre-existing-unstaged` (declared in Step 4 audit artifact and deliberately not staged), or empty (clean tree). If unexpected untracked or unstaged paths remain, **do NOT report wrap-complete.** Surface them: *"Tree still has unclassified paths after commit: `<path1>`, `<path2>`. The wrap is not complete — re-run Step 2.5 triage."* This is the last line of defense against the canonical failure mode (a real untracked artifact slipping past the audit artifact). It's cheap (one git command) and catches both Step 2.5 escapes and any Bash-side-effect file the session produced AFTER Step 2.5 ran.
+
 **Do NOT run `git push` automatically.** Push timing is user-controlled per project no-auto-push rules and per user-global git-discipline conventions. After commit, report:
 
 ```
@@ -323,6 +368,7 @@ Push only after explicit user approval.
 - **No conversation signal** — if the session had only Q&A with no concrete changes, no commits, no new todos completed, tell the user: "I don't see substantive changes to persist. Did something happen I should know about, or is there nothing to update?"
 - **Conflicting signals** — if git diff contradicts the conversation's claims, flag before writing. Example: conversation claims a bug is fixed but git shows no commit touching the relevant file.
 - **User is mid-crisis** — if the user is frantically debugging, don't auto-fire. Wait for "okay, that's done" signals.
+- **Bash-tool-side-effect files present and uninspected** — if the session created files via the Bash tool (script outputs written via `>` redirect, heredoc writes, `gh`/`curl` downloads, `cp`/`mv` from outside the project) those files are NOT in the Edit/Write tool's audit trail and the agent's mental model of "what I wrote this session" omits them. They MUST be re-discovered via `git status --porcelain` + Step 2.5 triage before the wrap can be considered complete. If Step 2.5 hasn't run and the conversation suggests Bash-side-effect writes occurred, refuse to proceed to Step 4 until Step 2.5 completes.
 
 ## Examples
 

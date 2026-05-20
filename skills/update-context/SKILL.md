@@ -1,6 +1,6 @@
 ---
 name: update-context
-description: Triggered at the END of a substantive work session to comprehensively update the project's persistence layer (HANDOFF.md / context.md / project skill / memory files / roadmap.md). Fires on phrases like "update context", "update the handoff", "update context files", "end of session update", "refresh context files", "start a thorough update of context", "update context and handoff", "time to update the docs", "wrap up this session". Proactively fire when the user signals a session is ending and substantive changes occurred. Analyzes the active conversation, git state, and TodoWrite state as three corroborating sources. Detects per-project pattern (monolithic-handoff vs running-log vs CONTEXT-style). Always produces/updates `<project-root>/HANDOFF.md` regardless of pattern. Emits a file-list audit artifact, then writes without stopping for confirmation — invoking the skill IS the authorization. Stops to ask only when the three-source triangle detects a conflict or a destructive edit is needed. Always stops before git commit/push.
+description: Triggered at the END of a substantive work session to comprehensively update the project's persistence layer (HANDOFF.md / context.md / project skill / memory files / roadmap.md). Fires on phrases like "update context", "update the handoff", "update context files", "end of session update", "refresh context files", "start a thorough update of context", "update context and handoff", "time to update the docs", "wrap up this session". Proactively fire when the user signals a session is ending and substantive changes occurred. Analyzes the active conversation, git state, and TodoWrite state as three corroborating sources. Detects per-project pattern (monolithic-handoff vs running-log vs CONTEXT-style). Always produces/updates `<project-root>/HANDOFF.md` regardless of pattern. Emits a file-list audit artifact, then writes without stopping for confirmation — invoking the skill IS the authorization. Stops to ask only when the three-source triangle detects a conflict or a destructive edit is needed. Auto-commits writes locally with a derived "Session update: ..." message at the end; never auto-pushes (push timing stays user-controlled).
 ---
 
 # Update Context
@@ -282,14 +282,38 @@ git checkout "$ORIGINAL_BRANCH"
 
 **When NOT opted in (default)**: fall through to Step 6's "stop before commit/push" rule as written.
 
-### Step 6 — Stop before committing
+### Step 6 — Commit, then stop before pushing
 
-Do NOT run `git commit` or `git push` automatically. Default to no-auto-push. Report:
+**Auto-commit is the default.** After writes complete, derive a one-line summary from Step 2's session signal (shipped + decided + learned), then run:
+
+```bash
+git add <each-file-listed-in-Step-4-audit-artifact>
+git commit -m "Session update: <one-line summary>"
+```
+
+Local commit is non-destructive (reversible via `reset`, `revert`, amend) and the Step 4 audit artifact already enumerated every touched file pre-write. Reviewing the diff post-commit is identical in safety to reviewing pre-commit; the "show commit-message-template, wait for user to copy-paste into terminal" ritual is friction without proportionate safety gain.
+
+If `git diff --cached` is empty after `git add` (writes produced no effective change), skip the commit and report *"No effective changes — nothing to commit."*
+
+**Do NOT run `git push` automatically.** Push timing is user-controlled per project no-auto-push rules and per user-global git-discipline conventions. After commit, report:
 
 ```
-Updated N files. Review with `git diff` before committing. When ready, commit with a message like:
+Committed as <sha>. N files changed. Push when ready.
+```
 
-  "Session update: <brief summary of what was shipped>"
+**Exceptions — do NOT auto-commit, fall back to show-message-only:**
+
+1. **Three-source-conflict / destructive-edit / uncertain-ground-truth flags fired during Step 4** — you should have stopped already, but if you somehow proceeded, don't compound the error with an auto-commit.
+2. **User explicitly said "don't commit yet"** / "let me look first" / similar — explicit user veto wins.
+3. **Working directory had pre-existing uncommitted changes overlapping with files this update touched** — `git add <touched-files>` would bundle unrelated content into the commit. Detect via `git status --porcelain` BEFORE write; if any file in the planned write set has pre-existing unstaged modifications, fall back to show-message-only and let the user resolve the overlap manually.
+4. **Project CLAUDE.md or HANDOFF.md explicitly says "never auto-commit"** — per-project opt-out. Respect it. (Distinct from "no-auto-push" which is the default everywhere.)
+
+**Fallback report when an exception fires:**
+
+```
+N files written. Skipping auto-commit because <exception reason>. Review with `git diff` and commit manually:
+
+  git add <files> && git commit -m "Session update: <summary>"
 
 Push only after explicit user approval.
 ```
@@ -315,7 +339,7 @@ Push only after explicit user approval.
    - SKILL.md: append `## Plan 2 — <name> Learnings` with new gotchas
    - memory: new `project_plan_2_outcomes.md` (if notable); update existing project status memory
 5. Emits file-list + one-liner audit artifact. Applies without waiting (invoking the skill = authorization).
-6. "Updated 4 files. Review `git diff` before committing."
+6. Auto-commits: `git add <4 files> && git commit -m "Session update: Plan 2 shipped, test count to N"`. Reports: *"Committed as `<sha>`. 4 files changed. Push when ready."*
 
 ### Example 2 — running-log project, end of content batch
 
@@ -331,7 +355,7 @@ Push only after explicit user approval.
    - `continuation/memory/`: new `feedback_<topic>.md` if a new rule emerged
    - `continuation/memory/MEMORY.md`: add link to new feedback file
 5. Emits file-list + one-liner audit artifact. Applies without waiting.
-6. "Updated 3 files. Commit when ready; then `git push` explicitly per the no-auto-push rule."
+6. Auto-commits the 3 files with a derived `"Session update: ..."` message. Reports: *"Committed as `<sha>`. 3 files changed. Push when ready."* Push stays explicit per the no-auto-push rule.
 
 ## Alternatives / related skills
 
@@ -341,7 +365,7 @@ Push only after explicit user approval.
 
 ## Do NOT
 
-- Don't commit or push automatically
+- Don't push automatically (commit IS automatic per Step 6's default — push timing stays user-controlled)
 - Don't rewrite historical pickup points (in running-log projects) — preserve them
 - Don't rewrite the project-local SKILL.md's existing sections (monolithic-handoff projects) — append-only
 - Don't invent gotchas or learnings not grounded in actual session evidence

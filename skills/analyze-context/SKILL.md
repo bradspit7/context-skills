@@ -143,7 +143,12 @@ git for-each-ref \
 # Compare HANDOFF.md across branches more recently committed than current HEAD
 CURRENT_HASH=$(git ls-tree HEAD -- HANDOFF.md 2>/dev/null | awk '{print $3}')
 CUR_TS=$(git log -1 --format=%ct HEAD -- HANDOFF.md 2>/dev/null)
-git for-each-ref --sort=-committerdate refs/heads refs/remotes/origin --format='%(refname:short)' | head -10 | while read branch; do
+NOW=$(date +%s); THRESHOLD=$((NOW - 86400))
+git for-each-ref --sort=-committerdate refs/heads refs/remotes/origin \
+  --format='%(refname:short) %(committerdate:unix)' \
+  | awk -v t="$THRESHOLD" 'NR<=10 || $2 > t {print $1}' \
+  | sort -u \
+  | while read branch; do
   OTHER_HASH=$(git ls-tree "$branch" -- HANDOFF.md 2>/dev/null | awk '{print $3}')
   if [ -n "$OTHER_HASH" ] && [ "$OTHER_HASH" != "$CURRENT_HASH" ]; then
     OTHER_TS=$(git log -1 --format=%ct "$branch" -- HANDOFF.md 2>/dev/null)
@@ -169,6 +174,10 @@ Do **not** filter the branch survey by author email — devs commit under multip
 > *"`git fetch` surfaced new remote branches I haven't inspected: `<branch1>`, `<branch2>`. Their HANDOFF.md differs from the current branch's. Inspect before I synthesize?"*
 
 **If all checks are clean**: proceed to Step 2. Mention nothing — silence is the success case.
+
+**Re-run trigger — Step 1.5 is not a one-shot pre-flight.** Any operation between Step 0 and Step 4 that changes the synthesis source (`git switch`, `git checkout`, `git reset`, `git pull`, `git fetch` that surfaced new branches, deleting/restoring a worktree, etc.) **invalidates the prior pass and requires re-running Check B before continuing.** The canonical incident this rule prevents: the skill ran Check B on the originally-checked-out (stale) branch, found drift, the user resolved by `git switch main && git reset --hard origin/main`, the skill proceeded to synthesis without re-checking — and missed a sibling branch's newer HANDOFF.md that had been pushed in the intervening hours. The first Check B's findings do **not** transfer to the new source. Treat each source-shift as a fresh session entry for Step 1.5 purposes.
+
+**Branches whose names suggest lifecycle work get extra scrutiny.** Names like `*-handoff-refresh`, `wave-N`, `wave-N-handoff`, `*-context-update`, `*-update-handoff` are HIGH-PRIORITY for re-checking even when their PR has already been squash-merged. The merge intuition ("that branch is done") is wrong in workflows where the dev keeps pushing to the branch as a working surface after the PR lands. The branch tip can diverge from the squash-merge commit by hours-to-days of additional commits. Check B's HANDOFF.md hash comparison catches this if run, but the intuition "that branch was merged, skip it" suppresses the urge to re-check. Override the intuition for lifecycle-named branches.
 
 **Why this matters**:
 - **Wrong-worktree failure** (worktree-per-session workflows like superpowers' `using-git-worktrees`): each session creates a fresh worktree from main. If a previous session's `update-context` commits stayed on its worktree's branch and never merged to main, the new session reads outdated docs silently.
@@ -208,6 +217,21 @@ The default approach ("scan MEMORY.md, click into relevant files") works for sma
 **Calibration**: don't pad to read every memory file every session (still wasteful). But don't under-read either — if the index has 50+ files and your heuristic produces 0 reads, something's wrong. **At minimum** read the section matching the user's task + all ⚡⚡ entries + any `clinic_*` / scope-prefix files for content-writing tasks.
 
 ### Step 4 — Build the briefing
+
+**Pre-briefing currency checkpoint (cheap, mandatory).** Before writing the briefing — especially the "Next step suggestion" line — run a final 200ms sanity check that the synthesis source is still authoritative:
+
+```bash
+# Any commit touching HANDOFF.md (or your project's wiki doc) in the last 24h,
+# across ALL refs — local + origin — regardless of which branch
+git log --all --since='24 hours ago' --pretty=format:'%h %ai %d %s' -- HANDOFF.md
+# (substitute CONTEXT.md or continuation/context.md as appropriate)
+```
+
+If any commit returns that is NOT reachable from the current HEAD's view of HANDOFF.md, STOP and re-run Step 1.5. The check is cheap enough to be unconditional. It catches: (a) the post-merge branch-resurrection variant of wrong-branch staleness (a merged branch keeps receiving commits after its PR landed); (b) commits pushed to other branches by another machine in the window between Step 0's machine check and now; (c) edits made via web UI / standalone clone that bypass the local sync flow. This is the cheapest single safeguard against the canonical "skill produced a briefing pointing at the wrong next step because a newer HANDOFF paragraph existed on a sibling branch" failure.
+
+**Header-as-currency-proof is forbidden.** HANDOFF.md often opens with `Updated: <date>` / `Last write from: <machine>` / `wave-N closeout` style header metadata. **Treat these as advisory only.** They tell you when *this paragraph* was authored, not whether *a newer paragraph exists elsewhere*. The only proof of currency is the Pre-briefing checkpoint above plus Step 1.5's Check B. A briefing's "Next step suggestion" section must be grounded in *verified currency* (latest commit touching HANDOFF.md across all refs is reachable from current HEAD), not in *header-claimed currency*. If you find yourself thinking "the header says wave-41 so we're on wave-41," that's the trap — re-run Check B.
+
+**Hook-surfaced signals are independent currency channels.** SessionStart / UserPromptSubmit hooks that surface external activity (coordination feeds, chat-room messages, ticket updates) tell you what's happening in *those channels* — not what's happening in HANDOFF.md. They can diverge by hours. A hook reporting "0 new feed entries since X" is NOT proof that HANDOFF.md hasn't been touched since X. Cross-reference hook signals with the Pre-briefing checkpoint; don't substitute one for the other.
 
 Synthesize what you read into this structure (not a regurgitation — a mental model):
 
@@ -258,6 +282,8 @@ After delivering the briefing, the skill's job is done. The user now drives:
 - "Actually I want to do X instead" → redirect; the analysis was context, not commitment
 - "Tell me more about Y" → drill into a specific tier-2 or tier-3 file
 
+**User-dispute re-grounding rule.** If the user contests the briefing's current-state claim or next-step suggestion — explicitly ("we moved on from this," "that's not where we are") or implicitly ("search again, it's gotta be in there") — the FIRST response is to **re-run Step 1.5 Check B + the Pre-briefing currency checkpoint**, NOT to search more static files. The most common reason a fresh briefing is wrong is currency drift the skill missed, not a missing memory file. Static-file deepening (memory dir, specs, plans, archive) is the SECOND response, after currency has been re-verified. Treat user dispute as the strongest signal of a missed Step 1.5 finding and act accordingly.
+
 ## Pattern-specific notes
 
 ### monolithic-handoff style
@@ -296,6 +322,9 @@ After delivering the briefing, the skill's job is done. The user now drives:
 - **HANDOFF references commits not in this worktree's git log** → strong signal of a worktree mismatch. If `HANDOFF.md` cites commit hashes that `git log` can't find from this worktree's HEAD, the file was authored in a sibling worktree at a different branch tip. STOP — don't synthesize a briefing from a worktree that's missing referenced commits. Run Step 1.5's worktree check, ask the user which worktree to read from, then restart.
 - **Wrong-worktree silent staleness** → in worktree-per-session workflows, you may be reading lifecycle docs from a worktree whose branch never received a previous session's `update-context` commits. Step 1.5 Check A is the only reliable detection. Skipping Step 1.5 is the canonical way this failure mode reaches the briefing undetected.
 - **Wrong-branch silent staleness** → in branch-per-feature workflows (especially with cross-machine alternation), HANDOFF.md is committed to whichever branch the session was working on, not centralized on main. The current branch can be wave-N while a sibling branch is wave-N+1. Same `.git`, same worktree, different branch tip — Step 1.5 Check A's worktree enumeration won't catch it; Step 1.5 Check B's branch-recency + HANDOFF-hash comparison is the only reliable detection. Symptom: HANDOFF reads as self-consistent (SHAs all resolve from current HEAD), but `git for-each-ref --sort=-committerdate` surfaces another branch with a newer HANDOFF.md commit. **A particularly insidious variant**: the briefing's Known Issues section names other branches as "worth checking before parallel work" — that demotion from "verify before synthesis" to "FYI in briefing output" IS the bug, not a mitigation. Branches surfaced by Check B must be inspected pre-synthesis, not handed to the user as a post-briefing TODO.
+  - **Post-merge branch resurrection sub-variant**: a branch was squash-merged into main (PR closed, commit landed on main), but the dev kept pushing additional commits to the branch as a working surface AFTER the merge. From git's view the branch tip is no longer an ancestor of main — it diverges from the squash-merge commit by 1-to-N extra commits, often containing HANDOFF.md updates from continued work. The trap is the intuition "this branch is merged, its work is integrated, skip it." Override by running Check B unconditionally regardless of merge status; detection is the same HANDOFF.md hash comparison. Auxiliary detection: `git for-each-ref refs/remotes/origin --format='%(refname:short)' | while read b; do git merge-base --is-ancestor "$b" main 2>/dev/null || echo "non-ancestor: $b"; done` — non-ancestor branches whose names suggest lifecycle work (handoff-refresh / wave-N / context-update) deserve mandatory HANDOFF.md inspection.
+- **Trusting wave/date headers as proof of currency** → HANDOFF.md often opens with `Updated: <date>` / `Last write from: <machine>` / `wave-N closeout — <summary>` style header metadata. These tell you when *this paragraph* was authored, not whether *a newer paragraph exists elsewhere*. Reading a wave-41 header as proof of "we're on wave-41" suppresses the urge to run Check B and the Pre-briefing checkpoint. The only proof of currency is verified reachability of every recent HANDOFF-touching commit from the current synthesis source. If you catch yourself trusting a header line as state-of-the-project, that's the trap firing.
+- **Feed/hook activity ≠ HANDOFF activity** → SessionStart and UserPromptSubmit hooks that surface external channels (coordination feeds, chat threads, ticket updates) report activity in *those channels*, not in HANDOFF.md. The two can diverge by hours: a HANDOFF.md commit can land directly without a feed entry. A hook reporting "no new feed activity since X" is not proof HANDOFF.md hasn't moved since X. Treat them as independent currency channels; never substitute hook signals for the Pre-briefing checkpoint.
 - **Trusting one tier only** → HANDOFF.md's "next session" pointer can go stale if a memory file captures a more recent decision. Cross-check.
 - **Regurgitation** → producing a briefing that's literally just concatenated file contents. Synthesis is the product. If you couldn't answer "what's the next concrete move" after reading, you didn't synthesize.
 - **Tier-3 creep** → reading every archived pickup point to feel thorough. Wastes tokens and dilutes the briefing. Only dip into archive if the user asks.

@@ -1,11 +1,12 @@
 # Lifecycle skills — shareable copies
 
-Two skills for managing project context across Claude Code sessions:
+Three skills for managing project context across Claude Code sessions:
 
 - **`update-context/SKILL.md`** — runs at session END. Persists what just happened to the project's HANDOFF / context / memory layer.
 - **`analyze-context/SKILL.md`** — runs at session START. Reads the persistence layer and produces a synthesized briefing.
+- **`analyze-handoff/SKILL.md`** — slim same-day-resumption sibling to `analyze-context`. Reads only HANDOFF.md, produces a 3-line summary, ~5K tokens vs `analyze-context`'s 50K+. For when you're resuming work you just left, not cold-starting.
 
-Together they form a session-bridging loop: `analyze-context` brings you up to speed when a session opens, then `update-context` writes the day's work back to disk before the session closes.
+Together they form a session-bridging loop: `analyze-context` (or `analyze-handoff` for cheap resumption) brings you up to speed when a session opens, then `update-context` writes the day's work back to disk before the session closes.
 
 ## What they do
 
@@ -40,6 +41,8 @@ These skills evolved through real-use validation. Notable rules:
 - **Auto-apply default** — invoking the skill IS authorization to write; only stops to ask on conflicts, destructive edits, or surprising scope expansions
 - **Date-drift flagging** — when system clock disagrees with file evidence, anchor on file evidence and surface the discrepancy
 - **No mid-session push prompts** — git pushes are user-controlled; skill stops before commit/push
+- **Machine-identity awareness** — both skills run a `hostname` check at Step 0 and surface the machine in their output; `update-context` stamps `**Last write from:**` and `**Branch:**` in HANDOFF.md's header so the next session can detect cross-machine handoffs and branch-per-feature drift
+- **Worktree + branch staleness checks** — `analyze-context` Step 1.5 has two cheap sub-checks before reading any content files: Check A enumerates sibling git worktrees, Check B surveys branches and compares HANDOFF.md hashes across them. Both stop-and-ask on a newer-elsewhere finding rather than silently synthesizing from stale state. Critical for cross-machine workflows where work alternates between branches that live on different machines.
 
 ## Modify freely
 

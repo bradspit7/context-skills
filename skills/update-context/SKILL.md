@@ -40,6 +40,12 @@ If the three sources disagree, flag the mismatch to the user rather than silentl
 
 ## Workflow
 
+### Step 0 — Machine identity check
+
+Run `hostname` (or `echo $COMPUTERNAME` on Windows) and match it against a known-machines mapping you keep somewhere persistent (e.g., a section in your `~/.claude/CLAUDE.md`). The machine identity gets recorded in HANDOFF.md's header metadata so future sessions can see which machine wrote the latest update — useful for cross-machine handoff (alerts the resumer if the previous session ran on the OTHER machine, which means git state, tool availability, or local config may differ).
+
+If hostname is unknown, **flag it and ask the user before proceeding** — don't write an "unknown" machine tag into HANDOFF.md silently. Cross-machine state assumptions are exactly the failure mode the tag is designed to catch.
+
 ### Step 1 — Detect the project's context pattern
 
 Look at the project root and the first two subdirectory levels. Match against known patterns:
@@ -106,6 +112,11 @@ The discipline is **structural, not numeric**:
 - **Bullet-structured** — short prefixes (dates, commits, filenames) stay consistent so a resumer can glance-read even at 300 lines
 
 Failure modes aren't "too long" — they're **redundancy** (copying roadmap content into HANDOFF) or **drift** (leaving stale info from 3 sessions ago lingering). A tight 200-line HANDOFF for a complex project is better than a padded 50-line one that dropped half the in-flight items to stay short.
+
+**Required header metadata** — include at the top of HANDOFF.md alongside the `Updated:` line:
+
+- `**Last write from:** <machine-name>` — the machine that wrote this update, per Step 0's `hostname` check against the known-machines mapping. One line, near the top. Lets the next session immediately see if the previous session ran on a different machine (which means git state, tool availability, or local installs may differ).
+- `**Branch:** <git rev-parse --abbrev-ref HEAD>` — the branch this HANDOFF was authored on (omit if writing on `main` / `master`). One line, near the top. Combined with `analyze-context`'s Step 1.5 Check B (branch-recency survey), this gives the next session a baseline to detect when a sibling branch's HANDOFF supersedes the current branch's — critical in branch-per-feature + cross-machine workflows where work alternates between machines and lands on different branches. Without this stamp, a session resuming on a different branch has no signal that the previous HANDOFF lives elsewhere unless Check B's diff fires.
 
 **Required sections in HANDOFF.md:**
 1. **One-line current status** — single sentence. What phase/plan is active; what just shipped; what's next.

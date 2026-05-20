@@ -1,6 +1,6 @@
 ---
 name: analyze-context
-description: Triggered at the START of a new session to thoroughly read and synthesize the project's persistence layer (HANDOFF.md / context.md / project skill / memory files / roadmap.md / active specs and plans) into a coherent mental model before any work begins. Fires on phrases like "catch me up", "what's the state", "what were we working on", "give me the picture", "where did we leave off", "start the session", "analyze the context", "read the context files", "what's the current status", "brief me on this project". Proactively fire on the first substantive message of a session in a project with a context layer. Produces a structured briefing (shipped/in-flight/locked-decisions/open-docket/known-issues/next-step) rather than a regurgitation of file contents.
+description: Triggered at the START of a new session to thoroughly read and synthesize the project's persistence layer (HANDOFF.md / context.md / project skill / memory files / roadmap.md / active specs and plans) into a coherent mental model before any work begins. Fires on phrases like "catch me up", "what's the state", "what were we working on", "give me the picture", "where did we leave off", "start the session", "analyze the context", "read the context files", "what's the current status", "brief me on this project". Proactively fire on the first substantive message of a session in a project with a context layer. Produces a structured briefing (shipped/in-flight/locked-decisions/open-docket/known-issues/next-step) rather than a regurgitation of file contents. For same-day session resumption (continuing recent work, no machine switch), prefer the slim sibling `analyze-handoff` — it reads only HANDOFF.md and produces a 3-line summary at much lower token cost.
 ---
 
 # Analyze Context
@@ -30,6 +30,7 @@ Do NOT fire when:
 - User immediately gives a concrete task — they don't want a briefing, they want work done
 - User is in the middle of a task and just asks a narrow question
 - The project has no context layer (nothing to analyze)
+- User invoked `/analyze-handoff` or signaled same-day continuation — that slim sibling reads only HANDOFF.md and produces a 3-line summary, sufficient when state hasn't shifted much since the last session. Use this full skill only for multi-day gaps, machine switches, or first-session-of-the-week briefings.
 
 ## Source files (the reading set)
 
@@ -66,6 +67,14 @@ Don't read upfront; read if the user asks about something specific:
 
 ## Workflow
 
+### Step 0 — Machine identity check
+
+Run `hostname` (or `echo $COMPUTERNAME` on Windows) and match it against a known-machines mapping kept somewhere persistent (e.g., a section in your `~/.claude/CLAUDE.md`). Surface the result in the briefing header: `**Machine:** <machine-name>`. If the hostname doesn't match any known machine, flag it before proceeding:
+
+> *"Unknown hostname `<x>` — verify cross-machine setup before trusting current state."*
+
+Cost: 1 bash command, ~50 tokens. Cheap insurance against cross-machine state confusion (e.g., trusting a HANDOFF reference to a tool not installed locally, or assuming git auth credentials present on one machine are configured on another).
+
 ### Step 1 — Detect pattern
 
 (Same detection logic as `update-context`.)
@@ -83,9 +92,16 @@ Don't read upfront; read if the user asks about something specific:
 - Memory lives at `<project>/context/memory/` in-repo (not out-of-repo)
 - All other workflow steps (tier-2 reads, briefing synthesis, drill-down discipline) proceed identically to running-log style
 
-### Step 1.5 — Verify worktree state (skip if not in a worktree-per-session workflow)
+### Step 1.5 — Verify the lifecycle docs aren't being read from a stale source
 
-If the project uses git worktrees (multiple working directories sharing one `.git` directory), the lifecycle docs you're about to read may not reflect the project's actual current state — sibling worktrees can have newer commits with newer HANDOFF/context content. Run this check before reading content files:
+The skill's whole product is "synthesize current state from the persistence layer." But the persistence layer can live in multiple places that don't always agree:
+- Different **worktrees** on the same `.git` (worktree-per-session workflows)
+- Different **branches** on the same worktree (branch-per-feature + cross-machine workflows)
+- Unpulled commits on the current branch's upstream
+
+Before reading any content files, verify the current location is authoritative. Two checks, both cheap. Check B is **always required**; Check A is required when multiple worktrees exist.
+
+**Check A — worktree enumeration** (skip if single worktree):
 
 ```bash
 # List all worktrees + their HEADs
@@ -101,23 +117,64 @@ while read wt head; do
   if [ "$wt" != "$CURRENT_WT" ]; then
     OTHER_TS=$(git -C "$wt" log -1 --format=%ct "$head" 2>/dev/null)
     if [ -n "$OTHER_TS" ] && [ "$OTHER_TS" -gt "$CURRENT_TS" ]; then
-      echo "newer-sibling: $wt at $head (ts $OTHER_TS vs current $CURRENT_TS)"
+      echo "newer-sibling-worktree: $wt at $head (ts $OTHER_TS vs current $CURRENT_TS)"
     fi
   fi
 done
-
-# Also check origin for unpulled commits on the current branch
-git fetch --all --quiet 2>/dev/null
-git log HEAD..@{upstream} --oneline 2>/dev/null | head -5
 ```
 
-**If the check surfaces a newer sibling worktree or unpulled origin commits**: STOP and ask the user before proceeding. Don't synthesize a briefing from files in a stale worktree. Sample message:
+**Check B — branch-recency survey + HANDOFF.md hash comparison** (always run; this is the wrong-branch silent-staleness check):
 
-> *"I'm running in worktree `<name>` at HEAD `<hash>` (timestamp X). Sibling worktree `<name>` has a newer HEAD `<hash>` (timestamp Y, ~N hours newer). Should I read from there, or is this worktree authoritative? If the latest work is in the sibling, point me at that path before I synthesize."*
+```bash
+# Fetch all remotes — capture output, new branches print as "[new branch]"
+git fetch --all 2>&1 | tee /tmp/lifecycle-fetch.txt
+grep '\[new branch\]' /tmp/lifecycle-fetch.txt   # surfaces new remote-tracking refs since last fetch
 
-**If the check is clean**: proceed to Step 2. Mention nothing — silence is the success case.
+# Unpulled commits on the current branch's upstream
+git log HEAD..@{upstream} --oneline 2>/dev/null | head -5
 
-**Why this matters**: in a worktree-per-session workflow, each session creates a fresh worktree from main. If a previous session's `update-context` commits stayed on its worktree's branch (not merged to main), the new session's worktree starts at the older main HEAD and reads outdated lifecycle docs. The skill's "current state" reads will be silently wrong. This is the **wrong-worktree failure mode** — fundamentally different from sparse-read or doc-drift, and undetectable without explicit worktree enumeration.
+# 10 most recently-committed branches across local heads + origin
+git for-each-ref \
+  --sort=-committerdate \
+  --format='%(refname:short) %(committerdate:iso) %(committerdate:unix)' \
+  refs/heads refs/remotes/origin \
+  | head -15
+
+# Compare HANDOFF.md across branches more recently committed than current HEAD
+CURRENT_HASH=$(git ls-tree HEAD -- HANDOFF.md 2>/dev/null | awk '{print $3}')
+CUR_TS=$(git log -1 --format=%ct HEAD -- HANDOFF.md 2>/dev/null)
+git for-each-ref --sort=-committerdate refs/heads refs/remotes/origin --format='%(refname:short)' | head -10 | while read branch; do
+  OTHER_HASH=$(git ls-tree "$branch" -- HANDOFF.md 2>/dev/null | awk '{print $3}')
+  if [ -n "$OTHER_HASH" ] && [ "$OTHER_HASH" != "$CURRENT_HASH" ]; then
+    OTHER_TS=$(git log -1 --format=%ct "$branch" -- HANDOFF.md 2>/dev/null)
+    if [ -n "$CUR_TS" ] && [ "$OTHER_TS" -gt "$CUR_TS" ]; then
+      echo "newer-branch-handoff: $branch (HANDOFF.md ts $OTHER_TS vs current $CUR_TS)"
+    elif [ -z "$CUR_TS" ] && [ -n "$OTHER_TS" ]; then
+      echo "newer-branch-handoff: $branch has HANDOFF.md, current branch does not"
+    fi
+  fi
+done
+```
+
+Do **not** filter the branch survey by author email — devs commit under multiple emails (work, personal, `noreply@github.com` from web edits), and filtering loses commits. Filter by HANDOFF.md presence + recency instead.
+
+**Cross-machine escalation**: if HANDOFF.md on the current branch contains a `**Last write from:** <other-machine>` line and the current `hostname` is a different machine, treat Check B as **mandatory and high-severity**. Cross-machine alternation is a strong prior for branch-per-feature drift — work that continued on the other machine likely landed on a branch this machine has never had locally. Even if Check B returns no rows, surface the machine mismatch in the briefing header so the next reader knows to verify.
+
+**If any check returns rows: STOP and ask. Do not auto-switch sources. Do not relegate the finding to the briefing's Known Issues section.** Both demotions are how this failure mode reaches the briefing undetected. The canonical incident: a real-use session synthesized off wave-N from the currently-checked-out feature branch, while wave-N+1 HANDOFF lived on a sibling feature branch pushed from another machine. The session surfaced the uninspected sibling branches in the briefing's Known Issues as "worth checking before parallel work" — a demotion from "verify before synthesis" to "FYI in briefing output" — instead of inspecting them pre-synthesis. The synthesis itself must block until the user resolves the ambiguity. Sample messages:
+
+> *"Worktree mismatch: I'm in `<current>` (HEAD ts X), sibling `<other>` has newer HEAD (ts Y). Should I read from there?"*
+
+> *"Branch `<other>` has a newer HANDOFF.md than the current branch `<current>` (~N hours newer). In branch-per-feature workflows the newest HANDOFF is usually authoritative even when it's not on the current branch. Should I read from there, or is the current branch authoritative?"*
+
+> *"`git fetch` surfaced new remote branches I haven't inspected: `<branch1>`, `<branch2>`. Their HANDOFF.md differs from the current branch's. Inspect before I synthesize?"*
+
+**If all checks are clean**: proceed to Step 2. Mention nothing — silence is the success case.
+
+**Why this matters**:
+- **Wrong-worktree failure** (worktree-per-session workflows like superpowers' `using-git-worktrees`): each session creates a fresh worktree from main. If a previous session's `update-context` commits stayed on its worktree's branch and never merged to main, the new session reads outdated docs silently.
+- **Wrong-branch failure** (branch-per-feature + cross-machine workflows): each feature gets a branch; work alternates between machines; HANDOFF.md updates land on whichever branch the session was working on. The current branch's HANDOFF can be wave-N while a sibling branch's is wave-N+1. Reading from the current branch silently returns the older wave with no signal — unless Check B's HANDOFF-hash comparison fires.
+
+Both failure modes share a root: the skill historically assumed "HANDOFF.md at the current path" was authoritative. Step 1.5 lifts that assumption by inspecting siblings (worktree AND branch) before trusting the local copy.
 
 ### Step 2 — Read the tier-1 set fully
 
@@ -237,7 +294,8 @@ After delivering the briefing, the skill's job is done. The user now drives:
 - **Skimming context.md** → the #1 failure. The trap looks like this announcement: *"context.md is too large for one read. Reading the top entry (current pickup point) and the docket."* That sentence IS the violation — it sounds reasonable but it's the exact behavior the chunk-read rule was added to prevent. Read top-to-bottom procedurally (see Tier 1 reading instructions for the exact `Read` calls).
   - **Verification ritual before producing the briefing**: pick three concrete facts to quote — one from the file's top third (the latest pickup point), one from the middle third (older pickup points or wiki sections), one from the bottom third (oldest history or initial decisions). If you can only quote from the top, you only read the top — re-chunk before synthesizing. Files read in full (< 2000 lines) pass trivially. The check is hard to fake because the bottom-third fact has to come from text the model couldn't have inferred from the pickup-point summary alone.
 - **HANDOFF references commits not in this worktree's git log** → strong signal of a worktree mismatch. If `HANDOFF.md` cites commit hashes that `git log` can't find from this worktree's HEAD, the file was authored in a sibling worktree at a different branch tip. STOP — don't synthesize a briefing from a worktree that's missing referenced commits. Run Step 1.5's worktree check, ask the user which worktree to read from, then restart.
-- **Wrong-worktree silent staleness** → in worktree-per-session workflows, you may be reading lifecycle docs from a worktree whose branch never received a previous session's `update-context` commits. Step 1.5's check is the only reliable detection. Skipping Step 1.5 is the canonical way this failure mode reaches the briefing undetected.
+- **Wrong-worktree silent staleness** → in worktree-per-session workflows, you may be reading lifecycle docs from a worktree whose branch never received a previous session's `update-context` commits. Step 1.5 Check A is the only reliable detection. Skipping Step 1.5 is the canonical way this failure mode reaches the briefing undetected.
+- **Wrong-branch silent staleness** → in branch-per-feature workflows (especially with cross-machine alternation), HANDOFF.md is committed to whichever branch the session was working on, not centralized on main. The current branch can be wave-N while a sibling branch is wave-N+1. Same `.git`, same worktree, different branch tip — Step 1.5 Check A's worktree enumeration won't catch it; Step 1.5 Check B's branch-recency + HANDOFF-hash comparison is the only reliable detection. Symptom: HANDOFF reads as self-consistent (SHAs all resolve from current HEAD), but `git for-each-ref --sort=-committerdate` surfaces another branch with a newer HANDOFF.md commit. **A particularly insidious variant**: the briefing's Known Issues section names other branches as "worth checking before parallel work" — that demotion from "verify before synthesis" to "FYI in briefing output" IS the bug, not a mitigation. Branches surfaced by Check B must be inspected pre-synthesis, not handed to the user as a post-briefing TODO.
 - **Trusting one tier only** → HANDOFF.md's "next session" pointer can go stale if a memory file captures a more recent decision. Cross-check.
 - **Regurgitation** → producing a briefing that's literally just concatenated file contents. Synthesis is the product. If you couldn't answer "what's the next concrete move" after reading, you didn't synthesize.
 - **Tier-3 creep** → reading every archived pickup point to feel thorough. Wastes tokens and dilutes the briefing. Only dip into archive if the user asks.
@@ -246,6 +304,7 @@ After delivering the briefing, the skill's job is done. The user now drives:
 
 ## Alternatives / related skills
 
+- **`analyze-handoff`** (slim sibling) — for same-day session resumption. Reads only HANDOFF.md, produces a 3-line summary (last completed / next intended / blocker). Much cheaper than this skill on big projects (~5K tokens vs 50K+). Pick this for cheap resumption; pick `analyze-context` for full cold-start briefing after multi-day gaps or machine switches.
 - **`update-context`** (sibling) — run at session end to persist what this session's work produced. Read this skill first, work happens, update-context runs last.
 - Existing project-level CLAUDE.md instructions — respect them. If the project's CLAUDE.md specifies a read order, follow it. This skill is the general version when no project-specific protocol exists.
 

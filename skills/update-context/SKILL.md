@@ -185,6 +185,7 @@ Memory files (`~/.claude/projects/<hashed>/memory/`):
 - For each distinct new fact/feedback/rule, create a new file following naming conventions: `feedback_*.md`, `project_*.md`, `reference_*.md`, `user_*.md`
 - Update `MEMORY.md` index with a one-liner link to each new file
 - Never rewrite existing memory files to erase history — add revision notes in-file if facts change
+- **No unverified negatives.** Never record a negative-availability claim — "X doesn't exist," "X is unavailable," "X is undocumented / a black box" — into a memory file when repo + local disk could confirm or deny it, and you only have a single web-search result. A web agent's "not publicly documented" means *not on the public internet*, NOT *unavailable to us* — privately-extracted datasets, local decompiles, and committed-but-unindexed files never surface in a web search. Before writing any "X is unavailable" memory: `grep -ri <X>` the repo and check any README-cited local extract dir. A false negative in memory is uniquely corrosive — it propagates the wrong belief to every future session and steers them away from data they actually have. If two session facts can't both be true ("the design is built on X" + "X is unavailable"), reconcile them by searching, don't record the convenient one.
 
 #### running-log style (`continuation/context.md` primary) — also applies to CONTEXT-style
 

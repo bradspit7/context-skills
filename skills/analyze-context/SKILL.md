@@ -229,6 +229,8 @@ git log --all --since='24 hours ago' --pretty=format:'%h %ai %d %s' -- HANDOFF.m
 
 If any commit returns that is NOT reachable from the current HEAD's view of HANDOFF.md, STOP and re-run Step 1.5. The check is cheap enough to be unconditional. It catches: (a) the post-merge branch-resurrection variant of wrong-branch staleness (a merged branch keeps receiving commits after its PR landed); (b) commits pushed to other branches by another machine in the window between Step 0's machine check and now; (c) edits made via web UI / standalone clone that bypass the local sync flow. This is the cheapest single safeguard against the canonical "skill produced a briefing pointing at the wrong next step because a newer HANDOFF paragraph existed on a sibling branch" failure.
 
+**Surface the design's empirical foundation, and don't trust the HANDOFF's one-line summary of it.** When a project's current direction rests on an external/extracted/datamined source (a decompiled game's data, a research corpus, a scraped dataset, a benchmark), that source is usually committed in-repo (e.g. under `docs/**/research/`, `data/`, `*.json`/`*.tsv` dumps) and/or sits in a local-disk extraction dir the repo's README points at. **The decision/ADR doc that locks the direction references this source; the HANDOFF's one-liner about that decision routinely drops the reference.** Reading only the HANDOFF summary leaves you believing the design is a black box. Two rules: (1) read the latest `docs/**/decisions/` (or ADR) doc *in full*, not via the HANDOFF's summary of it — the grounding/source references live in the doc body; (2) if the design rests on data, locate it (`grep -ri <source-name>` across the repo + check any README-cited local extract dir) and surface it in the briefing's "Empirical foundation" section. A session that can't answer "where's the data this design is built on" hasn't finished Step 2.
+
 **Header-as-currency-proof is forbidden.** HANDOFF.md often opens with `Updated: <date>` / `Last write from: <machine>` / `wave-N closeout` style header metadata. **Treat these as advisory only.** They tell you when *this paragraph* was authored, not whether *a newer paragraph exists elsewhere*. The only proof of currency is the Pre-briefing checkpoint above plus Step 1.5's Check B. A briefing's "Next step suggestion" section must be grounded in *verified currency* (latest commit touching HANDOFF.md across all refs is reachable from current HEAD), not in *header-claimed currency*. If you find yourself thinking "the header says wave-41 so we're on wave-41," that's the trap — re-run Check B.
 
 **Hook-surfaced signals are independent currency channels.** SessionStart / UserPromptSubmit hooks that surface external activity (coordination feeds, chat-room messages, ticket updates) tell you what's happening in *those channels* — not what's happening in HANDOFF.md. They can diverge by hours. A hook reporting "0 new feed entries since X" is NOT proof that HANDOFF.md hasn't been touched since X. Cross-reference hook signals with the Pre-briefing checkpoint; don't substitute one for the other.
@@ -249,6 +251,11 @@ Synthesize what you read into this structure (not a regurgitation — a mental m
 
 ### Locked decisions (DO NOT reopen)
 - <design decisions the user has marked as settled>
+
+### Empirical foundation (only if the design rests on external/extracted data)
+- <what dataset / datamine / extract / research corpus grounds the current direction>
+- <where it lives: in-repo path AND any local-disk extract dir — e.g. `docs/.../research/upgrades.json` + `C:/Users/.../extracted/`>
+- <one-line on how to query it, so the resumer treats it as a live source not a black box>
 
 ### Open docket — next candidates
 1. <highest-priority queued item + source>
@@ -283,6 +290,8 @@ After delivering the briefing, the skill's job is done. The user now drives:
 - "Tell me more about Y" → drill into a specific tier-2 or tier-3 file
 
 **User-dispute re-grounding rule.** If the user contests the briefing's current-state claim or next-step suggestion — explicitly ("we moved on from this," "that's not where we are") or implicitly ("search again, it's gotta be in there") — the FIRST response is to **re-run Step 1.5 Check B + the Pre-briefing currency checkpoint**, NOT to search more static files. The most common reason a fresh briefing is wrong is currency drift the skill missed, not a missing memory file. Static-file deepening (memory dir, specs, plans, archive) is the SECOND response, after currency has been re-verified. Treat user dispute as the strongest signal of a missed Step 1.5 finding and act accordingly.
+
+**Source/approach-dispute rule (broader than currency).** If the user questions a *source or approach choice* — "why are you using X?", "why fall back on Y?", asked once and especially asked **twice** — the FIRST action is to **search for the alternative they're implying exists**, NOT to defend the current choice. Repeated questioning of a source is the strongest signal that something findable is being missed: a dataset on local disk, an extract dir, a committed file the briefing didn't surface, a decision doc you read only in summary. Defending the current choice when the user is pointing at a better one is the failure. Concretely: `grep -ri <implied-source>` the repo, check README-cited local extract dirs, read the relevant decision doc in full — *before* arguing for the status quo. A privately-extracted dataset never appears in a web search, so "I searched the web and found nothing" is the wrong instrument for "does our own source data exist" — it answers *not public*, not *not available*. Reach for repo + local disk first.
 
 ## Pattern-specific notes
 

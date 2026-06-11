@@ -48,6 +48,16 @@ For audits/reviews: one agent per dimension (correctness, security, conventions,
 
 Any command expected to run >2 minutes (sweeps, builds, full suites, recon): launch as a background task and keep orchestrating; collect on completion. Never sit idle behind a long command, and never poll in a sleep loop. When a project skill *wraps* such a command, write this discipline into that skill's own text ("background launch, never poll, keep working or end the turn") — the instruction living in the skill is what makes every future session do it unprompted.
 
+## Recipe 5 — Big fan-outs via the Workflow tool (when the harness offers it)
+
+Prefer a Workflow script over hand-rolled Agent batches once the fan-out has structure: ~10+ agents, multi-stage pipelines (mine → verify → synthesize), loops/conditionals, or wherever validated structured outputs matter. The prompt contract above carries over verbatim — every workflow agent prompt still needs scope, cold-start context, verification duty, and output format. Workflow-specific contracts (proven on a 25-agent corpus-mining run, 2026-06-10):
+
+- **Schema-enforce every agent output** (the `schema` option) — validated JSON beats parsing prose, and mismatches retry at the tool layer instead of corrupting the pipeline.
+- **Join stage-N verdicts back to stage-N−1 findings mechanically** (normalize + fuzzy-match on the key field) and **count coverage per kind**. Verifiers skip findings silently — the reference run's first wave covered only ~53% of findings. Dispatch a top-up wave over the measured gap; never average over it.
+- **Authenticate claims against sources in the verify stage:** the verifier greps the source material for a distinctive substring of each claim's quote; `quote_found=false` kills the finding regardless of plausibility (8/200 died this way in the reference run).
+- Launch in the background and keep orchestrating (Recipe 4 discipline applies); collect on the completion notification.
+- No Workflow tool on the current surface → run the same structure as sequenced Agent-tool batches. The contracts, not the tool, carry the quality.
+
 ## Integration (the orchestrator's own duties)
 
 - **Continuous execution:** no "should I continue?" between tasks. Stop only for an unresolvable `BLOCKED`, genuine ambiguity, or completion.

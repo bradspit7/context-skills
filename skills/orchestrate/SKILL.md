@@ -65,3 +65,4 @@ Any command expected to run >2 minutes (sweeps, builds, full suites, recon): lau
 - Fixing an agent's half-done work by hand in the orchestrator context — dispatch a fix agent with specific instructions instead.
 - Two implementers in flight on overlapping files "because they're quick."
 - Relaxing review order (quality before spec) or skipping the re-review after fixes.
+- Trusting a verifier's verdict label without reading its evidence fields — schema-enforced labels still drift semantically ("confirmed" can mean "the pattern is real" rather than "the claim survives"). Classify from the cited evidence; mechanically join verdicts back to findings and count coverage — re-dispatch the gap, never average over it.

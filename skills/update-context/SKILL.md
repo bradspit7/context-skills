@@ -84,8 +84,10 @@ Rotation is how read-cost stays flat. All moves are **non-destructive** (content
 - **HANDOFF header accretion** (`Prior summary:` chains): move ALL prior-session summaries — however many are packed into the header line — into the wiki/log (or `archive/HANDOFF-history-<YYYY-MM>.md` for monolithic projects; `<YYYY-MM>` = the month of this run), leaving only the current header. Mandatory on first contact with a legacy blob. Word the pointer line left behind WITHOUT the literal string `Prior summary:` (e.g. *"Session history pre-<date> archived → <file>"*) so the evidence script's detector doesn't re-fire forever.
 - **Wiki pickup points:** keep the newest **3** inline; move older ones verbatim to `continuation/archive/pickup-points-<YYYY-MM>.md` (create as needed), leave one pointer line.
 - **Per-dev files > ~600 lines:** move entries older than ~2-3 weeks to the project's archive per its trim convention (in PR-flow projects, a separate trim PR — don't mix with the refresh).
+- **Single-line accretion** (max-line THRESHOLD): a "slim" file can hide tens of KB inside ONE physical line — rolling-digest lines, multi-generation `SUPERSEDED` chains. Line counts never catch it (a 112-line file once hid 73KB this way). Rewrite the offending line to current state only; the displaced history goes to the archive like any other rotation.
 - **Memory consolidation** (fires on: dead index links, >40 files, >150KB, or no index over 5 files):
   - Fix/remove dead MEMORY.md lines (index lines are not history; safe to correct).
+  - Index lines stay **≤200 chars at write time** — an index line is a pointer + hook, not the content. Detail (including inline `UPDATE` patches) merges down into the topic file the moment it appears; indexes re-bloat by line-growth, not entry-count, so write-time discipline beats periodic sweeps.
   - Merge near-duplicate files into the newest canonical one; archive the superseded with a pointer.
   - Archive `research_*` superseded by newer same-domain research, and `project_*` snapshots about long-shipped work, to `memory/archive/`.
   - Entries deferred past a known future date get parked in archive with a `revisit: <date>` line.

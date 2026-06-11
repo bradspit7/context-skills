@@ -63,6 +63,13 @@ for pd in HANDOFF-*.md; do
   echo "$pd: $L lines"
   [ "$L" -gt 600 ] && echo "THRESHOLD $pd exceeds 600 lines — archive-trim due (respect the project's trim convention)"
 done
+# Single-line accretion: rolling digests / SUPERSEDED chains hide tens of KB inside ONE
+# physical line, evading every line-count check above. Max-line-length is the detector.
+for f in continuation/context.md CONTEXT.md HANDOFF.md context/HANDOFF.md HANDOFF-*.md; do
+  [ -f "$f" ] || continue
+  MAXLEN=$(awk '{ if (length > m) m = length } END { print m+0 }' "$f")
+  [ "$MAXLEN" -gt 4000 ] && echo "THRESHOLD $f max line length ${MAXLEN} chars (>4000) — single-line accretion; rewrite that line to current state and archive the displaced history this run"
+done
 
 echo
 echo "== MEMORY HEALTH =="
@@ -91,6 +98,9 @@ for MEMDIR in $CANDIDATES; do
       case "$tgt" in http*|/*) continue ;; esac
       [ -f "$MEMDIR/$tgt" ] || echo "THRESHOLD dead index link in MEMORY.md -> $tgt (fix or remove the index line this run)"
     done
+    # Index lines are pointers + hooks, not content: >200 chars means detail belongs in the topic file
+    LONG=$(awk 'length > 200' "$IDX" | wc -l | tr -d ' ')
+    [ "${LONG:-0}" -gt 0 ] && echo "THRESHOLD $IDX has $LONG index line(s) over 200 chars — merge the detail down into topic files this run"
   else
     [ "$COUNT" -gt 5 ] && echo "THRESHOLD $MEMDIR has $COUNT files but NO MEMORY.md index — create one this run"
   fi

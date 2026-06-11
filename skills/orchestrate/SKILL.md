@@ -46,7 +46,7 @@ For audits/reviews: one agent per dimension (correctness, security, conventions,
 
 ## Recipe 4 — Long-running commands
 
-Any command expected to run >2 minutes (sweeps, builds, full suites, recon): launch as a background task and keep orchestrating; collect on completion. Never sit idle behind a long command, and never poll in a sleep loop.
+Any command expected to run >2 minutes (sweeps, builds, full suites, recon): launch as a background task and keep orchestrating; collect on completion. Never sit idle behind a long command, and never poll in a sleep loop. When a project skill *wraps* such a command, write this discipline into that skill's own text ("background launch, never poll, keep working or end the turn") — the instruction living in the skill is what makes every future session do it unprompted.
 
 ## Integration (the orchestrator's own duties)
 

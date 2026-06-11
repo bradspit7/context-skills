@@ -100,7 +100,7 @@ for MEMDIR in $CANDIDATES; do
     done
     # Index lines are pointers + hooks, not content: >200 chars means detail belongs in the topic file
     LONG=$(awk 'length > 200' "$IDX" | wc -l | tr -d ' ')
-    [ "${LONG:-0}" -gt 0 ] && echo "THRESHOLD $IDX has $LONG index line(s) over 200 chars — merge the detail down into topic files this run"
+    [ "${LONG:-0}" -gt 0 ] && echo "THRESHOLD $IDX has $LONG index line(s) over 200 chars — MOVE detail down into topic files this run (verify it lands there before shortening; a move, never a cut)"
   else
     [ "$COUNT" -gt 5 ] && echo "THRESHOLD $MEMDIR has $COUNT files but NO MEMORY.md index — create one this run"
   fi

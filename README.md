@@ -1,10 +1,23 @@
-# Context skills — session-lifecycle pair (+ slim sibling)
+# Context skills — session lifecycle + process suite
 
-Three skills for keeping project context sane across Claude Code sessions, machines, and developers:
+Seven skills in two families.
+
+**Session lifecycle** — keeping project context sane across Claude Code sessions, machines, and developers:
 
 - **`analyze-context/`** — runs at session START. Verifies the persistence layer is *current* (worktree/branch/cross-machine drift check), reads it at the right depth, and produces a synthesized briefing.
 - **`update-context/`** — runs at session END. Triages the session's facts into single homes, rotates history out of the hot path, runs memory hygiene, and leaves the tree provably clean (auto-commit, never push).
 - **`analyze-handoff/`** — slim sibling for same-day resumption. Reads only the handoff doc, 3-line summary, ~5K tokens.
+
+**Process suite** — the development loop from idea to integrated code, designed as drop-in replacements for the superpowers plugin's brainstorming / writing-plans / executing-plans / subagent-driven-development / dispatching-parallel-agents:
+
+- **`brainstorm/`** — idea → approved design. Evidence before questions (read the repo first), prose questions only (no choice-button UI), convergence to ONE recommended design, spec written to `docs/superpowers/specs/`. Hard gate: no code before an approved design.
+- **`write-plan/`** — approved design → executable plan at `docs/superpowers/plans/`. Zero-context-executor standard: exact paths, complete code in every step, per-task verification drawn from *the project's own verify loop*, project law folded inline.
+- **`execute-plan/`** — runs a plan task-by-task inline: plan currency check before task 1, per-task verification with evidence, continuous execution (no "should I continue?" gates), explicit deviation protocol.
+- **`orchestrate/`** — parallel-subagent fan-out under explicit contract: read fan-outs with top/middle/bottom-third verification quotes, implementer-per-task with two-stage review (spec compliance, then quality), adversarial refutation of review findings, background tasks for long commands.
+
+The process suite is deliberately mechanical — judgment is moved into explicit recipes, gates, and status protocols so quality holds up on smaller models, not just frontier ones. It encodes opinions (single recommendation over option menus, continuous execution over check-in theater) — edit them if your taste differs.
+
+**Superpowers interop:** the process suite references a few superpowers skills it does NOT replace (`systematic-debugging`, `finishing-a-development-branch`). With the plugin installed, those route normally; without it, treat each reference as "do that discipline manually" — nothing breaks. If you run the plugin alongside this suite, add one line to your `~/.claude/CLAUDE.md`: *"Prefer brainstorm / write-plan / execute-plan / orchestrate over their superpowers equivalents."*
 
 Together they form a session-bridging loop on top of the **persistent-markdown-vault-as-agent-context** pattern: each project keeps a structured file set (HANDOFF.md, wiki/running-log, memory/, docket) that survives session boundaries.
 
@@ -34,13 +47,21 @@ Rebuilt from a months-long audit of real projects (200K-token session starts, 75
 
 ## Install
 
-Copy each skill **directory** (SKILL.md *and* its `scripts/` subdir) to `~/.claude/skills/<name>/` on your machine:
+Copy each skill **directory** (SKILL.md *and* its `scripts/` subdir where present) to `~/.claude/skills/<name>/` on your machine:
 
 ```bash
-cp -r skills/analyze-context skills/update-context skills/analyze-handoff ~/.claude/skills/
+cp -r skills/analyze-context skills/update-context skills/analyze-handoff \
+      skills/brainstorm skills/write-plan skills/execute-plan skills/orchestrate \
+      ~/.claude/skills/
 ```
 
-Claude Code auto-discovers them on session start. The scripts are plain bash and run on Windows git-bash and macOS alike; if a script is missing, each SKILL.md carries an inline fallback.
+Or install individual skills with the [skills CLI](https://skills.sh):
+
+```bash
+npx skills add bradspit7/context-skills -s brainstorm -a claude-code -g -y
+```
+
+Claude Code auto-discovers them on session start. The lifecycle scripts are plain bash and run on Windows git-bash and macOS alike; if a script is missing, each SKILL.md carries an inline fallback. The process-suite skills are SKILL.md-only.
 
 ## Spec lineage
 

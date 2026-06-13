@@ -40,9 +40,21 @@ for f in "${DOCS[@]}"; do [ -f "$f" ] && DOC="$f" && break; done
 
 echo
 echo "== FETCH =="
-FETCH_OUT=$(git fetch --all 2>&1)
+# Hardened per Jacob's 2026-06-10 field report: GIT_TERMINAL_PROMPT=0 (a credential
+# prompt would hang session start forever), timeout when available, and a failed
+# fetch surfaces as a FINDING (stale remote view invalidates the currency gate)
+# instead of silently passing as "no new branches".
+if command -v timeout >/dev/null 2>&1; then
+  FETCH_OUT=$(GIT_TERMINAL_PROMPT=0 timeout 30 git fetch --all 2>&1)
+else
+  FETCH_OUT=$(GIT_TERMINAL_PROMPT=0 git fetch --all 2>&1)
+fi
+FETCH_RC=$?
+if [ "$FETCH_RC" -ne 0 ]; then
+  echo "FINDING fetch-failed (rc=$FETCH_RC — offline / auth / timeout): remote view is STALE; branch survey + upstream checks below are unreliable"
+fi
 NEWBR=$(printf '%s\n' "$FETCH_OUT" | grep -i 'new branch' || true)
-if [ -n "$NEWBR" ]; then printf '%s\n' "$NEWBR" | sed 's/^/FINDING new-remote-branch: /'; else echo "fetched; no new branches"; fi
+if [ -n "$NEWBR" ]; then printf '%s\n' "$NEWBR" | sed 's/^/FINDING new-remote-branch: /'; elif [ "$FETCH_RC" -eq 0 ]; then echo "fetched; no new branches"; fi
 
 echo
 echo "== WORKTREES =="

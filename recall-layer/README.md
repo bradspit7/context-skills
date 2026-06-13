@@ -91,6 +91,30 @@ A `UserPromptSubmit` hook that injects the top semantic hits as context on every
 
 The on-demand `/recall` works fully without the hook — the hook is just the ambient version.
 
+## Optional — always-on KEYWORD auto-recall + auto-refresh (`hooks/fts-recall.py`, `hooks/fts-refresh.py`)
+
+The **no-Ollama counterpart** to `semantic-recall.sh`, for anyone running the FTS half only. Two pure-stdlib Python hooks (no `jq`, no venv, no Ollama):
+
+- **`fts-recall.py`** (UserPromptSubmit) — surfaces FTS notes that share the prompt's *distinctive* terminology on every substantive prompt, no manual `/recall`. Fired naively, keyword match is noisy, so it gates on three things: a generic-word **stoplist**; **≥2 distinctive terms** (≤ `DF_MAX` docs) that **co-occur** within ~160 chars in a note; and **≥1 rare anchor** term (≤ `RARE_ANCHOR` docs). The rare-anchor gate is what stops rare-but-generic English words (e.g. "stricter") from dragging in unrelated notes. Skips prompts <25 chars and slash-commands; **always exits 0 / fails silent**. Tunables: `FTS_RECALL_DF_MAX` / `FTS_RECALL_RARE_ANCHOR` / `FTS_RECALL_MAX_RESULTS`; set `FTS_RECALL_LOG=1` to append an audit line per fire to `~/.claude/.fts-recall.log` (records the prompt snippet + the anchor term that triggered it — handy for spotting a generic word to add to the stoplist).
+- **`fts-refresh.py`** (SessionStart) — rebuilds `search.db` only when a memory `.md` is newer than the index (mtime check, backgrounded). Event-driven freshness for the keyword half, so you don't have to wire `--rebuild` into your memory-write flow.
+
+```bash
+cp hooks/fts-recall.py hooks/fts-refresh.py ~/.claude/hooks/   # the wiring below invokes them from here
+```
+
+```json
+"hooks": {
+  "UserPromptSubmit": [ { "hooks": [ {
+    "type": "command", "command": "python %USERPROFILE%/.claude/hooks/fts-recall.py", "shell": "bash"
+  } ] } ],
+  "SessionStart": [ { "hooks": [ {
+    "type": "command", "command": "python %USERPROFILE%/.claude/hooks/fts-refresh.py", "shell": "bash"
+  } ] } ]
+}
+```
+
+Use a real `python` (not the MS Store `python3` stub on Windows). Composes with `semantic-recall.sh` — run keyword now, add semantic later, or both.
+
 ---
 
 ## Known Windows gaps (verify these — they couldn't be tested from macOS)

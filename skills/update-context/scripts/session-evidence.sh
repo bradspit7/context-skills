@@ -87,10 +87,20 @@ SLUG=$(printf '%s' "$NATIVE" | sed 's/[^A-Za-z0-9]/-/g')
 if [ -z "$CANDIDATES" ]; then
   echo "(no memory directory found — in-repo or out-of-repo)"
 fi
+# Session-start read-path = the files analyze-context loads EVERY session start (index + docket/roadmap).
+# On-demand topic files are deliberately EXCLUDED: a large topic library is not a session-start cost and
+# must NOT trigger a consolidation nag. (The old blunt total-bytes trigger re-fired right after a valid
+# consolidation, because trimming the read-path barely moves a sum dominated by on-demand topic files.)
+READPATH_KB_LIMIT=50
 for MEMDIR in $CANDIDATES; do
   COUNT=$(ls "$MEMDIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
   KB=$(ls -l "$MEMDIR"/*.md 2>/dev/null | awk '{s+=$5} END {printf "%d", s/1024}')
-  echo "$MEMDIR: $COUNT md files, ${KB}KB of md"
+  RP_BYTES=0
+  for f in "$MEMDIR/MEMORY.md" "$MEMDIR"/roadmap.md "$MEMDIR"/*docket*.md; do
+    [ -f "$f" ] && RP_BYTES=$(( RP_BYTES + $(wc -c < "$f" 2>/dev/null || echo 0) ))
+  done
+  READPATH_KB=$(( RP_BYTES / 1024 ))
+  echo "$MEMDIR: $COUNT md files, ${KB}KB total (${READPATH_KB}KB session-start read-path: index+docket)"
   IDX="$MEMDIR/MEMORY.md"
   if [ -f "$IDX" ]; then
     # dead index links: [text](file.md) entries whose target doesn't exist next to the index
@@ -104,8 +114,9 @@ for MEMDIR in $CANDIDATES; do
   else
     [ "$COUNT" -gt 5 ] && echo "THRESHOLD $MEMDIR has $COUNT files but NO MEMORY.md index — create one this run"
   fi
-  [ "${COUNT:-0}" -gt 40 ] && echo "THRESHOLD $MEMDIR file count > 40 — consolidation pass due"
-  [ "${KB:-0}" -gt 150 ] && echo "THRESHOLD $MEMDIR md size > 150KB — consolidation pass due"
+  # Trigger on session-start READ-PATH bloat ONLY (index + docket/roadmap loaded every start) — never on
+  # on-demand topic-file bulk. Clearable by design: trimming the named files clears it; topic files don't.
+  [ "${READPATH_KB:-0}" -gt "$READPATH_KB_LIMIT" ] && echo "THRESHOLD $MEMDIR session-start read-path ${READPATH_KB}KB (>${READPATH_KB_LIMIT}KB: MEMORY.md + docket/roadmap, loaded every session start) — trim/rotate the index + docket this run; on-demand topic files are NOT the cause and do not need consolidating"
 done
 
 echo

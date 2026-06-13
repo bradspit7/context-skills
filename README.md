@@ -31,7 +31,7 @@ Rebuilt from a months-long audit of real projects (200K-token session starts, 75
 - **Depth router with delegation** — core docs read directly (with a ~40KB size valve); heavy read sets (≥ ~60KB) are fully read inside parallel subagents that return structured extracts + top/middle/bottom verification quotes. Full coverage without the 200K-token cold start.
 - **Single-home triage** — every session fact routes to exactly one file (status → HANDOFF, narrative → log entry, rule → memory, decision → decision doc, queue → docket); everything else cites by pointer. Facts failing the load-bearing test ("would the next session act differently without this?") are dropped.
 - **Rotation rules** — HANDOFF headers may never accrete prior-session summaries; wikis keep the newest 3 pickup points inline (older → archive); per-dev files trim past ~600 lines. Archive moves are non-destructive and don't ask.
-- **Memory hygiene gate** — dead-link sweeps, supersession archiving, consolidation thresholds (>40 files / >150KB / missing index).
+- **Memory hygiene gate** — dead-link sweeps, supersession archiving, consolidation thresholds (dead links / oversized index lines / session-start read-path >50KB [index + docket only, not on-demand topic bulk] / missing index).
 - **Multi-developer pattern** — first-class support for per-dev `HANDOFF-<name>.md` narratives + a slim shared HANDOFF as live team contract + coordination-feed awareness, with GitHub-identity resolution and one-writer-per-file discipline. (Field-proven on a 3-developer game build.)
 - **Currency before content** — header `Updated:` stamps are advisory, never proof; reachability of recent handoff commits from HEAD is the proof. Findings block the briefing; they are never demoted to FYIs.
 

@@ -93,7 +93,7 @@ Rotation is how read-cost stays flat. All moves are **non-destructive** (content
   - Entries deferred past a known future date get parked in archive with a `revisit: <date>` line.
   - **After any archive/merge, grep `.claude/` for the moved filenames** (skills, agents, hooks, commands) and repoint hits. Memory-internal cross-refs get audited by the dead-link check; the `.claude/`→memory direction is the one nothing checks by default — reviewer agents and skills cite memory files by name and break silently when consolidation moves them.
   - Build MEMORY.md if missing.
-- **Recurring cross-project rules:** a memory rule that has now bitten in 2+ projects belongs in a skill or global CLAUDE.md — suggest the promotion in the wrap report rather than letting each project re-learn it.
+- **Upgrade reflection (run every wrap):** beyond memory promotion, scan the session signal for anything warranting a new or upgraded **tool / hook / subagent / slash command / MCP / catalog entry / CLAUDE.md rule** — invoke the `reflect-upgrades` skill (or inline its checklist: load-bearing test + de-dup, then route). Surface surviving candidates in the wrap report and FILE them — generalizables to your central upgrades repo or catalog, project-specific ones to the current project's docket. A memory rule that has now bitten 2+ projects is one such candidate (promote it to a skill or global CLAUDE.md). Empty is a valid result — do not manufacture candidates.
 
 ## Step 6 — Audit artifact, then apply
 

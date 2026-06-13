@@ -1,0 +1,128 @@
+#!/usr/bin/env python3
+"""UserPromptSubmit hook: once per session, after substantial work, inject a
+non-blocking nudge to run the reflect-upgrades skill.
+
+Deterministic proxy for "substantial work": counts Edit/Write/MultiEdit/
+NotebookEdit tool uses in the session transcript, plus flags a memory-file
+write or a `git commit`. Fires at most once per session (marker file). The
+judgment ("did we actually learn something tool-worthy") is left to the
+reflect-upgrades skill the nudge points to - a hook cannot make that call.
+
+ASCII-only (project hook rule). Fails open: any error -> exit 0, no output.
+
+Env tunables:
+  UPGRADE_NUDGE_EDIT_THRESHOLD   edits needed to fire (default 3)
+  UPGRADE_NUDGE_DISABLE=1        silence the hook entirely
+"""
+import json
+import os
+import sys
+
+EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+
+
+def _threshold():
+    try:
+        return int(os.environ.get("UPGRADE_NUDGE_EDIT_THRESHOLD", "3"))
+    except ValueError:
+        return 3
+
+
+def _tool_uses(ev):
+    if not isinstance(ev, dict):
+        return
+    msg = ev.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, list):
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "tool_use":
+                yield block
+
+
+def main():
+    if os.environ.get("UPGRADE_NUDGE_DISABLE") == "1":
+        return
+    try:
+        data = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+    except Exception:
+        return
+    session_id = str(data.get("session_id") or "").strip()
+    transcript = str(data.get("transcript_path") or "").strip()
+    if not session_id or not transcript or not os.path.isfile(transcript):
+        return
+
+    state_dir = os.path.join(os.path.expanduser("~"), ".claude", "run", "upgrade-nudge")
+    safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in session_id)
+    marker = os.path.join(state_dir, safe_id)
+    if os.path.exists(marker):
+        return  # already nudged this session
+
+    edits = 0
+    memory_write = False
+    commit = False
+    try:
+        with open(transcript, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    ev = json.loads(line)
+                except Exception:
+                    continue
+                for tu in _tool_uses(ev):
+                    name = tu.get("name", "")
+                    inp = tu.get("input") or {}
+                    if name in EDIT_TOOLS:
+                        edits += 1
+                        fp = str(inp.get("file_path", "")).replace("\\", "/")
+                        if "/memory/" in fp and fp.endswith(".md"):
+                            memory_write = True
+                    elif name == "Bash":
+                        if "git commit" in str(inp.get("command", "")):
+                            commit = True
+    except OSError:
+        return
+
+    if not (edits >= _threshold() or memory_write or commit):
+        return
+
+    parts = []
+    if edits:
+        parts.append("%d file edit%s" % (edits, "" if edits == 1 else "s"))
+    if commit:
+        parts.append("a commit")
+    if memory_write:
+        parts.append("a memory write")
+    signal = ", ".join(parts) if parts else "substantial work"
+
+    try:
+        os.makedirs(state_dir, exist_ok=True)
+        with open(marker, "w", encoding="utf-8") as fh:
+            fh.write("nudged\n")
+    except OSError:
+        pass  # if we cannot write the marker, still nudge this once
+
+    msg = (
+        "[upgrade-reflection] Substantial work this session (%s). Before moving on, "
+        "consider the reflect-upgrades skill - scan whether anything here warrants a "
+        "new or upgraded tool, hook, subagent, slash command, or rule, and file the "
+        "real candidates (generalizables to the central upgrades repo, project-specific "
+        "ones to this project's docket). Nothing tool-worthy is a fine answer." % signal
+    )
+    try:
+        sys.stdout.write(json.dumps({
+            "hookSpecificOutput": {
+                "hookEventName": "UserPromptSubmit",
+                "additionalContext": msg,
+            }
+        }))
+    except Exception:
+        pass
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        pass

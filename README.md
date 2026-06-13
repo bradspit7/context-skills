@@ -7,6 +7,7 @@ Seven skills in two families.
 - **`analyze-context/`** — runs at session START. Verifies the persistence layer is *current* (worktree/branch/cross-machine drift check), reads it at the right depth, and produces a synthesized briefing.
 - **`update-context/`** — runs at session END. Triages the session's facts into single homes, rotates history out of the hot path, runs memory hygiene, and leaves the tree provably clean (auto-commit, never push).
 - **`analyze-handoff/`** — slim sibling for same-day resumption. Reads only the handoff doc, 3-line summary, ~5K tokens.
+- **`reflect-upgrades/`** — after substantial work, turns session learnings into tooling-upgrade candidates (a new/upgraded skill, hook, subagent, command, MCP, or rule). Invoked by every `update-context` wrap and by a once-per-session `UserPromptSubmit` nudge hook bundled under the skill (`hooks/upgrade-reflection-nudge.py`). Surfaces and files candidates; it does not build them.
 
 **Process suite** — the development loop from idea to integrated code, designed as drop-in replacements for the superpowers plugin's brainstorming / writing-plans / executing-plans / subagent-driven-development / dispatching-parallel-agents:
 
@@ -51,7 +52,7 @@ Copy each skill **directory** (SKILL.md *and* its `scripts/` subdir where presen
 
 ```bash
 cp -r skills/analyze-context skills/update-context skills/analyze-handoff \
-      skills/brainstorm skills/write-plan skills/execute-plan skills/orchestrate \
+      skills/brainstorm skills/write-plan skills/execute-plan skills/orchestrate skills/reflect-upgrades \
       ~/.claude/skills/
 ```
 

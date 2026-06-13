@@ -34,14 +34,15 @@ Point both indexers at the identical roots and the two DBs cover the same corpus
 ## Install — keyword half (do this first; zero deps)
 
 ```bash
-# 1. choose your corpus roots
+# 1. install the indexer + choose your corpus roots
 mkdir -p ~/.claude/memory-sync
+cp tools/build-search-index.py ~/.claude/memory-sync/   # the /recall + /memory-search docs invoke it from here
 printf '%s\n' "$HOME/.claude/projects" > ~/.claude/memory-sync/fts-roots.txt   # edit to your real roots
 
-# 2. build the index (pure stdlib python — any python3 works)
-python tools/build-search-index.py --rebuild
-python tools/build-search-index.py --roots          # sanity: prints resolved roots + exists/MISSING
-python tools/build-search-index.py --query "loss limit" --limit 5
+# 2. build the index (pure stdlib python — use a REAL python, NOT the MS Store python3 stub)
+python ~/.claude/memory-sync/build-search-index.py --rebuild
+python ~/.claude/memory-sync/build-search-index.py --roots          # sanity: prints resolved roots + exists/MISSING
+python ~/.claude/memory-sync/build-search-index.py --query "loss limit" --limit 5
 ```
 
 Wire `commands/memory-search.md` and `commands/recall.md` into `~/.claude/commands/`. Re-run `--rebuild` whenever your notes change (tie it to your memory-write/wrap flow, or a scheduled task). That's the entire keyword layer.
@@ -58,9 +59,12 @@ python -m venv ~/.claude/memory-sync/.venv-semantic
 ~/.claude/memory-sync/.venv-semantic/Scripts/python.exe -m pip install sqlite-vec==0.1.9
 # pip freeze of that venv should be exactly one line: sqlite-vec==0.1.9
 
-# 3. build the vector index (Ollama must be running)
+# 3. install the semantic scripts where the schedule + smoke-test expect them
+cp tools/semantic-index.py tools/run-semantic-rebuild.sh ~/.claude/memory-sync/
+
+# 4. build the vector index (Ollama must be running)
 SEMANTIC_PYTHON=~/.claude/memory-sync/.venv-semantic/Scripts/python.exe \
-  bash tools/run-semantic-rebuild.sh
+  bash ~/.claude/memory-sync/run-semantic-rebuild.sh
 ```
 
 Wire `commands/semantic-search.md` into `~/.claude/commands/`. `/recall` upgrades itself to interleave `[fts]`/`[sem]`/`[both]` automatically once `semantic.db` exists.

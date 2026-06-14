@@ -13,6 +13,9 @@ ASCII-only (project hook rule). Fails open: any error -> exit 0, no output.
 Env tunables:
   UPGRADE_NUDGE_EDIT_THRESHOLD   edits needed to fire (default 3)
   UPGRADE_NUDGE_DISABLE=1        silence the hook entirely
+
+Side effect: appends one tab-separated line per fire (ISO time, project, signal,
+session) to ~/.claude/run/upgrade-nudge/fires.log for later Layer-2 tuning.
 """
 import json
 import os
@@ -102,6 +105,17 @@ def main():
             fh.write("nudged\n")
     except OSError:
         pass  # if we cannot write the marker, still nudge this once
+
+    # Log each fire (fail-open) so Layer-2 tuning can be data-driven later:
+    # project + signal + session. Markers alone record only THAT a session fired.
+    try:
+        from datetime import datetime
+        proj = str(data.get("cwd") or os.path.dirname(transcript) or "?")
+        with open(os.path.join(state_dir, "fires.log"), "a", encoding="utf-8") as lf:
+            lf.write("%s\t%s\t%s\t%s\n" % (
+                datetime.now().isoformat(timespec="seconds"), proj, signal, session_id))
+    except Exception:
+        pass
 
     msg = (
         "[upgrade-reflection] Substantial work this session (%s). Before moving on, "

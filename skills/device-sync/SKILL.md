@@ -25,9 +25,10 @@ Read its full structured output. It reports: machine, project slug, git ahead/be
 
 ## Step 1 — Session-start / pull
 
-- **SESSION-START BLOCK present** → open the project CLAUDE.md and execute its documented session-start commands verbatim (covers `git pull`, sibling-repo pulls, `bootstrap-laptop.sh`, etc.).
-- **Else, git repo** → run `git pull`.
-- **Else (non-git)** → skip; note "no git pull (not a git repo)".
+For a git repo, **`git pull` always happens** — the `SESSION-START HINT` and `BOOTSTRAP SCRIPT` signals only tell you whether there is *more* to run on top of it.
+
+- **Git repo** → run `git pull` first. Then, if the probe reported a `BOOTSTRAP SCRIPT` or a genuine session-start heading, open the project CLAUDE.md, find its documented session-start sequence, and run the rest verbatim (sibling-repo pulls, `bootstrap-laptop.sh`, etc.). The `SESSION-START HINT` is advisory, not authoritative — if it turns out to be incidental wording with no real commands, the `git pull` you already ran is the whole of Step 1. Never skip the pull because a heading did or didn't match.
+- **Non-git** → skip; note "no git pull (not a git repo)".
 
 ## Step 2 — Memory transport (evaluate IN ORDER; take the FIRST branch that matches)
 

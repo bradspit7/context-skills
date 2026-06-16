@@ -29,13 +29,17 @@ Read its full structured output. It reports: machine, project slug, git ahead/be
 - **Else, git repo** → run `git pull`.
 - **Else (non-git)** → skip; note "no git pull (not a git repo)".
 
-## Step 2 — Memory transport (pick ONE branch from the probe signals)
+## Step 2 — Memory transport (evaluate IN ORDER; take the FIRST branch that matches)
 
-- **in-repo git-tracked + live dir junctions into the repo** → already synced by the pull; no-op.
-- **mirror + bootstrap script** → the bootstrap in Step 1 already copied mirror→live. If the pull output shows **deleted or renamed** mirror files, run the project's clean re-sync guard so stale live files do not linger: `rm <live-memory-dir>/*.md && cp <mirror-dir>/*.md <live-memory-dir>/`.
-- **out-of-band sync root present** → open the RECIPE FILE the probe named and execute its documented recipe **in the arrival direction (bucket → local)**, honoring its stated guard (`/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge). The recipe file is authoritative for the exact command and bucket path; the probe only told you which family you are in.
-- **live dir junctions to an out-of-band location** → OS auto-syncs; no-op.
-- **none of the above** → state "no cross-device memory sync configured for this project" and proceed.
+The order matters — several signals can be true at once (a shared sync root holds *other* projects' buckets; a transport-note file can sit next to git-mirrored memory). Take the first match top-down:
+
+1. **live memory dir is a junction/symlink INTO the repo** (probe `live-dir-junction: yes` with an in-repo target) → git-in-repo; the `git pull` in Step 1 already synced it. No-op.
+2. **in-repo memory mirror + a bootstrap script** (probe `IN-REPO MEMORY MIRROR` present **and** a `BOOTSTRAP SCRIPT`) → the bootstrap in Step 1 already copied mirror→live. If the pull output shows **deleted or renamed** mirror files, run the clean re-sync guard so stale live files do not linger: `rm <live-memory-dir>/*.md && cp <mirror-dir>/*.md <live-memory-dir>/`. No further sync.
+3. **live memory dir is a junction/symlink to an out-of-band location** (target outside the repo) → OS auto-syncs. No-op.
+4. **a sync-root bucket belongs to THIS project** (probe `bucket-match:` is **not** `none`) → out-of-band transport. Open the RECIPE FILE the probe named and execute its documented recipe **in the arrival direction (bucket → local)**, honoring its stated guard (`/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge). The recipe file is authoritative for the exact command and bucket path.
+5. **none of the above** → state "no cross-device memory sync configured for this project" and proceed.
+
+**A sync root merely *existing* is NOT branch 4** — other projects' buckets sharing the root do not make this project an out-of-band project. Branch 4 requires a positive `bucket-match` for THIS project. The `RECIPE FILE` line is consulted **only inside branch 4**; if a project resolves to branch 1/2/3, any transport-description file the probe happened to surface is informational and must never be executed as a bucket recipe.
 
 ## Step 3 — Brief
 

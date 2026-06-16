@@ -98,18 +98,42 @@ done
 echo "repo-folder-name (for bucket matching): $PROJ_NAME"
 
 echo
-echo "== RECIPE FILE (project's documented transport) =="
+echo "== BUCKET MATCH (does a sync-root bucket belong to THIS project?) =="
+# A sync root merely EXISTING is not enough — other projects' buckets share it.
+# Skill Step-2 branch 4 (out-of-band) keys off THIS line, never off "a root exists".
+NPROJ=$(printf '%s' "$PROJ_NAME" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g')
+BMATCH="none"
+for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/Dropbox/claude-memory"; do
+  [ -n "$root" ] && [ -d "$root" ] || continue
+  for b in "$root"/*/; do
+    [ -d "$b" ] || continue
+    bn=$(basename "$b")
+    nb=$(printf '%s' "$bn" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g')
+    [ ${#nb} -ge 4 ] || continue
+    case "$NPROJ" in *"$nb"*) BMATCH="$root/$bn"; break;; esac
+  done
+  [ "$BMATCH" != "none" ] && break
+done
+echo "bucket-match: $BMATCH"
+
+echo
+echo "== RECIPE FILE (out-of-band transport recipe only) =="
+# Deliberately narrow: only out-of-band/OneDrive sync recipes, NOT generic
+# cross-machine/git-mirror transfer notes (those are not runnable bucket recipes).
 if [ -d "$LIVE_MEM" ]; then
-  RF=$(find "$LIVE_MEM" -maxdepth 1 -type f \( -iname '*memory_sync*' -o -iname '*memory-sync*' -o -iname 'cross-machine*' -o -iname '*cross_machine*' -o -iname '*onedrive*' -o -iname 'device*' \) 2>/dev/null)
-  if [ -n "$RF" ]; then printf '%s\n' "$RF" | sed 's/^/  recipe: /'; else echo "  none (no memory-sync/onedrive/cross-machine recipe file in live memory dir)"; fi
+  RF=$(find "$LIVE_MEM" -maxdepth 1 -type f \( -iname '*memory_sync*' -o -iname '*memory-sync*' -o -iname '*onedrive*' \) 2>/dev/null)
+  if [ -n "$RF" ]; then printf '%s\n' "$RF" | sed 's/^/  recipe: /'; else echo "  none (no memory-sync/onedrive recipe file in live memory dir)"; fi
 else
   echo "  (live memory dir does not exist — cannot search for a recipe file)"
 fi
 
 echo
 echo "== VERDICT =="
-echo "Use these facts to pick ONE Step-2 branch in the device-sync skill."
-echo "in-repo mirror+junction => no-op (git pull synced it) | mirror+bootstrap => bootstrap copied it"
-echo "out-of-band bucket => read the recipe file, run it bucket->local | junction-to-bucket => OS auto-syncs"
-echo "none => no cross-device memory sync. Always remote->local; never local->bucket here."
+echo "Evaluate Step-2 branches IN ORDER; take the FIRST that matches:"
+echo "  1 junction-into-repo => no-op (git pull synced it)"
+echo "  2 in-repo mirror + bootstrap script => bootstrap copied mirror->live"
+echo "  3 junction-to-out-of-band => OS auto-syncs"
+echo "  4 bucket-match is NOT 'none' => out-of-band: read the recipe file, run it bucket->local"
+echo "  5 none of the above => no cross-device memory sync"
+echo "A sync root EXISTING is not branch 4 — only a positive bucket-match is. Always remote->local; never local->bucket here."
 exit 0

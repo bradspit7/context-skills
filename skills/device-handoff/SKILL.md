@@ -5,7 +5,7 @@ description: One-command cross-device departure. Fires on /device-handoff, "wrap
 
 # Device Handoff
 
-One-command cross-device departure: persist the session (`update-context`), push memory OUT to the cross-device transport, and push every touched repo — so the next machine you sit at receives the handoff. The departure counterpart to `device-sync`; it **wraps** `update-context` the way device-sync wraps `analyze-context`, and **pushes by default** because the push is the only way the other device gets the work (symmetric to device-sync's auto-pull).
+One-command cross-device departure: persist the session (`update-context`), push memory OUT to the cross-device transport, and push every repo with unpushed commits — so the next machine you sit at receives your full local state. The departure counterpart to `device-sync`; it **wraps** `update-context` the way device-sync wraps `analyze-context`, and **pushes by default** because the push is the only way the other device gets the work (symmetric to device-sync's auto-pull).
 
 ## When to fire / not fire
 
@@ -30,14 +30,17 @@ Read the full structured output (same transport signals device-sync uses).
 ## Step 3 — Memory departure sync (reverse of device-sync; evaluate IN ORDER, first match wins)
 
 1. **live dir is a junction/symlink INTO the repo** → no-op; update-context's commit already captured it.
-2. **in-repo mirror + bootstrap script** → update-context already copied live→mirror (committed in Step 1); verify it happened, else no-op.
+2. **in-repo mirror + bootstrap script** → update-context already copied live→mirror (committed in Step 1). **Verify it landed** — `diff -rq <live-memory-dir> <in-repo-mirror-dir>` (or confirm this session's changed memory files are present in the mirror commit). Match → no-op. **Mismatch → the copy did not complete: run the copy-back (`cp <live-memory-dir>/*.md <in-repo-mirror-dir>/` then commit), or stop and tell the user.** Never push a departure that leaves newer live memory unmirrored — silently no-op'ing a failed copy is how cross-device state gets stranded.
 3. **live dir is a junction to an out-of-band location** → OS auto-syncs; no-op.
 4. **a sync-root bucket belongs to THIS project** (`bucket-match` ≠ `none`) → run the project's recipe in the **departure direction (local → bucket)**, honoring its guard: `/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge. The recipe file is authoritative for the exact command and bucket path.
 5. **none** → no cross-device memory transport; nothing to push out.
 
-## Step 4 — Push every touched repo
+## Step 4 — Push every repo with unpushed work
 
-Push the current repo. Then push any **sibling repo the project documents** (read the project CLAUDE.md repo map) that has unpushed commits (`git -C <repo> rev-list --count @{u}..HEAD` > 0). Report each push result; a repo with no upstream → report it, do not fail.
+Push so the other machine receives your full local state — **all** unpushed commits, not only this session's (that is what "pushes by default" means). For the current repo, then each **sibling repo the project documents** (read the project CLAUDE.md repo map):
+
+1. **Preflight before pushing.** Report what will go out: `git -C <repo> status -sb` and `git -C <repo> log --oneline @{u}..HEAD` — which repo, how many ahead commits, and whether the tree is dirty. Uncommitted changes are **not** pushed; if a documented sibling's tree is dirty, warn that those edits will be left behind on this machine.
+2. **Push** any repo with ahead commits (`git -C <repo> rev-list --count @{u}..HEAD` > 0). Report each push result; a repo with no upstream → report it, do not fail.
 
 ## Step 5 — Cross-device readiness
 

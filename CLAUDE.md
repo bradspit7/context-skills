@@ -1,6 +1,6 @@
 # context-skills
 
-Public repo (github.com/bradspit7/context-skills) publishing seven Claude Code skills: the session-lifecycle trio (`analyze-context`, `update-context`, `analyze-handoff`) and the process suite (`brainstorm`, `write-plan`, `execute-plan`, `orchestrate` — drop-in replacements for the superpowers plugin's core development-loop skills). The `skills/<name>/SKILL.md` files are both the spec and the product; `skills/<name>/scripts/*.sh` are the deterministic helpers `analyze-context` and `update-context` shell out to (`analyze-handoff` and the process suite have none by design). Install/usage docs: `README.md`.
+Public repo (github.com/bradspit7/context-skills) publishing ten Claude Code skills: the session-lifecycle set (`analyze-context`, `update-context`, `analyze-handoff`, `reflect-upgrades`), the cross-device pair (`device-sync`, `device-handoff`), and the process suite (`brainstorm`, `write-plan`, `execute-plan`, `orchestrate` — drop-in replacements for the superpowers plugin's core development-loop skills). The `skills/<name>/SKILL.md` files are both the spec and the product; `skills/<name>/scripts/*.sh` are the deterministic helpers the lifecycle skills shell out to (`currency-check.sh`, `session-evidence.sh`, and the device pair's shared `probe-sync.sh`); `analyze-handoff`, `reflect-upgrades`, and the process suite carry no `scripts/` (`reflect-upgrades` bundles a `hooks/` nudge instead). Install/usage docs: `README.md`.
 
 ## Sync discipline — read before editing anything
 
@@ -17,7 +17,7 @@ This repo is the **third copy** in a one-way chain. Skill edits originate in the
 Sync check (silence = in sync):
 
 ```bash
-for s in analyze-context update-context analyze-handoff brainstorm write-plan execute-plan orchestrate; do diff -rq "skills/$s" ~/.claude/skills/"$s"; done
+for d in skills/*/; do s=$(basename "$d"); diff -rq "skills/$s" ~/.claude/skills/"$s"; done
 ```
 
 ## Verify loop

@@ -13,7 +13,7 @@ rebuild only delays findability of brand-new notes by one session, never breaks
 anything. Reversible: remove from ~/.claude/settings.json SessionStart.
 
 Roots are resolved exactly like build-search-index.py:
-  FTS_RECALL_ROOTS env (os.pathsep-separated) -> fts-roots.txt -> ~/.claude/projects/*/memory.
+  CLAUDE_FTS_ROOTS env (os.pathsep-separated) -> fts-roots.txt -> ~/.claude/projects/*/memory.
 Env: FTS_RECALL_DB / FTS_RECALL_INDEXER override the db + indexer paths.
 
 Install: wire into ~/.claude/settings.json under SessionStart, e.g.
@@ -36,7 +36,7 @@ SKIP_DIRS = {".git", ".obsidian", "node_modules", ".venv", "__pycache__",
 
 
 def roots():
-    env = os.environ.get("FTS_RECALL_ROOTS")
+    env = os.environ.get("CLAUDE_FTS_ROOTS")
     if env:
         return [os.path.expanduser(p) for p in env.split(os.pathsep) if p.strip()]
     out = []

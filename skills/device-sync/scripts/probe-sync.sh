@@ -133,11 +133,12 @@ fi
 
 echo
 echo "== VERDICT =="
-echo "Evaluate Step-2 branches IN ORDER; take the FIRST that matches:"
-echo "  1 junction-into-repo => no-op (git pull synced it)"
-echo "  2 in-repo mirror + bootstrap script => bootstrap copied mirror->live"
+echo "Identify the transport branch IN ORDER; take the FIRST that matches:"
+echo "  1 junction-into-repo => no-op (git already syncs it)"
+echo "  2 in-repo mirror + bootstrap script => bootstrap / mirror copy-back handles it"
 echo "  3 junction-to-out-of-band => OS auto-syncs"
-echo "  4 bucket-match is NOT 'none' => out-of-band: read the recipe file, run it bucket->local"
-echo "  5 none of the above => no cross-device memory sync"
-echo "A sync root EXISTING is not branch 4 -- only a positive bucket-match is. Always remote->local; never local->bucket here."
+echo "  4 bucket-match is NOT 'none' => out-of-band bucket transport; open the recipe file"
+echo "  5 none of the above => no cross-device memory transport"
+echo "A sync root EXISTING is not branch 4 -- only a positive bucket-match is. DIRECTION is the"
+echo "calling skill's job: device-sync pulls bucket->local (arrival); device-handoff pushes local->bucket (departure)."
 exit 0

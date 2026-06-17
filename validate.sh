@@ -17,6 +17,14 @@
 set -u
 cd "$(dirname "$0")"
 
+# This gate covers the COMMITTED tree: file lists come from `git ls-files`, so a
+# local scratch .md / copied .py / temp script / venv cannot fail an otherwise
+# clean repo (important when this backs a pre-commit hook). Requires a git work tree.
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  printf 'validate: must run inside the context-skills git repo\n'; exit 2
+fi
+gate_files() { git ls-files -- "$@"; }
+
 fail=0
 FAIL() { printf 'FAIL %s\n' "$1"; fail=1; }
 OK()   { printf 'OK   %s\n' "$1"; }
@@ -37,7 +45,9 @@ for d in skills/*/; do
   s=$(basename "$d"); f="${d}SKILL.md"
   if [ ! -f "$f" ]; then FAIL "skill '$s': no SKILL.md"; continue; fi
   if [ "$(sed -n '1p' "$f")" != "---" ]; then FAIL "$s/SKILL.md: missing opening --- frontmatter"; continue; fi
-  fm=$(sed -n '2,/^---$/p' "$f")
+  close=$(awk 'NR>1 && /^---$/{print NR; exit}' "$f")
+  if [ -z "$close" ]; then FAIL "$s/SKILL.md: no closing --- frontmatter delimiter"; continue; fi
+  fm=$(sed -n "2,$((close-1))p" "$f")
   printf '%s\n' "$fm" | grep -q '^name:'        || FAIL "$s/SKILL.md: frontmatter missing 'name:'"
   printf '%s\n' "$fm" | grep -q '^description:' || FAIL "$s/SKILL.md: frontmatter missing 'description:'"
 done
@@ -52,13 +62,13 @@ done
 # 3. shell scripts parse
 while IFS= read -r f; do
   bash -n "$f" 2>/dev/null || FAIL "bash -n failed: $f"
-done < <(find . -name '*.sh' -not -path './.git/*' -not -path '*/__pycache__/*')
+done < <(gate_files '*.sh')
 
 # 4. python compiles
 if [ -n "$PY" ]; then
   while IFS= read -r f; do
     "$PY" -m py_compile "$f" 2>/dev/null || FAIL "py_compile failed: $f"
-  done < <(find . -name '*.py' -not -path './.git/*' -not -path '*/__pycache__/*')
+  done < <(gate_files '*.py')
 else
   note "(no working python found - skipping py_compile)"
 fi
@@ -68,7 +78,7 @@ fi
 #    positives on clean files), so a validator must not depend on it.
 while IFS= read -r f; do
   [ "$(tr -cd '\r' < "$f" | wc -c)" -gt 0 ] && FAIL "CRLF line endings: $f"
-done < <(find . \( -name '*.sh' -o -name '*.py' -o -name '*.md' \) -not -path './.git/*' -not -path '*/__pycache__/*')
+done < <(gate_files '*.sh' '*.py' '*.md')
 
 # 6. duplicated probe stays byte-identical
 A=skills/device-sync/scripts/probe-sync.sh

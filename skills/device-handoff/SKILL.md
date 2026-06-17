@@ -1,6 +1,6 @@
 ---
 name: device-handoff
-description: One-command cross-device departure. Fires on /device-handoff, "wrap up and prep for switching devices", "I'm leaving this machine", "end the session and push", or "handoff to my other device". Runs update-context, pushes memory out to the project's cross-device transport in the departure direction (local to bucket), and pushes every touched repo so the next machine receives the work. The departure counterpart to device-sync; pushes by default. Use plain update-context for a context save with no device switch.
+description: One-command cross-device departure. Fires on /device-handoff, "wrap up and prep for switching devices", "I'm leaving this machine", "end the session and push", or "handoff to my other device". Runs update-context, pushes memory out to the project's cross-device transport in the departure direction (local to bucket), and pushes the current repo plus any documented sibling repos with unpushed commits so the next machine receives the work. The departure counterpart to device-sync; pushes by default. Use plain update-context for a context save with no device switch.
 ---
 
 # Device Handoff

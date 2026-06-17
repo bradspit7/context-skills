@@ -1,0 +1,7 @@
+# Enforce LF line endings on every platform.
+# This repo ships shell scripts that are run in place; CRLF breaks them when run
+# (and the suite's rule is LF-everywhere). Without this, Git-for-Windows' default
+# system setting core.autocrlf=true re-introduces CRLF on each Windows checkout,
+# silently undoing line-ending normalization and failing validate.sh on a fresh
+# clone. `text=auto` still auto-detects and leaves binary files untouched.
+* text=auto eol=lf

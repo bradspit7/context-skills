@@ -30,6 +30,8 @@ For each task, in order:
 - *Minor* (path moved, rename, obvious typo in the plan): fix, note the deviation in the plan file next to the task, proceed.
 - *Design-level* (task can't work as written, spec conflict, law conflict): STOP, surface to the user with what you found, don't improvise around the plan.
 
+**Write-path safety gate (mandatory).** A task that decides what gets *written / filed / matched / registered* must run a **write-path review fleet** (orchestrate's hardened contract) before it can be marked complete. If the plan specifies the step, execute it. If the plan OMITS it for a write-path task, that is a plan defect, not a license to improvise: log it as a mandatory safety deviation in the plan (per the deviation protocol) and run the fleet, or STOP and surface it — never skip it silently, never bolt it on without recording the deviation.
+
 **On failure:** verification fails twice on the same step → stop patching blind; route to `superpowers:systematic-debugging`, find the root cause, then resume the plan.
 
 ## Step 3 — Close out

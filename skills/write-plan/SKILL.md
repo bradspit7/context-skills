@@ -52,6 +52,8 @@ Each task: 2-5 minute steps, one action per step, checkbox-tracked.
 
 Where the house style isn't test-first (e.g., scene/asset work), steps 1-4 become: make the change → run the project verify loop → check the observable result (named explicitly: which scene, which page, which output line).
 
+**Write-path tasks carry a review-fleet step.** If a task decides what gets *written / filed / matched / registered* (a matcher, a registration/attribution gate, a foundational constant other code reads), add an explicit verification step before its commit step that dispatches the **write-path review fleet** (orchestrate's hardened contract). A green per-task test proves the data layer, not single-pass correctness — the fleet is the step that catches the mis-write. Run its adversarial pass on a different model than wrote the code where possible.
+
 ## No placeholders — these are plan failures
 
 - "TBD", "TODO", "implement later", "fill in details"

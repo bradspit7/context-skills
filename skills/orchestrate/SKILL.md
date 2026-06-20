@@ -46,6 +46,15 @@ For audits/reviews: one agent per dimension (correctness, security, conventions,
 
 **Validate the fleet itself before trusting its verdicts.** A zero-finding run is ambiguous — clean code, a too-lenient gate, and a fleet that never read its target all look identical. Seed a *known* bug into a throwaway copy and confirm the fleet flags it — and make the seed exercise the verify-gate edge paths (a 1-1 tie, a crashed verifier), not just an obvious bug every verifier agrees on. An obvious-bug-only seed leaves the threshold logic unexercised and passes even when the gate is wrong (real case: a gate that confirmed 1-1 ties passed its obvious-bug seed because the verifiers happened to agree). A green review run is necessary, not sufficient — green-tests-not-sufficient, applied to the reviewer.
 
+**Write-path fleet — the hardened gate (use when the change decides what gets *written / filed / matched / registered*).** The generic pass above is not enough for write-path logic; this gate has already paid for real silent-data-loss bugs. A correct write-path fleet MUST hold all of:
+- **Named dimensions** including a *reproduce-the-specific-mis-write* lens (not just generic correctness) and reachability of the new state, alongside the standard lenses.
+- **Strict majority of the *expected* votes** (default 3 skeptics/finding); a missing or crashed vote counts as **refute**, never a silent confirm.
+- **`needsReverify` bucket** — a crashed/timed-out verifier surfaces for hand-adjudication; it is never silently folded into refuted.
+- **Exactly-one source coverage** — every finding maps to exactly one input; a missing / duplicated / invented mapping forces the fallback (no silent drop, no double-count).
+- **One shared concurrency pool** below the runtime's ~14 cap (default ~6) + retry of crashed slots, so the verifier burst can't trip the rate-limit into false-refutes.
+
+Run the project's validated review-fleet workflow when it provides one (generate mode for a diff; receive mode to adjudicate an external review's claims); reproduce every guarantee above from scratch only when it doesn't. A from-prose re-derivation that drops any of these is the exact failure this contract prevents.
+
 ## Recipe 4 — Long-running commands
 
 Any command expected to run >2 minutes (sweeps, builds, full suites, recon): launch as a background task and keep orchestrating; collect on completion. Never sit idle behind a long command, and never poll in a sleep loop. When a project skill *wraps* such a command, write this discipline into that skill's own text ("background launch, never poll, keep working or end the turn") — the instruction living in the skill is what makes every future session do it unprompted.

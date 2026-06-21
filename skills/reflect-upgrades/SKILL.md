@@ -59,6 +59,19 @@ Apply the routing rule:
   upgrades repo or catalog** — a docket / "next candidates" item, or a catalog stub.
 - **Project-specific** (only helps the current project) -> the current project's own docket / memory.
 
+**Dual-surface candidates — split, don't bury.** When a candidate touches *shared/central machinery* —
+a lifecycle or process skill, a global instruction file (e.g. `CLAUDE.md`), your catalog, a global
+hook, or the upgrade pipeline itself — it has a generalizable kernel even when its concrete instance
+is project-local. File the kernel **centrally** (and the project-local instance, if any, in the
+project). The project-local surface must not keep the kernel trapped in the project docket. Anti-
+over-filing gate: it must touch named shared machinery, not merely "feel like it could generalize" —
+Step 3's load-bearing test still applies.
+
+**Filing from another project's session.** Your central upgrades repo is reachable by its local path
+even when the session is rooted elsewhere — write the central entry there directly instead of
+deferring to a someday-harvest. The cross-repo edit lands uncommitted; note it as pending so your next
+central session commits it.
+
 File the surviving candidates to the right home — do not merely mention them. Filing means a docket
 line, a handoff entry, or a catalog stub. It does not mean implementing.
 

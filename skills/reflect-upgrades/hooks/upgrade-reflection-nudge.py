@@ -121,8 +121,11 @@ def main():
         "[upgrade-reflection] Substantial work this session (%s). Before moving on, "
         "consider the reflect-upgrades skill - scan whether anything here warrants a "
         "new or upgraded tool, hook, subagent, slash command, or rule, and file the "
-        "real candidates (generalizables to the central upgrades repo, project-specific "
-        "ones to this project's docket). Nothing tool-worthy is a fine answer." % signal
+        "real candidates. Routing: a generalizable kernel - anything touching a lifecycle "
+        "or process skill, global CLAUDE.md, the catalog, or a global hook - goes to the "
+        "central upgrades repo even from inside this project (split it from any project-local "
+        "instance; do not let the local surface trap it); project-specific ones to this "
+        "project's docket. Nothing tool-worthy is a fine answer." % signal
     )
     try:
         sys.stdout.write(json.dumps({

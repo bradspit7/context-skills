@@ -7,6 +7,22 @@
 
 set -u
 
+# Echo the hold expiry date if an UNEXPIRED rotation-hold marker exists in any given file,
+# else echo nothing. Marker (HTML comment): <!-- rotation-hold: until YYYY-MM-DD reason -->
+_rotation_hold() {
+  local today f d
+  today=$(date +%Y-%m-%d 2>/dev/null) || return 0
+  for f in "$@"; do
+    [ -f "$f" ] || continue
+    d=$(grep -oE 'rotation-hold:[[:space:]]*until[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}' "$f" 2>/dev/null \
+        | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
+    [ -n "$d" ] || continue
+    [[ "$d" < "$today" ]] && continue   # expired marker — ignore
+    printf '%s' "$d"; return 0
+  done
+  return 0
+}
+
 echo "== MACHINE =="
 hostname
 
@@ -56,6 +72,17 @@ if [ -f HANDOFF.md ]; then
   PS=$(grep -o 'Prior summary:' HANDOFF.md 2>/dev/null | wc -l | tr -d ' ')
   echo "HANDOFF.md: $L lines, $PS 'Prior summary:' occurrence(s)"
   [ "$PS" -gt 0 ] && echo "THRESHOLD HANDOFF.md header has accreted $PS prior-session summary block(s) — rotate ALL of them into the log/archive this run"
+  if [ ! -d continuation ]; then   # running-log root HANDOFF is a deliberately-slim snapshot — skip
+    HB=$(wc -c < HANDOFF.md | tr -d ' '); HKB=$(( HB / 1024 )); HLIMIT=${HANDOFF_STRUCT_KB_LIMIT:-40}
+    if [ "$HKB" -gt "$HLIMIT" ]; then
+      HOLD=$(_rotation_hold HANDOFF.md)
+      if [ -n "$HOLD" ]; then
+        echo "INFO HANDOFF.md ${HKB}KB — structural rotation on HOLD until ${HOLD}; no action this run"
+      else
+        echo "THRESHOLD HANDOFF.md ${HKB}KB (>${HLIMIT}KB) — structural rotation assessment due (extract durable wiki/setup tail to docs/, Step 5)"
+      fi
+    fi
+  fi
 fi
 for pd in HANDOFF-*.md; do
   [ -e "$pd" ] || continue
@@ -83,6 +110,22 @@ fi
 if command -v cygpath >/dev/null 2>&1; then NATIVE=$(cygpath -w "$MAIN_WT"); else NATIVE="$MAIN_WT"; fi
 SLUG=$(printf '%s' "$NATIVE" | sed 's/[^A-Za-z0-9]/-/g')
 [ -d "$HOME/.claude/projects/$SLUG/memory" ] && CANDIDATES="$CANDIDATES $HOME/.claude/projects/$SLUG/memory"
+
+# Dedupe by canonical path: the out-of-repo ~/.claude/projects/<slug>/memory is commonly a
+# junction to in-repo continuation/memory; realpath collapses them (MSYS inodes do NOT).
+# Compare on realpath but KEEP the original space-free candidate string — the downstream
+# `for MEMDIR in $CANDIDATES` loop is space-delimited, so storing a realpath'd absolute path
+# (which contains spaces, e.g. "/c/CLAUDE PROJECTS/...") would split and corrupt it.
+DEDUP=""; SEEN=""
+for d in $CANDIDATES; do
+  rp=$(realpath "$d" 2>/dev/null || printf '%s' "$d")
+  key=$(printf '%s' "$rp" | tr ' ' '\001')   # squash spaces so the key is a single token
+  case " $SEEN " in
+    *" $key "*) : ;;
+    *) SEEN="$SEEN $key"; DEDUP="$DEDUP $d" ;;
+  esac
+done
+CANDIDATES="$DEDUP"
 
 if [ -z "$CANDIDATES" ]; then
   echo "(no memory directory found — in-repo or out-of-repo)"
@@ -116,10 +159,18 @@ for MEMDIR in $CANDIDATES; do
   fi
   # Trigger on session-start READ-PATH bloat ONLY (index + docket/roadmap loaded every start) — never on
   # on-demand topic-file bulk. Clearable by design: trimming the named files clears it; topic files don't.
-  [ "${READPATH_KB:-0}" -gt "$READPATH_KB_LIMIT" ] && echo "THRESHOLD $MEMDIR session-start read-path ${READPATH_KB}KB (>${READPATH_KB_LIMIT}KB: MEMORY.md + docket/roadmap, loaded every session start) — trim/rotate the index + docket this run; on-demand topic files are NOT the cause and do not need consolidating"
+  if [ "${READPATH_KB:-0}" -gt "$READPATH_KB_LIMIT" ]; then
+    HOLD=$(_rotation_hold "$MEMDIR"/roadmap.md "$MEMDIR"/*docket*.md)
+    if [ -n "$HOLD" ]; then
+      echo "INFO $MEMDIR session-start read-path ${READPATH_KB}KB — docket rotation on HOLD until ${HOLD}; no action this run"
+    else
+      echo "THRESHOLD $MEMDIR session-start read-path ${READPATH_KB}KB (>${READPATH_KB_LIMIT}KB: MEMORY.md + docket/roadmap, loaded every session start) — trim/rotate the index + docket this run; if the bloat is closed/resolved docket rows or durable wiki/reference content, apply structural rotation (Step 5: archive closed rows / extract durable reference to docs/), not just trimming. On-demand topic files are NOT the cause"
+    fi
+  fi
 done
 
 echo
 echo "== VERDICT =="
 echo "Every TRIAGE line needs a class (commit/delete/leave-untracked). Every THRESHOLD line triggers"
 echo "the rotation or hygiene pass in THIS run. Porcelain paths missing from the audit artifact = incomplete wrap."
+echo "INFO lines are visibility-only (held or assessment); no mandatory action this run."

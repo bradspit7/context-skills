@@ -55,6 +55,27 @@ else
   else
     echo "(none)"
   fi
+
+  echo
+  echo "== HYGIENE (conflict markers + frontmatter trailing whitespace in the about-to-commit set) =="
+  # Change set this wrap will commit = tracked-modified UNION untracked. `git diff --check` alone
+  # misses untracked NEW files (the exact class that shipped a `metadata:`-trailing-space memory file
+  # uncaught), so we union both. Trailing-whitespace is scoped to YAML frontmatter (between the leading
+  # `---` fences) on purpose: markdown BODY may legitimately end a line in two spaces (a hard break),
+  # so a blanket trailing-ws check would false-positive in prose-heavy projects — frontmatter never
+  # wants a trailing space, so this stays zero-false-positive across every project the mirror reaches.
+  HYG_OUT=$( { git diff --name-only HEAD 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sort -u | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    # conflict markers: <<<<<<< / >>>>>>> are never markdown; skip lone ======= (setext underline)
+    if grep -InE '^(<{7}|>{7})' "$f" >/dev/null 2>&1; then
+      echo "THRESHOLD $f has a merge-conflict marker (<<<<<<< / >>>>>>>) — resolve before committing"
+    fi
+    if [ "$(sed -n '1p' "$f" 2>/dev/null | tr -d '\r')" = "---" ]; then
+      L=$(awk 'NR==1{infm=1;next} infm&&$0=="---"{exit} infm&&/[ \t]$/{printf "%s ",NR}' "$f" 2>/dev/null)
+      [ -n "$L" ] && echo "THRESHOLD $f frontmatter trailing whitespace (line(s): $L) — strip it; fails git diff --check (the 'metadata: ' class)"
+    fi
+  done )
+  if [ -n "$HYG_OUT" ]; then printf '%s\n' "$HYG_OUT"; else echo "(clean — no conflict markers or frontmatter trailing whitespace in the change set)"; fi
 fi
 
 echo
@@ -134,7 +155,9 @@ fi
 # On-demand topic files are deliberately EXCLUDED: a large topic library is not a session-start cost and
 # must NOT trigger a consolidation nag. (The old blunt total-bytes trigger re-fired right after a valid
 # consolidation, because trimming the read-path barely moves a sum dominated by on-demand topic files.)
-READPATH_KB_LIMIT=50
+# env-overridable (like HANDOFF_STRUCT_KB_LIMIT): a project whose index+docket is inherently
+# large-but-legitimate can raise its own ceiling instead of re-holding a rotation marker each expiry.
+READPATH_KB_LIMIT=${READPATH_KB_LIMIT:-50}
 for MEMDIR in $CANDIDATES; do
   COUNT=$(ls "$MEMDIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
   KB=$(ls -l "$MEMDIR"/*.md 2>/dev/null | awk '{s+=$5} END {printf "%d", s/1024}')

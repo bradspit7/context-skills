@@ -46,7 +46,7 @@ The anti-bloat core. For each item in the session signal, route it to exactly on
 | Session narrative ("what happened and why") | Wiki pickup point / per-dev dated entry / in monolithic projects: a dated entry in HANDOFF's progress-log section — compressed, not a transcript |
 | Durable rule, gotcha, convention | Memory file (`feedback_*` / `project_*` / `reference_*` / domain prefix) + one index line |
 | Locked decision with rationale | Decision doc (`docs/**/decisions/`) or the locked-decisions section; HANDOFF links it |
-| Queued/deferred work | Docket (`roadmap.md` / `*_docket.md`) — HANDOFF shows only the top ~3 as pointers. No docket file yet → creating one (`memory/roadmap.md` or a root docket) is routine, not scaffolding |
+| Queued/deferred work | Docket (`roadmap.md` / `*_docket.md`) — HANDOFF shows only the top ~3 as pointers. No docket file yet → creating one (`memory/roadmap.md` or a root docket) is routine, not scaffolding. Open items get stable `G#` IDs (see *Docket goal IDs*, end of Step 4) |
 | Cross-dev announcement (multi-dev) | Coordination feed entry (via the project's feed command), BEFORE the handoff refresh so the refresh can cite it |
 | Everything failing the test below | Nowhere — drop it |
 
@@ -69,13 +69,25 @@ The anti-bloat core. For each item in the session signal, route it to exactly on
 
 …and the eight sections (compressed to what's real): one-line status / recently shipped (this + last session only) / in flight / next session entry point / pending user decisions / known issues / files to read first / pointers to deeper context+memory. HANDOFF is a **snapshot, rewritten each run** — link to the wiki, docket, and memory instead of duplicating them (the duplicated-table read-cost is paid by every future session). No line-count floor or ceiling: a complex project may need 200 tight lines; what's forbidden is redundancy and stale residue, not length.
 
-**running-log / CONTEXT-style:** prepend a new dated pickup point to `continuation/context.md` (or `CONTEXT.md`) above the previous one — what shipped / new memory files / open docket pointer / what to do first when resuming. Prior pickups are preserved (then rotated — Step 5). Update the docket: `✅ <date>` completions, new items in priority sections, strike (don't delete) superseded items.
+**running-log / CONTEXT-style:** prepend a new dated pickup point to `continuation/context.md` (or `CONTEXT.md`) above the previous one — what shipped / new memory files / open docket pointer / what to do first when resuming. Prior pickups are preserved (then rotated — Step 5). Update the docket: `✅ <date>` completions, new items in priority sections, strike (don't delete) superseded items. Each open item carries its stable `G#` ID (see *Docket goal IDs* below); completions flip the marker, the ID stays.
 
 **monolithic-handoff:** update the legacy sections in place (status markers, code state, locked decisions — add-only, test counts, next entry point, known issues). Keep wiki-ish content intact UNTIL the structural size threshold fires (Step 5) — then extract the durable wiki/setup tail to docs/ leaving pointers; ensure the universal header + sections exist. Project-local SKILL.md gets append-only `## Plan N Learnings`; corrections reference, never silently edit.
 
 **multi-dev:** prepend a dated entry to **your own** `HANDOFF-<dev>.md` — ISO date header, one dense paragraph (headline, PRs merged/opened/closed-without-merge, decisions, cross-dev state, ending with `NEXT-SESSION ENTRY POINT: <pointer>`), stamped `**Machine:** · **Branch:**`. Append-only: never edit prior entries; corrections go in the new entry. Then refresh the slim shared `HANDOFF.md` only where shared state changed (owner table, open-PR list, carry-forwards, kill/pivot rules) — it's a live contract kept current in place, not a log; no narrative there.
 
 **hub/no-git:** same content flow; date stamps carry the staleness burden; skip commit steps.
+
+### Docket goal IDs — the `G#` convention
+
+Open goals carry **stable, namespaced IDs** so they survive status changes, reordering, and rotation instead of being silently dropped between sessions.
+
+- **Format:** `G#<n>` — a positive integer, allocated monotonically per project, **never reused, never renumbered**. `G#` is collision-free against GitHub `#N` PR/issue refs and `[N]` step refs.
+- **Allocation (never a bare-number scan):** the authoritative counter is a `<!-- next-goal-id: N -->` marker in the docket. Allocate `G#N`, then bump the marker to `N+1`. First adoption with no marker: seed `N = max(G#\d+ tokens across live + resolved + archive) + 1` (or `1`), then write the marker — the seed scan matches the **namespaced** `G#\d+` only, never bare `#\d+`, so it cannot grab a PR/issue number.
+- **Row grammar:** a goal row begins with `G#<n>` (after any bullet, or in a dedicated table cell), then a status marker, then the text. E.g. `- **G#7** 🟡 Split the combat module — owner: me · ~2h`.
+- **Status markers:** `✅` done · `🟢` ready · `🟡` in progress · `🔴` high · `⏸` deferred · `⛔` dropped · `📅` scheduled. Completion flips the marker; the **ID never changes**. Rotation retires the ID (never reused); a `⛔` keeps its ID + a one-line reason.
+- **Tiers (scale by backlog; propose graduation, never force):** T1 inline numbered docket (default, every project) -> T2 workstream-grouped (~15+ open items or genuinely separate streams) -> T3 dedicated `roadmap.md` + dated resolved-ledger + rotation (when the docket outgrows the HANDOFF; uses the Step-5 structural-rotation machinery).
+- **Preserve existing shape:** layer `G#` IDs + markers onto whatever docket shape a project already has (a table stays a table — add a `G#` column; multi-dev per-dev files keep their structure under one per-project counter). Never rewrite a working docket into a different format.
+- **Grandfather legacy systems:** a docket already using a *consistent* bare-`#N` system with no `G#` markers (cross-references keyed off it) is a sanctioned legacy dialect — **do not renumber it**. `G#` adoption is for dockets that lack a stable-ID system.
 
 ## Step 5 — Rotation + memory hygiene (every THRESHOLD fires this run)
 

@@ -114,11 +114,13 @@ Then synthesize — a mental model, not a regurgitation:
 ### Locked decisions (DO NOT reopen)
 ### Empirical foundation  ← only when the design rests on external/extracted data:
     what dataset/extract grounds it, where it lives (in-repo path + local extract dir), one line on how to query it
-### Open docket — next candidates (top items + source pointer)
+### Open docket — next candidates (open items by `G#` ID + source pointer)
 ### Known issues / blockers
 ### Behavioral rules in force (the 3-8 memory rules relevant to likely next work, linked)
 ### Next step suggestion (usually the handoff's "next session entry point"; note if the user's first message points elsewhere)
 ```
+
+**Surface open goals by their `G#` ID** where the docket uses them, so the resumer can reference a goal by stable ID across sessions; a docket on a legacy bare-`#N` system is shown as-is.
 
 Multi-dev briefings add: open PRs by author, lane allocation, and unanswered feed entries.
 

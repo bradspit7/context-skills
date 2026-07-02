@@ -87,7 +87,7 @@ Check total size (`wc -c`), then:
 - **≥ ~60KB → delegate.** Dispatch parallel read-only subagents (Explore type), each assigned a slice of the read set, with this contract in the prompt:
   - Read every assigned file **fully**, chunking past every truncation; never sparse-search.
   - Return a structured extract: current-state claims (with dates), locked decisions, open items/blockers, gotchas/rules relevant to upcoming work, contradictions against the HANDOFF summary you supply in the prompt.
-  - Include **verification quotes**: one short verbatim quote from the top, middle, and bottom third of each large file, with line numbers.
+  - Include **verification quotes**: one short verbatim quote from the top, middle, and bottom third of each assigned file, with line numbers.
   Synthesize from the extracts. An extract missing its bottom-third quote means the file wasn't fully read — re-dispatch. This keeps a 200K-token corpus out of the main context (~15-25K after delegation) without re-enabling the skim failure.
 - **No subagent support available** (rare) → direct reads in descending relevance order; if ingest approaches ~100KB, stop, and **list what was deferred and why in the briefing's Known issues** — explicit deferral the user can override, never silent omission.
 
@@ -161,5 +161,5 @@ Deliver the briefing, then wait. Drill-downs, redirects, and "continue with next
 
 ## Related
 
-- **`analyze-handoff`** — slim sibling: same-day resumption, reads only the handoff doc, 3-line summary. Escalates here on machine switch, >24h gap, or any cross-branch signal.
+- **`analyze-handoff`** — slim sibling: same-day resumption, reads only the handoff doc, 3-line summary. Escalates to `device-sync` on machine switch (arrival pull + memory sync first, then this skill); here on >24h gap or any cross-branch signal.
 - **`update-context`** — session-end write-side. Keeps this skill's read cost low via rotation + hygiene; the leaner the layer, the cheaper every session start.

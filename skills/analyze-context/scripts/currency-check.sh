@@ -78,21 +78,22 @@ if [ -n "$DOC" ]; then
   echo
   echo "== BRANCH SURVEY ($DOC) =="
   # Union of: 10 most-recently-committed refs + any ref committed in the last 24h.
-  # Compares the doc's blob hash on each against HEAD's copy. Never filter by author.
+  # Supersession test, not recency: a branch doc-blob is silent only if that exact content
+  # appears somewhere in HEAD's history of the doc (covers squash-merges); any blob outside
+  # HEAD's history is a divergent fork REGARDLESS OF AGE. (A timestamp guard here silently
+  # converted "divergent fork older than HEAD's copy" into "ignore" — an unmerged fork >7
+  # days old was permanently invisible while the survey printed the all-clear below.)
   CUR_HASH=$(git ls-tree HEAD -- "$DOC" 2>/dev/null | awk '{print $3}')
-  CUR_DOC_TS=$(git log -1 --format=%ct HEAD -- "$DOC" 2>/dev/null || echo 0)
+  HIST_BLOBS=$(git log -m --no-abbrev --no-renames --raw --format= HEAD -- "$DOC" 2>/dev/null | awk '$4 !~ /^0+$/ {print $4}' | sort -u)
   NOW=$(date +%s); TH=$((NOW - 86400))
   git for-each-ref --sort=-committerdate refs/heads refs/remotes --format='%(refname:short) %(committerdate:unix)' \
     | awk -v t="$TH" 'NR<=10 || $2>t {print $1}' | grep -v '/HEAD$' | sort -u | while read -r br; do
       H=$(git ls-tree "$br" -- "$DOC" 2>/dev/null | awk '{print $3}')
-      if [ -n "$H" ] && [ "$H" != "$CUR_HASH" ]; then
-        TS=$(git log -1 --format=%ct "$br" -- "$DOC" 2>/dev/null || echo 0)
-        if [ "$TS" -gt "$CUR_DOC_TS" ]; then
-          echo "FINDING newer-branch-doc: $br carries a newer $DOC  ($(git log -1 --format='%h %ai' "$br" -- "$DOC" 2>/dev/null))"
-        fi
+      if [ -n "$H" ] && [ "$H" != "$CUR_HASH" ] && ! printf '%s\n' "$HIST_BLOBS" | grep -qx "$H"; then
+        echo "FINDING divergent-branch-doc: $br carries $DOC content absent from HEAD's history  ($(git log -1 --format='%h %ai' "$br" -- "$DOC" 2>/dev/null))"
       fi
     done
-  echo "(silence above = no surveyed branch carries a newer $DOC)"
+  echo "(silence above = no surveyed branch carries $DOC content outside HEAD's history)"
 
   echo
   echo "== RECENT $DOC COMMITS — all refs, 7 days, reachability vs HEAD =="

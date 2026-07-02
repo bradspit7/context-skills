@@ -81,7 +81,10 @@ def main():
                         fp = str(inp.get("file_path", "")).replace("\\", "/")
                         if "/memory/" in fp and fp.endswith(".md"):
                             memory_write = True
-                    elif name == "Bash":
+                    elif name in ("Bash", "PowerShell"):
+                        # both tools carry the command string under the same "command" key;
+                        # PowerShell is the primary shell on Windows machines, so matching
+                        # Bash alone made commits invisible there (fleet finding, 2026-07-02)
                         if "git commit" in str(inp.get("command", "")):
                             commit = True
     except OSError:

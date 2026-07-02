@@ -69,6 +69,7 @@ Where the house style isn't test-first (e.g., scene/asset work), steps 1-4 becom
 2. **Placeholder scan** — patterns above.
 3. **Consistency** — names/signatures match across tasks; verify commands actually exist in this repo.
 4. **Law check** — no task instructs something a project rule forbids.
+5. **Write-path check** — every task that decides what gets *written / filed / matched / registered* carries its review-fleet step; a missing one is a plan failure.
 
 ## Hand off
 

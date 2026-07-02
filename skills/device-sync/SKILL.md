@@ -27,7 +27,7 @@ Read its full structured output. It reports: machine, project slug, git ahead/be
 
 For a git repo, **`git pull` always happens** — the `SESSION-START HINT` and `BOOTSTRAP SCRIPT` signals only tell you whether there is *more* to run on top of it.
 
-- **Git repo** → run `git pull` first. Then, if the probe reported a `BOOTSTRAP SCRIPT` or a genuine session-start heading, open the project CLAUDE.md, find its documented session-start sequence, and run the rest verbatim (sibling-repo pulls, `bootstrap-laptop.sh`, etc.). The `SESSION-START HINT` is advisory, not authoritative — if it turns out to be incidental wording with no real commands, the `git pull` you already ran is the whole of Step 1. Never skip the pull because a heading did or didn't match.
+- **Git repo** → run `git pull` first. Then, if the probe reported a `BOOTSTRAP SCRIPT` or a genuine session-start heading, open the project CLAUDE.md, find its documented session-start sequence, and run the rest verbatim (sibling-repo pulls, `bootstrap-laptop.sh`, etc.). The `SESSION-START HINT` is advisory, not authoritative — if it turns out to be incidental wording with no real commands, the `git pull` you already ran is the whole of Step 1. Never skip the pull because a heading did or didn't match. Then `git pull` each sibling repo the project CLAUDE.md repo map documents — the same set device-handoff pushes on departure — reporting each result (no upstream → report, don't fail); sibling pulls key off the repo map, not the session-start heading.
 - **Non-git** → skip; note "no git pull (not a git repo)".
 
 ## Step 2 — Memory transport (evaluate IN ORDER; take the FIRST branch that matches)
@@ -35,7 +35,7 @@ For a git repo, **`git pull` always happens** — the `SESSION-START HINT` and `
 The order matters — several signals can be true at once (a shared sync root holds *other* projects' buckets; a transport-note file can sit next to git-mirrored memory). Take the first match top-down:
 
 1. **live memory dir is a junction/symlink INTO the repo** (probe `live-dir-junction: yes` with an in-repo target) → git-in-repo; the `git pull` in Step 1 already synced it. No-op.
-2. **in-repo memory mirror + a bootstrap script** (probe `IN-REPO MEMORY MIRROR` present **and** a `BOOTSTRAP SCRIPT`) → the bootstrap in Step 1 already copied mirror→live. If the pull output shows **deleted or renamed** mirror files, run the clean re-sync guard so stale live files do not linger: `rm <live-memory-dir>/*.md && cp <mirror-dir>/*.md <live-memory-dir>/`. No further sync.
+2. **in-repo memory mirror + a bootstrap script** (probe `IN-REPO MEMORY MIRROR` present **and** a `BOOTSTRAP SCRIPT`) → the bootstrap in Step 1 already copied mirror→live. If the pull output shows **deleted or renamed** mirror files, run the clean re-sync guard so stale live files do not linger: delete from live exactly the files the pull reported deleted/renamed (`rm <live-memory-dir>/<each-named-file>`), then `cp <mirror-dir>/*.md <live-memory-dir>/`. Never `rm <live>/*.md` wholesale — live-only files (transport notes, un-mirrored session memory) are not the mirror's to delete. No further sync.
 3. **live memory dir is a junction/symlink to an out-of-band location** (target outside the repo) → OS auto-syncs. No-op.
 4. **a sync-root bucket belongs to THIS project** (probe `bucket-match:` is **not** `none`) → out-of-band transport. Open the RECIPE FILE the probe named and execute its documented recipe **in the arrival direction (bucket → local)**, honoring its stated guard (`/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge). The recipe file is authoritative for the exact command and bucket path.
 5. **none of the above** → state "no cross-device memory sync configured for this project" and proceed.
@@ -49,12 +49,13 @@ Invoke the `analyze-context` skill (Skill tool) for the currency gate + full bri
 ## Do NOT
 
 - **Confirm-gate the memory sync.** Arrival direction + the recipe's own guard = the same safe operation the user runs by hand. Run it hands-off.
-- **Sync in the wrong direction.** Always remote/bucket → local. Local → bucket (the overwrite/purge direction) is `update-context`'s job and is never device-sync's action.
-- **Push anything.** device-sync is arrival (pull) only; the departure half (push + copy-back) is `update-context`.
+- **Sync in the wrong direction.** Always remote/bucket → local. Local → bucket (the overwrite/purge direction) is `device-handoff`'s departure step and is never device-sync's action.
+- **Push anything.** device-sync is arrival (pull) only; the departure half (memory-out + multi-repo push) is `device-handoff`, which wraps `update-context`.
 - **Re-implement a transport.** Execute what the project documents. If no recipe is documented and the family is ambiguous, say so rather than guessing a command.
 
 ## Related
 
 - `analyze-context` — the read-only briefing this skill ends by invoking.
 - `analyze-handoff` — slim same-machine resumption (no pull/sync).
-- `update-context` — the departure half (session-end push + copy-back).
+- `device-handoff` — the departure counterpart (update-context + memory-out + push).
+- `update-context` — the write-side save with no device switch (commits locally; never pushes).

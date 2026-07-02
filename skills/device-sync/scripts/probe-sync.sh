@@ -104,21 +104,89 @@ echo "repo-folder-name (for bucket matching): $PROJ_NAME"
 echo
 echo "== BUCKET MATCH (does a sync-root bucket belong to THIS project?) =="
 # A sync root merely EXISTING is not enough -- other projects' buckets share it.
-# Skill Step-2 branch 4 (out-of-band) keys off THIS line, never off "a root exists".
-NPROJ=$(printf '%s' "$PROJ_NAME" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g')
-BMATCH="none"
+# Skill Step-2 branch 4 (out-of-band) keys off a POSITIVE bucket-match line.
+# F5 tiers: exact > declared > alias > substring. Only exact/declared/alias are
+# confident (provenance printed in parens). Substring is a LOW-CONFIDENCE hint
+# (bucket-match-lowconf block): the calling skill must confirm with the user --
+# never silently execute, never silently ignore. declared/alias come from
+# optional recipe-file lines (whole-string equality after normalization, never
+# substring):
+#   sync-bucket: <exact-bucket-dir-name>
+#   sync-bucket-aliases: <name1>, <name2>
+# single normalization rule for every tier comparison -- the whole exact/declared/
+# alias equality contract rests on all call sites applying the identical rule.
+norm() { printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g'; }
+NPROJ=$(norm "$PROJ_NAME")
+
+DECLARED=""; ALIASES=""
+if [ -d "$LIVE_MEM" ]; then
+  while IFS= read -r rf; do
+    [ -n "$rf" ] && [ -f "$rf" ] || continue
+    [ -z "$DECLARED" ] && DECLARED=$(grep -i '^sync-bucket:' "$rf" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+    [ -z "$ALIASES" ] && ALIASES=$(grep -i '^sync-bucket-aliases:' "$rf" 2>/dev/null | head -1 | sed 's/^[^:]*:[[:space:]]*//' | tr -d '\r')
+  done <<RFEOF
+$(find "$LIVE_MEM" -maxdepth 1 -type f \( -iname '*memory_sync*' -o -iname '*memory-sync*' -o -iname '*onedrive*' \) 2>/dev/null)
+RFEOF
+fi
+NDECL=$(norm "$DECLARED")
+
+EXACT=""; DECL_M=""; ALIAS_M=""; SUBSTR_LIST=""
 for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/Dropbox/claude-memory"; do
   [ -n "$root" ] && [ -d "$root" ] || continue
   for b in "$root"/*/; do
     [ -d "$b" ] || continue
     bn=$(basename "$b")
-    nb=$(printf '%s' "$bn" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g')
+    nb=$(norm "$bn")
+    [ -n "$nb" ] || continue
+    # NOTE: exact/declared/alias are whole-string equality with NO minimum length
+    # (a short exact name is still strong ownership evidence); the >=4 gate below
+    # guards only the fuzzy substring tier. Pinned by fixture (short-exact case).
+    if [ "$nb" = "$NPROJ" ]; then
+      [ -z "$EXACT" ] && EXACT="$root/$bn"; continue
+    fi
+    if [ -n "$NDECL" ] && [ "$nb" = "$NDECL" ]; then
+      [ -z "$DECL_M" ] && DECL_M="$root/$bn"; continue
+    fi
+    if [ -n "$ALIASES" ]; then
+      amatch=""
+      # set -f: the comma-split fields must NOT glob-expand against the cwd --
+      # an alias like 'proj-*' would otherwise expand to repo filenames and could
+      # mint a spurious (alias) positive feeding the branch-4 write path.
+      set -f; OLDIFS=$IFS; IFS=','
+      for a in $ALIASES; do
+        na=$(norm "$a")
+        [ -n "$na" ] && [ "$nb" = "$na" ] && amatch=yes
+      done
+      IFS=$OLDIFS; set +f
+      if [ -n "$amatch" ]; then [ -z "$ALIAS_M" ] && ALIAS_M="$root/$bn"; continue; fi
+    fi
     [ ${#nb} -ge 4 ] || continue
-    case "$NPROJ" in *"$nb"*) BMATCH="$root/$bn"; break;; esac
+    case "$NPROJ" in *"$nb"*) SUBSTR_LIST="${SUBSTR_LIST}${root}/${bn}
+";; esac
   done
-  [ "$BMATCH" != "none" ] && break
 done
-echo "bucket-match: $BMATCH"
+
+BMATCH="none"; BTIER=""
+if [ -n "$EXACT" ]; then
+  BMATCH="$EXACT"; BTIER="exact"
+  [ -n "$DECL_M" ] && echo "bucket-match-warning: recipe declares '$DECLARED' ($DECL_M) but an exact-name bucket also exists; preferring exact"
+elif [ -n "$DECL_M" ]; then BMATCH="$DECL_M"; BTIER="declared"
+elif [ -n "$ALIAS_M" ]; then BMATCH="$ALIAS_M"; BTIER="alias"
+fi
+if [ "$BMATCH" != "none" ]; then
+  echo "bucket-match: $BMATCH ($BTIER)"
+else
+  echo "bucket-match: none"
+  if [ -n "$NDECL" ] || [ -n "$ALIASES" ]; then
+    DECL_DESC="$DECLARED"
+    [ -z "$DECL_DESC" ] && DECL_DESC="$ALIASES"
+    echo "bucket-match-warning: recipe declares '$DECL_DESC' but no matching bucket exists in any sync root"
+  fi
+  if [ -n "$SUBSTR_LIST" ]; then
+    echo "bucket-match-lowconf (substring only -- confirm with the user before treating as branch 4; never silently execute, never silently ignore):"
+    printf '%s' "$SUBSTR_LIST" | sed '/^$/d;s/^/  candidate: /'
+  fi
+fi
 
 echo
 echo "== RECIPE FILE (out-of-band transport recipe only) =="
@@ -137,7 +205,8 @@ echo "Identify the transport branch IN ORDER; take the FIRST that matches:"
 echo "  1 junction-into-repo => no-op (git already syncs it)"
 echo "  2 in-repo mirror + bootstrap script => bootstrap / mirror copy-back handles it"
 echo "  3 junction-to-out-of-band => OS auto-syncs"
-echo "  4 bucket-match is NOT 'none' => out-of-band bucket transport; open the recipe file"
+echo "  4 POSITIVE bucket-match (exact/declared/alias) => out-of-band bucket transport; open the recipe file."
+echo "    bucket-match-lowconf (substring) is NOT branch 4 -- surface candidates + confirm with the user."
 echo "  5 none of the above => no cross-device memory transport"
 echo "A sync root EXISTING is not branch 4 -- only a positive bucket-match is. DIRECTION is the"
 echo "calling skill's job: device-sync pulls bucket->local (arrival); device-handoff pushes local->bucket (departure)."

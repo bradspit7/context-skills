@@ -37,10 +37,10 @@ The order matters — several signals can be true at once (a shared sync root ho
 1. **live memory dir is a junction/symlink INTO the repo** (probe `live-dir-junction: yes` with an in-repo target) → git-in-repo; the `git pull` in Step 1 already synced it. No-op.
 2. **in-repo memory mirror + a bootstrap script** (probe `IN-REPO MEMORY MIRROR` present **and** a `BOOTSTRAP SCRIPT`) → the bootstrap in Step 1 already copied mirror→live. If the pull output shows **deleted or renamed** mirror files, run the clean re-sync guard so stale live files do not linger: delete from live exactly the files the pull reported deleted/renamed (`rm <live-memory-dir>/<each-named-file>`), then `cp <mirror-dir>/*.md <live-memory-dir>/`. Never `rm <live>/*.md` wholesale — live-only files (transport notes, un-mirrored session memory) are not the mirror's to delete. No further sync.
 3. **live memory dir is a junction/symlink to an out-of-band location** (target outside the repo) → OS auto-syncs. No-op.
-4. **a sync-root bucket belongs to THIS project** (probe `bucket-match:` is **not** `none`) → out-of-band transport. Open the RECIPE FILE the probe named and execute its documented recipe **in the arrival direction (bucket → local)**, honoring its stated guard (`/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge). The recipe file is authoritative for the exact command and bucket path.
+4. **a sync-root bucket belongs to THIS project** (probe reports a **positive** `bucket-match:` line — `exact`/`declared`/`alias` provenance) → out-of-band transport. Open the RECIPE FILE the probe named and execute its documented recipe **in the arrival direction (bucket → local)**, honoring its stated guard (`/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge). The recipe file is authoritative for the exact command and bucket path.
 5. **none of the above** → state "no cross-device memory sync configured for this project" and proceed.
 
-**A sync root merely *existing* is NOT branch 4** — other projects' buckets sharing the root do not make this project an out-of-band project. Branch 4 requires a positive `bucket-match` for THIS project. The `RECIPE FILE` line is consulted **only inside branch 4**; if a project resolves to branch 1/2/3, any transport-description file the probe happened to surface is informational and must never be executed as a bucket recipe.
+**A sync root merely *existing* is NOT branch 4** — other projects' buckets sharing the root do not make this project an out-of-band project. Branch 4 requires a positive `bucket-match` for THIS project. The `RECIPE FILE` line is consulted **only inside branch 4**; if a project resolves to branch 1/2/3, any transport-description file the probe happened to surface is informational and must never be executed as a bucket recipe. A `bucket-match-lowconf` (substring) hit is not branch 4 either — surface the candidate(s) to the user and confirm before executing any bucket recipe; never silently execute, never silently ignore.
 
 ## Step 3 — Brief
 
@@ -52,6 +52,7 @@ Invoke the `analyze-context` skill (Skill tool) for the currency gate + full bri
 - **Sync in the wrong direction.** Always remote/bucket → local. Local → bucket (the overwrite/purge direction) is `device-handoff`'s departure step and is never device-sync's action.
 - **Push anything.** device-sync is arrival (pull) only; the departure half (memory-out + multi-repo push) is `device-handoff`, which wraps `update-context`.
 - **Re-implement a transport.** Execute what the project documents. If no recipe is documented and the family is ambiguous, say so rather than guessing a command.
+- **Infer sync direction from conflicting timestamps.** Direction comes from the operation (sync = arrival/pull, handoff = departure/push), never from a guess about which copy is newer. On conflicting state, surface the evidence and stop.
 
 ## Related
 

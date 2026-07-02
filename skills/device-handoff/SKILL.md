@@ -32,7 +32,7 @@ Read the full structured output (same transport signals device-sync uses).
 1. **live dir is a junction/symlink INTO the repo** → no-op; update-context's commit already captured it.
 2. **in-repo mirror + bootstrap script** → update-context already copied live→mirror (committed in Step 1). **Verify it landed** — `diff -rq <live-memory-dir> <in-repo-mirror-dir>` (or confirm this session's changed memory files are present in the mirror commit). Match → no-op. **Mismatch → the copy did not complete: run the copy-back (`cp <live-memory-dir>/*.md <in-repo-mirror-dir>/` then commit), or stop and tell the user.** Never push a departure that leaves newer live memory unmirrored — silently no-op'ing a failed copy is how cross-device state gets stranded.
 3. **live dir is a junction to an out-of-band location** → OS auto-syncs; no-op.
-4. **a sync-root bucket belongs to THIS project** (`bucket-match` ≠ `none`) → run the project's recipe in the **departure direction (local → bucket)**, honoring its guard: `/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge. The recipe file is authoritative for the exact command and bucket path.
+4. **a sync-root bucket belongs to THIS project** (a **positive** `bucket-match` — `exact`/`declared`/`alias`; a `bucket-match-lowconf` substring hit needs user confirmation first) → run the project's recipe in the **departure direction (local → bucket)**, honoring its guard: `/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge. The recipe file is authoritative for the exact command and bucket path.
 5. **none** → no cross-device memory transport; nothing to push out.
 
 ## Step 4 — Push every repo with unpushed work
@@ -52,6 +52,7 @@ For an out-of-band (OneDrive/Dropbox) project, confirm the sync client process i
 - **Confirm-gate the bucket write.** Departure direction + the recipe's own guard = the safe operation; run it hands-off.
 - **Reimplement update-context.** Delegate the entire write-side to it; this skill adds only departure-sync + multi-repo push + readiness check.
 - **Push partial state.** If update-context stopped to ask, resolve it first.
+- **Infer sync direction from conflicting timestamps.** Direction comes from the operation (sync = arrival/pull, handoff = departure/push), never from a guess about which copy is newer. On conflicting state, surface the evidence and stop.
 
 ## Related
 

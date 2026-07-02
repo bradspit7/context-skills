@@ -90,6 +90,20 @@ docket row, strengthen that row instead of filing a sibling.
 If nothing survives the filters, say so in one line: "No tooling upgrades warranted this session."
 That is a valid and common result.
 
+**Log the verdict (if the companion ledger tool is installed):** record the outcome so fires can be
+reconciled against responses (a nudge fire with no recorded response reads as a dismissal):
+
+```bash
+python ~/.claude/upgrade-ledger.py record --layer <nudge|wrap|manual> \
+  --status <filed-central|filed-project|filed-catalog|strengthened-existing|dedup-existing|zero|other> \
+  --candidate "<ref>[,...]" --reason "<short>" [--session <uuid>]
+```
+
+`--status` is the strongest outcome; list every ref in `--candidate` (`-` when none); `--reason` is
+required for `zero`/`other`; `--layer` names what prompted this reflection (the hook's nudge, a
+session-wrap, or a manual invocation). If the tool is absent, skip this step — the fires-only log
+still records stimulus.
+
 ## Do NOT
 - Build the upgrades — surface and file only (a trivial single-edit the user approves on the spot is
   the only exception).

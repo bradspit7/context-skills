@@ -12,7 +12,7 @@ Meaning-based recall over the same corpus as `/memory-search` (roots in `~/.clau
 Must run under the sqlite-vec venv python (`SEMANTIC_PYTHON` env, else `~/.claude/memory-sync/.venv-semantic/Scripts/python.exe` on Windows, else `.venv-semantic/bin/python`):
 
 ```bash
-"$SEMANTIC_PY" ~/.claude/memory-sync/semantic-index.py --query "<args>" --limit 10
+"$SEMANTIC_PYTHON" ~/.claude/memory-sync/semantic-index.py --query "<args>" --limit 10
 ```
 
 `Semantic index not found` → rebuild first (needs Ollama running): `bash ~/.claude/memory-sync/run-semantic-rebuild.sh` (or `--rebuild` directly). `--roots` prints the resolved corpus.

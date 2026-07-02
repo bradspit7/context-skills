@@ -1,6 +1,6 @@
 # Context skills — session lifecycle + process suite
 
-Ten skills in two families.
+Ten skills in two families, plus a standalone [memory recall layer](recall-layer/README.md).
 
 **Session lifecycle** — keeping project context sane across Claude Code sessions, machines, and developers:
 
@@ -19,6 +19,8 @@ Ten skills in two families.
 - **`orchestrate/`** — parallel-subagent fan-out under explicit contract: read fan-outs with top/middle/bottom-third verification quotes, implementer-per-task with two-stage review (spec compliance, then quality), adversarial refutation of review findings, background tasks for long commands.
 
 The process suite is deliberately mechanical — judgment is moved into explicit recipes, gates, and status protocols so quality holds up on smaller models, not just frontier ones. It encodes opinions (single recommendation over option menus, continuous execution over check-in theater) — edit them if your taste differs.
+
+**Also ships: `recall-layer/`** — a standalone local memory recall layer over your memory/notes markdown: SQLite FTS5 keyword search plus an optional semantic half (local Ollama embeddings + sqlite-vec), with the hooks, index builders, and `/memory-search` / `/recall` / `/semantic-search` commands that wire it up. Not a skill — install and usage docs live in [`recall-layer/README.md`](recall-layer/README.md).
 
 **Superpowers interop:** the process suite references a few superpowers skills it does NOT replace (`systematic-debugging`, `finishing-a-development-branch`). With the plugin installed, those route normally; without it, treat each reference as "do that discipline manually" — nothing breaks. If you run the plugin alongside this suite, add one line to your `~/.claude/CLAUDE.md`: *"Prefer brainstorm / write-plan / execute-plan / orchestrate over their superpowers equivalents."*
 

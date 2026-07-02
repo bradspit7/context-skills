@@ -78,7 +78,14 @@ line, a handoff entry, or a catalog stub. It does not mean implementing.
 ## Step 5 — Report
 
 Emit an **Upgrade candidates** block, one row each:
-`<surface> | <one-line what> | <evidence from this session> | routes-to <central|project> | ~<effort>`
+`<surface> | <one-line what> | <evidence from this session> | <honesty-label> | routes-to <central|project> | ~<effort>`
+
+**Honesty labels are mandatory**: `proven-need` (this session concretely hit the gap),
+`solid-extension` (real value, no forcing incident), `speculative` (plausible, unproven).
+**Cap:** a session realistically yields 0-2 candidates; at most ONE may be `speculative`, and 3+ rows
+means the load-bearing filter failed — re-run Step 3 instead of emitting the list. A candidates list
+that just accumulates across sessions has failed: if a new candidate shares the spirit of an open
+docket row, strengthen that row instead of filing a sibling.
 
 If nothing survives the filters, say so in one line: "No tooling upgrades warranted this session."
 That is a valid and common result.
@@ -87,6 +94,7 @@ That is a valid and common result.
 - Build the upgrades — surface and file only (a trivial single-edit the user approves on the spot is
   the only exception).
 - Manufacture candidates to seem productive — the load-bearing test is the gate.
+- Emit an unlabeled candidate — every row carries `proven-need` / `solid-extension` / `speculative`.
 - Re-propose something already on the docket or in the catalog.
 
 ## Companion hook

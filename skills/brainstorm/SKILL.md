@@ -20,7 +20,7 @@ Scope check while reading: if the request spans multiple independent subsystems,
 ## Step 2 — Interview, the short way
 
 - **Prose questions only. Never the AskUserQuestion tool / choice-button UI.** If a choice is genuinely binary, ask it as a one-line prose question with your lean stated.
-- **One question per message, ~2-4 questions total** before you synthesize. If you're past four, you're interviewing instead of reading evidence.
+- **~2-4 questions total** before you synthesize. Default to one question per message — answers reshape later questions. Batch only when the evidence has already pinned scope and the remaining 2-3 unknowns are independent (no answer would change what you'd ask next); a batch is parallel one-line prose questions about different decisions, never alternatives for one decision — that's an option menu in disguise. If you're past four, you're interviewing instead of reading evidence.
 - **Ask about scope, success criteria, preferences, naming, pacing — not deep internals.** When the user defers on technical detail ("trust you", "whatever you think"), that's a green light to decide, paired with a duty to self-verify — not a prompt to keep asking. Flag only the technical forks with real scope/cost consequences.
 - Don't re-ask anything the context layer already answers.
 
@@ -47,12 +47,13 @@ Commit per project law (commit yes; never push unprompted). Tell the user where 
 
 ## Step 5 — Hand off
 
-Multi-step work → invoke **write-plan**. Trivially small approved work (single edit, one file) → implement directly, citing the approved design. No other skill is the successor to brainstorm.
+Multi-step work → invoke **write-plan**. Trivially small approved work (single edit, one file) → implement directly, citing the approved design — unless the edit decides what gets **written / filed / matched / registered**: write-path logic gets no size exemption; run the write-path review fleet (orchestrate's hardened contract) before committing, or take the plan route. No other skill is the successor to brainstorm.
 
 ## Self-checks (the historical failure modes)
 
 - Asking the user something `grep` could answer — read first.
 - Option menus / "three approaches" essays — converge, recommend, move.
+- Batching questions whose answers interact — if one answer can moot another, they go one per message.
 - Approval theater — one design gate, one spec gate, done.
 - Designing only "phase 1" of an approved whole — design it all.
 - Writing code mid-brainstorm — the hard gate is hard.

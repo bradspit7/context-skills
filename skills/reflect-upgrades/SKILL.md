@@ -75,6 +75,21 @@ central session commits it.
 File the surviving candidates to the right home — do not merely mention them. Filing means a docket
 line, a handoff entry, or a catalog stub. It does not mean implementing.
 
+**Filing is unconditional — a duty, never an offer.** A surviving candidate has exactly three valid
+terminal states: filed, strengthened into an existing row, or deduped against one. "Surfaced in
+chat" is not a state — chat scrolls away; the docket doesn't. Never ask permission to file, and
+never park a candidate behind "say the word next session and I'll fold it in" — that converts the
+duty into an offer whose survival depends on the user remembering chat. Named non-reasons (each
+licensed a real near-drop at a live project wrap — the candidate became a docket row only because
+the user challenged the deferral):
+- **"The docket/roadmap is on rotation-hold / doc-freeze"** — a hold blocks *structural rotation
+  and archiving* (update-context scopes it to exactly that), never a one-line docket add.
+- **"Keep the wrap diff small / avoid another commit"** — diff economy is never a reason to drop a
+  learning; the docket line IS the wrap's product.
+- **"Context is high / wrap fast"** — filing is one line; it is never the thing to cut.
+Catching an unfiled surviving candidate in your own report means going back and filing it before
+finishing — the user should never have to say "file it."
+
 ## Step 5 — Report
 
 Emit an **Upgrade candidates** block, one row each:
@@ -102,7 +117,10 @@ python ~/.claude/upgrade-ledger.py record --layer <nudge|wrap|manual> \
 `--status` is the strongest outcome; list every ref in `--candidate` (`-` when none); `--reason` is
 required for `zero`/`other`; `--layer` names what prompted this reflection (the hook's nudge, a
 session-wrap, or a manual invocation). If the tool is absent, skip this step — the fires-only log
-still records stimulus.
+still records stimulus. For a SURVIVING candidate the only valid outcomes are `filed-*`,
+`strengthened-existing`, or `dedup-existing` — "surfaced-but-not-filed" is deliberately not a
+status, and `other` is not a parking lot for skipped filing; a report row without one of those
+outcomes means go back, file, then record.
 
 ## Do NOT
 - Build the upgrades — surface and file only (a trivial single-edit the user approves on the spot is
@@ -110,6 +128,8 @@ still records stimulus.
 - Manufacture candidates to seem productive — the load-bearing test is the gate.
 - Emit an unlabeled candidate — every row carries `proven-need` / `solid-extension` / `speculative`.
 - Re-propose something already on the docket or in the catalog.
+- Defer filing to a future session or convert it into an offer ("say the word and I'll file it") —
+  file first, then report. Project holds (rotation-hold / doc-freeze) block rotation, never filing.
 
 ## Companion hook
 

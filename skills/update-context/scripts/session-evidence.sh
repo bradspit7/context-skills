@@ -121,8 +121,8 @@ done
 
 echo
 echo "== MEMORY HEALTH =="
-CANDIDATES=""
-for d in continuation/memory context/memory; do [ -d "$d" ] && CANDIDATES="$CANDIDATES $d"; done
+CANDIDATES=()
+for d in continuation/memory context/memory; do [ -d "$d" ] && CANDIDATES+=("$d"); done
 if git rev-parse --git-dir >/dev/null 2>&1; then
   MAIN_WT=$(git worktree list --porcelain | awk '/^worktree /{sub(/^worktree /,""); print; exit}')
 else
@@ -130,25 +130,25 @@ else
 fi
 if command -v cygpath >/dev/null 2>&1; then NATIVE=$(cygpath -w "$MAIN_WT"); else NATIVE="$MAIN_WT"; fi
 SLUG=$(printf '%s' "$NATIVE" | sed 's/[^A-Za-z0-9]/-/g')
-[ -d "$HOME/.claude/projects/$SLUG/memory" ] && CANDIDATES="$CANDIDATES $HOME/.claude/projects/$SLUG/memory"
+[ -d "$HOME/.claude/projects/$SLUG/memory" ] && CANDIDATES+=("$HOME/.claude/projects/$SLUG/memory")
 
 # Dedupe by canonical path: the out-of-repo ~/.claude/projects/<slug>/memory is commonly a
 # junction to in-repo continuation/memory; realpath collapses them (MSYS inodes do NOT).
-# Compare on realpath but KEEP the original space-free candidate string — the downstream
-# `for MEMDIR in $CANDIDATES` loop is space-delimited, so storing a realpath'd absolute path
-# (which contains spaces, e.g. "/c/CLAUDE PROJECTS/...") would split and corrupt it.
-DEDUP=""; SEEN=""
-for d in $CANDIDATES; do
+# Arrays keep every candidate a single token even when the path carries spaces (a spaced
+# $HOME word-split the old string version and silently skipped the memory-hygiene pass).
+# The `${arr[@]+"${arr[@]}"}` idiom guards empty-array expansion under `set -u` (macOS bash 3.2).
+DEDUP=(); SEEN=""
+for d in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
   rp=$(realpath "$d" 2>/dev/null || printf '%s' "$d")
   key=$(printf '%s' "$rp" | tr ' ' '\001')   # squash spaces so the key is a single token
   case " $SEEN " in
     *" $key "*) : ;;
-    *) SEEN="$SEEN $key"; DEDUP="$DEDUP $d" ;;
+    *) SEEN="$SEEN $key"; DEDUP+=("$d") ;;
   esac
 done
-CANDIDATES="$DEDUP"
+CANDIDATES=(${DEDUP[@]+"${DEDUP[@]}"})
 
-if [ -z "$CANDIDATES" ]; then
+if [ "${#CANDIDATES[@]}" -eq 0 ]; then
   echo "(no memory directory found — in-repo or out-of-repo)"
 fi
 # Session-start read-path = the files analyze-context loads EVERY session start (index + docket/roadmap).
@@ -158,7 +158,7 @@ fi
 # env-overridable (like HANDOFF_STRUCT_KB_LIMIT): a project whose index+docket is inherently
 # large-but-legitimate can raise its own ceiling instead of re-holding a rotation marker each expiry.
 READPATH_KB_LIMIT=${READPATH_KB_LIMIT:-50}
-for MEMDIR in $CANDIDATES; do
+for MEMDIR in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
   COUNT=$(ls "$MEMDIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
   KB=$(ls -l "$MEMDIR"/*.md 2>/dev/null | awk '{s+=$5} END {printf "%d", s/1024}')
   RP_BYTES=0

@@ -27,7 +27,10 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
   echo "== NO-GIT =="
   echo "Not a git repo. Staleness must be judged from file mtimes + in-content dates:"
   for f in "${DOCS[@]}"; do
-    [ -f "$f" ] && echo "  $f  last-modified: $(date -r "$f" '+%Y-%m-%d %H:%M' 2>/dev/null || stat -c '%y' "$f" 2>/dev/null)"
+    # mtime chain is GNU-first then BSD: GNU `date -r <file>` / `stat -c`; macOS/BSD
+    # `date -r` wants an epoch (fails on a filename) and `stat -c` is illegal, so both
+    # fall through to BSD `stat -f`. (Per Jacob's 2026-06-10 field report, Bug 2.)
+    [ -f "$f" ] && echo "  $f  last-modified: $(date -r "$f" '+%Y-%m-%d %H:%M' 2>/dev/null || stat -c '%y' "$f" 2>/dev/null || stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$f" 2>/dev/null)"
   done
   echo
   echo "== VERDICT =="

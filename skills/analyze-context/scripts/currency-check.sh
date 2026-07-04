@@ -111,7 +111,10 @@ if [ -n "$DOC" ]; then
 
   echo
   echo "== LAG =="
-  echo "$DOC last commit:   $(git log -1 --format='%ai (%h)' -- "$DOC" 2>/dev/null || echo 'never committed')"
+  # `git log -- <untracked-path>` exits 0 with EMPTY output, so an `|| echo` fallback is
+  # dead code — test the output, not the exit code, or an uncommitted doc prints a blank.
+  LAST_DOC=$(git log -1 --format='%ai (%h)' -- "$DOC" 2>/dev/null)
+  echo "$DOC last commit:   ${LAST_DOC:-never committed — $DOC is on disk but has no history reachable from HEAD (untracked/uncommitted; check BRANCH SURVEY for other refs)}"
   echo "repo HEAD commit:  $(git log -1 --format='%ai (%h)' 2>/dev/null)"
   LAST_DOC_SHA=$(git log -1 --format=%H -- "$DOC" 2>/dev/null)
   if [ -n "$LAST_DOC_SHA" ]; then

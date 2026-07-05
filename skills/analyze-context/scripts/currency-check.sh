@@ -249,8 +249,9 @@ if [ -n "$DOC" ]; then
   if [ -z "$REASONS" ]; then
     echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); last $DOC commit ${AGE_H}h ago; ${BEHIND_N:-0} commit(s) since; machine stamp matches; single-doc pattern."
     echo "=> UNLESS the user asked for a full briefing: take the SLIM PATH (analyze-handoff contract):"
-    echo "   read $DOC fully, deliver the 3-line summary (last completed / next intended / blocker),"
-    echo "   offer the full briefing on request. Skip the deep content reads."
+    echo "   read $DOC fully, deliver the 3-line summary (last completed / next intended / blocker)"
+    echo "   PLUS the open docket (open items by ID, one line each) from $DOC's own next-tasks/open-items"
+    echo "   section, then offer the full briefing on request. Skip the deep content reads (memory/specs/archive)."
   else
     echo "FULL BRIEFING — reason(s): ${REASONS#; }"
   fi

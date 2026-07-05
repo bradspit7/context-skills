@@ -1,6 +1,6 @@
 ---
 name: analyze-handoff
-description: Slim same-day session resumption — reads ONLY the project's HANDOFF.md (or top pickup point of CONTEXT.md / continuation/context.md if HANDOFF absent) and produces a 3-line summary (last completed / next intended / blocker). Skips memory dir, archive, wiki body, and docket. Costs ~5K tokens vs analyze-context's 50K+. Fires on explicit `/analyze-handoff`, `/handoff`, "quick resume", "where was I", or "what's next" — but ONLY when same-day continuation is clear. Do NOT fire when the user asks for a full briefing ("catch me up", "brief me", "what's the state"), when more than ~24h have passed, when the user just switched machines, or when no HANDOFF/CONTEXT file is present — route to `analyze-context` for those cases instead.
+description: Slim same-day session resumption — reads ONLY the project's HANDOFF.md (or top pickup point of CONTEXT.md / continuation/context.md if HANDOFF absent) and produces a 3-line summary (last completed / next intended / blocker) plus the open docket (open items by ID). Skips memory dir, archive, and wiki body. Costs ~5K tokens vs analyze-context's 50K+. Fires on explicit `/analyze-handoff`, `/handoff`, "quick resume", "where was I", or "what's next" — but ONLY when same-day continuation is clear. Do NOT fire when the user asks for a full briefing ("catch me up", "brief me", "what's the state"), when more than ~24h have passed, when the user just switched machines, or when no HANDOFF/CONTEXT file is present — route to `analyze-context` for those cases instead.
 ---
 
 # Analyze Handoff
@@ -54,7 +54,7 @@ If none found: tell the user *"No HANDOFF/CONTEXT file present. Want me to run /
 
 - HANDOFF.md present → read it fully. (It's supposed to be slim per `update-context` discipline. If it's grown to 1000+ lines, surface that as a hint that an `update-context` cleanup is overdue.)
 - CONTEXT.md / context.md only → read top section only, stopping at the first `---` divider (= the current pickup point). Do NOT chunk-read the whole file. That's `analyze-context`'s territory.
-- Do NOT read memory dir, archive, docket, plans, or specs.
+- Do NOT read memory dir, archive, plans, or specs. **The open docket IS in scope** (Step 4): surface the open items the handoff already carries. Only if the docket lives in a *separate* file the handoff points to as the home of open items, read that one file too — nothing else.
 - Do NOT run `git pull` / `git fetch` unless the user asked.
 
 ### Step 3 — Stale-check
@@ -67,25 +67,29 @@ Before producing the summary, check the handoff's freshness with git evidence (h
 - **Branch mismatch** — in a git repo where the HANDOFF header stamps `**Branch:**` (per `update-context`'s header template): compare it to `git branch --show-current`. A mismatch means the last wrap was written from a different branch than the one checked out now — the wrong-branch case the slim skill otherwise only names but never detects. Escalate (`/analyze-context`) and stop; don't summarize off a header that describes another branch's state. Read-only command — never checkout, fetch, or pull. (Safe no-op if the header lacks the field.)
 - **No parseable header, non-git project only** — in a NON-git project, if the handoff has no parseable header (no `**Machine:**` / `**Updated:**` line to verify machine or date against), slim mode has no evidence to lean on → escalate to `/analyze-context` and stop. In a git repo, skip this check: the commits-behind evidence above already supersedes it.
 
-If last-modified is more than ~3 days ago, OR the HANDOFF is more than ~3 commits behind HEAD (work landed after the last wrap — the handoff can't describe it), flag it before summarizing:
+If last-modified is more than ~24h ago (1 day — matching the currency-check routing gate that downgrades into this contract), OR the HANDOFF is more than ~3 commits behind HEAD (work landed after the last wrap — the handoff can't describe it), flag it before summarizing:
 
 > *"HANDOFF.md was last updated YYYY-MM-DD (X days ago / N commits behind HEAD). May be stale — want full briefing via `/analyze-context` instead?"*
 
 Then wait for direction. **Don't produce the slim summary on stale data** — the user may make decisions based on it.
 
-### Step 4 — Produce the 3-line summary
+### Step 4 — Produce the 3-line summary + open docket
 
 ```
 **Last completed:** <one line — most recent shipped work>
 **Next intended:** <one line — what's queued, from "next session entry point" or top of docket>
 **Blocker:** <one line if any open blocker / pending decision; otherwise "none">
+
+**Open docket:**
+- <ID> — <one line per open item>
+- ...
 ```
 
-Optionally append: *"Want full briefing? `/analyze-context`."*
+Source the docket from the handoff you already read (its "Next tasks" / open-items / docket section) — surface open items by their stable ID (`G#`/`#N`) where the docket uses them, one line each, so the user can pick the next item by name. Include still-open pending decisions. Skip resolved/closed rows. Don't expand into the full briefing's per-item detail — one line each is the contract. If the handoff only *points* to a separate docket file as the home of open items, read that one file too (cheap, and it's the whole point of a resume). Optionally append: *"Want full briefing? `/analyze-context`."*
 
 ### Step 5 — Stop
 
-Wait for user direction. Do NOT drift into reading memory, archive, or specs on speculation. The summary is the deliverable; the user already knows what they want next.
+Wait for user direction. Do NOT drift into reading memory, archive, or specs on speculation. The summary + open docket are the deliverable; the user picks the next item.
 
 ## What NOT to do
 
@@ -100,7 +104,7 @@ Wait for user direction. Do NOT drift into reading memory, archive, or specs on 
 
 ## Fail modes
 
-- **HANDOFF stale (>3 days)** → flag and ask before summarizing. Slim summary on stale state misleads.
+- **HANDOFF stale (>~24h / >3 commits behind HEAD)** → flag and ask before summarizing. Slim summary on stale state misleads.
 - **HANDOFF references commits not in this worktree's git log** → strong signal of worktree mismatch. Stop, ask user which worktree is authoritative. Same rule as `analyze-context`'s currency gate; the slim version doesn't exempt you.
 - **Wrong-branch silent staleness (cross-machine indicator)** → if the HANDOFF header's machine stamp (`**Machine:**` per update-context's header; legacy docs may say `**Last write from:**`) names a different machine than the current `hostname`, the previous session ran on the other machine and may have continued work on a feature branch this machine has never checked out. The slim skill deliberately does NOT run `analyze-context`'s full branch-recency survey (the currency-check script's branch survey) — that's the cost line the slim skill exists to avoid. So it cannot resolve this case safely. Escalate instead: *"HANDOFF's machine stamp is `<other-machine>`. Cross-machine handoff means recent work may live on a branch this machine doesn't have. Recommend `/device-sync` (arrival pull + memory sync, then the full `/analyze-context` survey) before trusting the slim summary."* Then stop. Same goes for any other signal of branch-per-feature drift (e.g., a recent `git pull` output the user shares showed `[new branch]` lines).
 - **Multi-day gap detected** (per JSONL transcript timestamps or git activity gap) → don't produce a slim summary. Recommend `/analyze-context` instead.

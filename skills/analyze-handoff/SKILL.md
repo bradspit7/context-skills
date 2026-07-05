@@ -22,6 +22,8 @@ Slim session resumption for same-day continuation. The cheap sibling to `analyze
 - User has explicitly invoked the slash command — that's the only proactive case.
 - All other proactive triggers deliberately omitted to avoid stomping `analyze-context`.
 
+**The routing that actually reaches this contract:** `analyze-context`'s Step 1 currency script emits a `RESUME CLASS` signal and, on a clean `SAME-DAY RESUME CANDIDATE`, downgrades that run into THIS skill's contract (handoff-only read, 3-line summary). So this contract executes even when the user habitually types `/analyze-context` — measured 2026-07-04: direct invocation happened 0 times in 204 sessions, so the downgrade is the load-bearing path. Direct triggers above still work.
+
 **Do NOT fire when:**
 - User asks for a full briefing ("catch me up", "brief me on this project", "what's the state", "give me the picture", "what were we working on") — those are full-briefing phrases, route to `analyze-context`
 - More than ~24 hours since the last activity in this project — full briefing is safer when state may have shifted

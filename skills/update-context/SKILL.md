@@ -103,6 +103,7 @@ Rotation is how read-cost stays flat. All moves are **non-destructive** (content
   - **Running-log docket:** the structural target is the docket (`roadmap.md`) — archive closed/resolved rows to `continuation/memory/archive/roadmap-closed-<YYYY-MM>.md` (pointer left behind); extract durable reference to `docs/` as above. Respect inline "keep — baseline" row markers.
   - **HOLD:** an `INFO ... on HOLD until <date>` line from the evidence script (a dated `<!-- rotation-hold: until YYYY-MM-DD reason -->` marker in the doc) is acknowledged and NOT acted on — neither phase runs for a held doc.
 - **Memory consolidation** (fires on: dead index links, oversized index lines, session-start read-path >50KB [MEMORY.md + docket/roadmap — NOT on-demand topic-file bulk], or no index over 5 files):
+  - **Mechanical legs run via the bundled fixer — never hand-typed:** `bash ~/.claude/skills/update-context/scripts/memory-hygiene.sh <memory_dir> [mirror_dir]` strips frontmatter trailing whitespace in place (idempotent), lists >200-char index lines, and (with a mirror dir) syncs live→mirror + verifies parity. One command replaces the strip/copy/verify rounds that were being re-derived at nearly every wrap (2026-07-04 audit). The >200-char listing is report-only — the trim itself stays a judgment MOVE (next bullet).
   - Fix/remove dead MEMORY.md lines (index lines are not history; safe to correct).
   - Index lines stay **≤200 chars at write time** — an index line is a pointer + hook, not the content. Detail (including inline `UPDATE` patches) merges down into the topic file the moment it appears; indexes re-bloat by line-growth, not entry-count, so write-time discipline beats periodic sweeps. **Trimming an existing long line is a MOVE, never a cut:** verify the topic file already holds the detail (add it there first if not, deferring to the topic file where the two disagree) before shortening the index line. Topic files themselves have no size cap — size them to what the content needs.
   - Merge near-duplicate files into the newest canonical one; archive the superseded with a pointer.
@@ -126,7 +127,7 @@ Emit the audit artifact **derived from porcelain ground truth** — one row per 
 
 ## Step 7 — Commit, never push
 
-**Hygiene re-check first:** Step 1's HYGIENE scan predates this wrap's own writes — and the auto-memory normalizer re-adds frontmatter trailing whitespace after every memory write — so re-run the evidence script's `== HYGIENE ==` scan now (after all writes and copy-backs) and strip anything flagged before adding. This is the once-per-wrap strip point; never strip at write time (the normalizer re-adds it).
+**Hygiene re-check first:** Step 1's HYGIENE scan predates this wrap's own writes — and the auto-memory normalizer re-adds frontmatter trailing whitespace after every memory write — so re-run the evidence script's `== HYGIENE ==` scan now (after all writes and copy-backs) and strip anything flagged before adding. The strip is `scripts/memory-hygiene.sh <memory_dir> [mirror_dir]` (also re-syncs the mirror in projects that keep one) — one idempotent command, not hand-typed sed rounds. This is the once-per-wrap strip point; never strip at write time (the normalizer re-adds it).
 
 Auto-commit is the default:
 

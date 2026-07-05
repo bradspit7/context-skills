@@ -41,6 +41,12 @@ fi
 DOC=""
 for f in "${DOCS[@]}"; do [ -f "$f" ] && DOC="$f" && break; done
 
+# Every report section runs inside ONE captured function so the RESUME CLASS block at the
+# bottom can count FINDING lines MECHANICALLY — they are emitted inside while-loop subshells,
+# so a flag variable could never see them, and a prose-only "if no FINDINGs above" gate lets
+# the classifier headline contradict a finding (review-fleet 2026-07-04, primary #2).
+# Output is printed verbatim after capture; section behavior is unchanged.
+emit_report() {
 echo
 echo "== FETCH =="
 # Hardened per Jacob's 2026-06-10 field report: GIT_TERMINAL_PROMPT=0 (a credential
@@ -149,8 +155,55 @@ if [ -d "$HOME/.claude/projects/$SLUG/memory" ]; then
 else
   echo "exists: no"
 fi
+}
+
+REPORT=$(emit_report)
+printf '%s\n' "$REPORT"
+FINDINGS_N=$(printf '%s\n' "$REPORT" | grep -c '^FINDING')
+
+if [ -n "$DOC" ]; then
+  echo
+  echo "== RESUME CLASS (routing signal: full briefing vs the slim analyze-handoff path) =="
+  # Mechanizes the analyze-context <-> analyze-handoff routing that invocation-time judgment
+  # measurably never performs (2026-07-04 audit: 0 slim-path uses in 204 sessions; 20+
+  # same-day resumes each paid the full briefing). The slim path requires ALL of: zero
+  # FINDING lines (counted mechanically from the captured report), doc committed <24h ago,
+  # <=3 commits behind HEAD, single-doc pattern, and a machine stamp MATCHING this host —
+  # an absent stamp cannot confirm the machine, so it forces the full briefing (fail-safe).
+  LAST_DOC_SHA=$(git log -1 --format=%H -- "$DOC" 2>/dev/null)
+  DOC_EPOCH=$(git log -1 --format=%ct -- "$DOC" 2>/dev/null)
+  BEHIND_N=$(git rev-list --count "${LAST_DOC_SHA:-HEAD}"..HEAD 2>/dev/null)
+  STAMP=$(grep -m1 -E '^\*\*(Machine|Last write from):\*\*' "$DOC" 2>/dev/null | sed -E 's/^\*\*(Machine|Last write from):\*\* *//; s/[^A-Za-z0-9_.-].*$//')
+  HOSTN=$(hostname 2>/dev/null)
+  MULTIDEV=""
+  for pd in HANDOFF-*.md; do [ -e "$pd" ] && MULTIDEV=1 && break; done
+  AGE_H=""
+  REASONS=""
+  [ "${FINDINGS_N:-0}" -gt 0 ] && REASONS="$REASONS; $FINDINGS_N FINDING line(s) in the report (resolve source-of-truth first)"
+  if [ -z "${DOC_EPOCH:-}" ]; then
+    REASONS="$REASONS; $DOC has no commit history (never committed)"
+  else
+    AGE_H=$(( ($(date +%s) - DOC_EPOCH) / 3600 ))
+    [ "$AGE_H" -ge 24 ] && REASONS="$REASONS; last $DOC commit ${AGE_H}h ago (>=24h)"
+  fi
+  [ "${BEHIND_N:-0}" -gt 3 ] && REASONS="$REASONS; $DOC is ${BEHIND_N} commits behind HEAD (work landed after the last wrap)"
+  [ -n "$MULTIDEV" ] && REASONS="$REASONS; multi-dev pattern (per-dev files + feed need the full read)"
+  if [ -z "$STAMP" ]; then
+    REASONS="$REASONS; no machine stamp in $DOC (cannot confirm same machine)"
+  elif [ -n "$HOSTN" ] && [ "$(printf '%s' "$STAMP" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$HOSTN" | tr '[:upper:]' '[:lower:]')" ]; then
+    REASONS="$REASONS; machine stamp '$STAMP' != host '$HOSTN' (machine switch -> device-sync, then the full briefing)"
+  fi
+  if [ -z "$REASONS" ]; then
+    echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); last $DOC commit ${AGE_H}h ago; ${BEHIND_N:-0} commit(s) since; machine stamp matches; single-doc pattern."
+    echo "=> UNLESS the user asked for a full briefing: take the SLIM PATH (analyze-handoff contract):"
+    echo "   read $DOC fully, deliver the 3-line summary (last completed / next intended / blocker),"
+    echo "   offer the full briefing on request. Skip the deep content reads."
+  else
+    echo "FULL BRIEFING — reason(s): ${REASONS#; }"
+  fi
+fi
 
 echo
 echo "== VERDICT =="
 echo "Any FINDING line above => STOP: resolve source-of-truth with the user BEFORE reading content files."
-echo "No FINDING lines => proceed to content reads. Re-run this script after any git switch/pull/reset."
+echo "No FINDING lines => proceed to content reads (RESUME CLASS above says full vs slim). Re-run this script after any git switch/pull/reset."

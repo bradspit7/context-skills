@@ -221,7 +221,12 @@ if [ -n "$DOC" ]; then
   LAST_DOC_SHA=$(git log -1 --format=%H -- "$DOC" 2>/dev/null)
   DOC_EPOCH=$(git log -1 --format=%ct -- "$DOC" 2>/dev/null)
   BEHIND_N=$(git rev-list --count "${LAST_DOC_SHA:-HEAD}"..HEAD 2>/dev/null)
-  STAMP=$(grep -m1 -E '^\*\*(Machine|Last write from):\*\*' "$DOC" 2>/dev/null | sed -E 's/^\*\*(Machine|Last write from):\*\* *//; s/[^A-Za-z0-9_.-].*$//')
+  # G#35 (2026-07-05): the stamp may sit MID-LINE in a combined header
+  # (`**Updated:** ... · **Machine:** X · **Branch:** ...`) — extract the segment wherever
+  # it appears instead of anchoring on line start. The old ^-anchored grep reported
+  # "no machine stamp" against stamped combined headers, silently forcing FULL on every
+  # resume in those projects (fail-safe held: cost-only, never a wrong slim read).
+  STAMP=$(grep -m1 -oE '\*\*(Machine|Last write from):\*\* *[A-Za-z0-9_.-]+' "$DOC" 2>/dev/null | sed -E 's/^\*\*(Machine|Last write from):\*\* *//')
   HOSTN=$(hostname 2>/dev/null)
   MULTIDEV=""
   for pd in HANDOFF-*.md; do [ -e "$pd" ] && MULTIDEV=1 && break; done

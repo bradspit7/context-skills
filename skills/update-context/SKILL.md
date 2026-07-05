@@ -18,6 +18,22 @@ Invoking the skill IS the write authorization — no per-run confirmation. Stop 
 
 Ground every update in: **(1) the conversation** (what was discussed/decided/built — primary), **(2) git state** (corroborating ground truth), **(3) the task/todo state** (done vs in-flight vs queued). If they disagree — conversation says the bug is fixed, git shows no commit touching the file — flag the mismatch and ask; never silently pick a side. Same for date conflicts: when the system clock contradicts file/commit dates, anchor on file evidence and surface the discrepancy.
 
+### Verify-from-live-source before writing
+
+Before any current-state claim lands in a file, **re-derive it from live source** — not from the conversation's memory of it, another memory file, or stale handoff content. Perishable facts drift silently between when they were observed and when the wrap writes them (a HANDOFF once shipped an ahead-count that was already wrong the moment the wrap commit landed). Re-probe the perishable ones:
+
+| Claim type | Live probe |
+|---|---|
+| Test / assertion count | the test runner's collect/count (`pytest --collect-only`, the suite's own count command) |
+| Branch / commit / ahead-count | `git status`, `git log`, `git rev-list --count @{u}..HEAD` |
+| Running process / PID | `ps`, the process manager's list, a PID file |
+| Config value / threshold | read the actual config file, not a doc describing it |
+| External / API / dashboard state | the live endpoint or dashboard, not a cached figure |
+
+If a declared liveness-probe convention exists in the project's CLAUDE.md, run it **verbatim** over any guessed equivalent. A probe that disagrees with the conversation/git/memory → trust the probe, write the verified value, note the discrepancy. A fact that stays **unverifiable** after probing is uncertain ground truth — route it through the existing Step-6 STOP rather than writing a guessed value.
+
+**Optional parallelization (capable model only):** this verify pass and Step 3's memory-lesson scan are read-only, so on a capable model dispatch them as advisory read-only subagents via `orchestrate` while the main thread plans writes — a verify agent that re-derives each perishable claim per the table above, and a lesson agent that runs the Step-3 scan. Both are **advisory evidence with a barrier**: their results must land before the Step-6 audit artifact; a disagreement routes through the same Step-6 STOP (nothing is auto-resolved). **Writes, commits, and every STOP gate stay on the main thread and sequential.** A dispatched agent that errors, times out, or returns partial results → rerun that scan serially in the main thread before Step 6; no fan-out available → serial single-pass as normal, and say so in the report.
+
 ## Step 1 — Gather evidence
 
 ```bash
@@ -53,7 +69,7 @@ The anti-bloat core. For each item in the session signal, route it to exactly on
 **The load-bearing test:** *would the next session — possibly another developer on another machine — act differently if this line were missing?* No → it doesn't get persisted. Verbose capture is not fidelity; it's the bloat that buries the load-bearing lines.
 
 **Memory-specific rules:**
-- Check MEMORY.md before creating: an existing file covering the fact gets updated (append a dated revision note), not duplicated.
+- Before creating a memory file, run the estate's memory keyword search (e.g. `/memory-search`) on the fact's key terms — an eyeballed MEMORY.md scan misses the same fact worded differently. A hit that reads as the same rule gets a dated revision note appended, not a duplicate file. No search tool available → fall back to reading the MEMORY.md index directly (a zero index-scan there proves nothing about same-fact-different-wording).
 - Never rewrite memory history to erase it; corrections append and reference what they supersede.
 - **No unverified negatives.** Never record "X doesn't exist / is unavailable / is a black box" on the strength of a web search alone — `grep -ri` the repo and check README-cited local dirs first. A false negative in memory steers every future session away from data that exists.
 
@@ -98,6 +114,7 @@ Rotation is how read-cost stays flat. All moves are **non-destructive** (content
 - **Per-dev files > ~600 lines:** move entries older than ~2-3 weeks to the project's archive per its trim convention (in PR-flow projects, a separate trim PR — don't mix with the refresh).
 - **Single-line accretion** (max-line THRESHOLD): a "slim" file can hide tens of KB inside ONE physical line — rolling-digest lines, multi-generation `SUPERSEDED` chains. Line counts never catch it (a 112-line file once hid 73KB this way). Rewrite the offending line to current state only; the displaced history goes to the archive like any other rotation.
 - **Structural rotation** (size THRESHOLD on `HANDOFF.md` or the read-path docket — durable *structure*, not history): fires when a bridge doc exceeds its byte ceiling (`session-evidence.sh`: monolithic `HANDOFF.md` >~40KB, or a read-path THRESHOLD whose bloat is closed rows / durable reference). Unlike history rotation this relocates durable **live** content, so it is two-phase with the second phase gated:
+  - **Protected-doc + foundational-root guards (OVERRIDE rotation — neither phase touches these):** a canonical operational doc — filename matching `*WORKFLOW*` / `*PIPELINE*` / `*RUNBOOK*` / `*PLAYBOOK*.md`, or any doc opening with a LOCKED-section / brand-bible-style preamble — is **never extracted, flattened, or overwritten** by rotation; the only permitted edits are a dated one-line "last updated" note and cross-reference pointers from the bridge doc. Likewise a **foundational root HANDOFF** (a substantive base-context file — "what this project is", file map, persona/character profiles, pipeline architecture, locked-decision content — not a slim pointer) is **never flattened into the slim snapshot form**: preserve its foundational content verbatim and update only a delimited current-session block at the top (or STOP-and-ask if a marker block is awkward for its structure). These guards beat the byte-ceiling THRESHOLD — a doc's size never licenses stripping it.
   - **Phase A — safe-collapse (always inline):** closed / ✅-done items → one-liners; cut duplicate paragraphs; compress verbose closed sections. Mechanical and safe like history rotation — do it this run.
   - **Phase B — structural extraction (GATED):** classify each remaining section *keep-in-bridge* (one-line status, next entry point, in-flight, open-docket pointers, locked decisions) vs *move-to-wiki* (fresh-clone/setup, tool inventory, stable how-it-works, deeper-context reference). Classify by section *content*, not its name — a "Known issues" section of stable behaviors is durable reference (move), but one listing open action items stays. Move the wiki set to `docs/` — `docs/SETUP.md` (setup/fresh-clone) + `docs/<status-or-wiki>.md` (durable reference) — **refreshing the destination FIRST if it is stale** (a move into a stale target strands content), leave one-line pointers, verify every moved section is pointer-reachable. Run Phase B inline ONLY when the destination is fresh (or trivially refreshable this run) AND classification is unambiguous; otherwise STOP-and-surface (Step 6) and record the residual as a next-session / docket flag — never a silent drop. A misclassification strands real state, so never auto-bundle Phase B into an unrelated feature wrap unreviewed.
   - **Running-log docket:** the structural target is the docket (`roadmap.md`) — archive closed/resolved rows to `continuation/memory/archive/roadmap-closed-<YYYY-MM>.md` (pointer left behind); extract durable reference to `docs/` as above. Respect inline "keep — baseline" row markers.

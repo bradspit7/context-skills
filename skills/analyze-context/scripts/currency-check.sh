@@ -29,17 +29,36 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
   for f in "${DOCS[@]}"; do
     # mtime chain is GNU-first then BSD: GNU `date -r <file>` / `stat -c`; macOS/BSD
     # `date -r` wants an epoch (fails on a filename) and `stat -c` is illegal, so both
-    # fall through to BSD `stat -f`. (Per Jacob's 2026-06-10 field report, Bug 2.)
-    [ -f "$f" ] && echo "  $f  last-modified: $(date -r "$f" '+%Y-%m-%d %H:%M' 2>/dev/null || stat -c '%y' "$f" 2>/dev/null || stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$f" 2>/dev/null)"
+    # fall through to BSD `stat -f`. (Per a 2026-06-10 field report, Bug 2.)
+    [ -f "$f" ] || continue
+    echo "  $f  last-modified: $(date -r "$f" '+%Y-%m-%d %H:%M' 2>/dev/null || stat -c '%y' "$f" 2>/dev/null || stat -f '%Sm' -t '%Y-%m-%d %H:%M' "$f" 2>/dev/null)"
+    # Epoch age (same GNU-first-then-BSD fallback chain) so ">7 days" becomes a machine
+    # verdict, not a prose aside the reader may skip. Age alone is NOT divergence evidence
+    # (the git path blocks on divergence, never on age) — so this is a NOTE the briefing
+    # header must surface, never a blocking FINDING; in-content dates arbitrate currency.
+    # (Review-fleet 2026-07-05: a FINDING here halted every session start of any healthy
+    # low-activity no-git project.)
+    F_EPOCH=$(date -r "$f" '+%s' 2>/dev/null || stat -c '%Y' "$f" 2>/dev/null || stat -f '%m' "$f" 2>/dev/null)
+    if [ -n "$F_EPOCH" ]; then
+      AGE_D=$(( ($(date +%s) - F_EPOCH) / 86400 ))
+      [ "$AGE_D" -gt 7 ] && echo "NOTE stale-doc-nogit: $f last modified ${AGE_D}d ago (>7d, no git to verify) — flag staleness in the briefing header; confirm currency from in-content dates"
+    fi
   done
   echo
   echo "== VERDICT =="
-  echo "No git history to verify currency against. If the doc is >7 days old, flag staleness in the briefing header."
+  echo "No git history to verify currency against. Any NOTE above => flag staleness in the briefing header; in-content dates are the staleness evidence."
   exit 0
 fi
 
 DOC=""
 for f in "${DOCS[@]}"; do [ -f "$f" ] && DOC="$f" && break; done
+
+# $DOC is the PRIMARY (first-found) doc — LAG, HEADER, and RESUME CLASS stay single-doc by
+# design. But a divergent-fork survey must cover EVERY present doc: a project can carry a stale
+# CONTEXT.md fork while HANDOFF.md (surveyed as primary) is clean, and first-found-only would
+# never look at it. PRESENT_DOCS is the full survey set.
+PRESENT_DOCS=()
+for f in "${DOCS[@]}"; do [ -f "$f" ] && PRESENT_DOCS+=("$f"); done
 
 # Every report section runs inside ONE captured function so the RESUME CLASS block at the
 # bottom can count FINDING lines MECHANICALLY — they are emitted inside while-loop subshells,
@@ -49,7 +68,7 @@ for f in "${DOCS[@]}"; do [ -f "$f" ] && DOC="$f" && break; done
 emit_report() {
 echo
 echo "== FETCH =="
-# Hardened per Jacob's 2026-06-10 field report: GIT_TERMINAL_PROMPT=0 (a credential
+# Hardened per a 2026-06-10 field report: GIT_TERMINAL_PROMPT=0 (a credential
 # prompt would hang session start forever), timeout when available, and a failed
 # fetch surfaces as a FINDING (stale remote view invalidates the currency gate)
 # instead of silently passing as "no new branches".
@@ -85,24 +104,53 @@ if [ -n "$UP" ]; then printf '%s\n' "$UP" | sed 's/^/FINDING unpulled-upstream: 
 
 if [ -n "$DOC" ]; then
   echo
-  echo "== BRANCH SURVEY ($DOC) =="
+  echo "== BRANCH SURVEY (every present doc) =="
   # Union of: 10 most-recently-committed refs + any ref committed in the last 24h.
   # Supersession test, not recency: a branch doc-blob is silent only if that exact content
   # appears somewhere in HEAD's history of the doc (covers squash-merges); any blob outside
   # HEAD's history is a divergent fork REGARDLESS OF AGE. (A timestamp guard here silently
   # converted "divergent fork older than HEAD's copy" into "ignore" — an unmerged fork >7
   # days old was permanently invisible while the survey printed the all-clear below.)
-  CUR_HASH=$(git ls-tree HEAD -- "$DOC" 2>/dev/null | awk '{print $3}')
-  HIST_BLOBS=$(git log -m --no-abbrev --no-renames --raw --format= HEAD -- "$DOC" 2>/dev/null | awk '$4 !~ /^0+$/ {print $4}' | sort -u)
   NOW=$(date +%s); TH=$((NOW - 86400))
-  git for-each-ref --sort=-committerdate refs/heads refs/remotes --format='%(refname:short) %(committerdate:unix)' \
-    | awk -v t="$TH" 'NR<=10 || $2>t {print $1}' | grep -v '/HEAD$' | sort -u | while read -r br; do
-      H=$(git ls-tree "$br" -- "$DOC" 2>/dev/null | awk '{print $3}')
+  # Precompute the surveyed ref set ONCE and report how many refs the window LEFT OUT — a
+  # divergent fork on an 11th-oldest branch is outside the window and invisible; the reader
+  # must know the survey was partial (0 excluded = the window covered every ref).
+  ALL_REFS=$(git for-each-ref --sort=-committerdate refs/heads refs/remotes --format='%(refname:short) %(committerdate:unix)' | grep -v '/HEAD$')
+  SURVEYED=$(printf '%s\n' "$ALL_REFS" | awk -v t="$TH" 'NR<=10 || $2>t {print $1}' | sort -u)
+  TOTAL_N=$(printf '%s\n' "$ALL_REFS" | grep -c .)
+  SURVEYED_N=$(printf '%s\n' "$SURVEYED" | grep -c .)
+  EXCLUDED_N=$(( TOTAL_N - SURVEYED_N ))
+  echo "refs surveyed: $SURVEYED_N of $TOTAL_N (window = 10 most-recent refs + any committed in the last 24h); $EXCLUDED_N older ref(s) NOT surveyed for divergence"
+  for D in "${PRESENT_DOCS[@]}"; do
+    CUR_HASH=$(git ls-tree HEAD -- "$D" 2>/dev/null | awk '{print $3}')
+    if [ -z "$CUR_HASH" ]; then
+      # $D is on disk but absent from HEAD's tree: untracked/uncommitted on this branch.
+      # Two distinct cases (review-fleet 2026-07-05): a surveyed ref carrying a committed copy
+      # means two sources genuinely COMPETE -> one conflict FINDING (suppressing the per-branch
+      # divergence noise). No carrier anywhere -> a single local copy with nothing to arbitrate
+      # -> advisory NOTE only; an untracked-but-only copy must never halt a session (RESUME
+      # CLASS already routes an untracked PRIMARY doc to the full briefing non-blockingly).
+      CARRIERS=0
+      for br in $SURVEYED; do
+        git ls-tree "$br" -- "$D" 2>/dev/null | grep -q . && CARRIERS=$((CARRIERS+1))
+      done
+      if [ "$CARRIERS" -gt 0 ]; then
+        echo "FINDING doc-untracked-conflict: $D is on disk but absent from HEAD's tree while $CARRIERS surveyed ref(s) carry a committed copy — competing sources; resolve which is authoritative (per-branch divergence findings suppressed as noise)"
+      else
+        echo "NOTE doc-untracked: $D is on disk with no committed copy on any surveyed ref — single local copy, not a source conflict; mtime + in-content dates are its currency evidence"
+      fi
+      continue
+    fi
+    HIST_BLOBS=$(git log -m --no-abbrev --no-renames --raw --format= HEAD -- "$D" 2>/dev/null | awk '$4 !~ /^0+$/ {print $4}' | sort -u)
+    printf '%s\n' "$SURVEYED" | while read -r br; do
+      [ -n "$br" ] || continue
+      H=$(git ls-tree "$br" -- "$D" 2>/dev/null | awk '{print $3}')
       if [ -n "$H" ] && [ "$H" != "$CUR_HASH" ] && ! printf '%s\n' "$HIST_BLOBS" | grep -qx "$H"; then
-        echo "FINDING divergent-branch-doc: $br carries $DOC content absent from HEAD's history  ($(git log -1 --format='%h %ai' "$br" -- "$DOC" 2>/dev/null))"
+        echo "FINDING divergent-branch-doc: $br carries $D content absent from HEAD's history  ($(git log -1 --format='%h %ai' "$br" -- "$D" 2>/dev/null))"
       fi
     done
-  echo "(silence above = no surveyed branch carries $DOC content outside HEAD's history)"
+  done
+  echo "(silence above = no surveyed branch carries a present doc's content outside HEAD's history)"
 
   echo
   echo "== RECENT $DOC COMMITS — all refs, 7 days, reachability vs HEAD =="

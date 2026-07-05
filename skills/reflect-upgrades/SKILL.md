@@ -3,6 +3,10 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to reflect on whether the session warrants a new or upgraded tool, hook, subagent, skill, slash command, MCP, catalog entry, or rule. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", or proactively when a work session produced durable learnings. Routes generalizable upgrades to a central upgrades repo or catalog and project-specific ones to the current project. Surfaces and files candidates; it does not build them.
 ---
 
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-05.1 -->
+<!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
+     Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
+
 # Reflect-upgrades — turn session learnings into tooling upgrades
 
 The reflection worth running every session: *did we learn anything that would help build or upgrade
@@ -10,8 +14,9 @@ our tools, subagents, hooks, skills, commands, or rules?* This skill is its sing
 is invoked three ways — manually (trigger phrases above), by `update-context` at every wrap (Layer 1),
 and by the `upgrade-reflection-nudge` hook once per session after substantial work (Layer 2).
 
-This is a read-only judgment pass: it **surfaces and files candidates**, it does not build them.
-Building a surfaced upgrade is separate, approved work.
+This is a judgment-and-filing pass: it **surfaces and files candidates** — to the sanctioned
+filing targets in Step 4 (docket lines, handoff entries, the catalog, the self-audit log) — it
+does not build them. Building a surfaced upgrade is separate, approved work.
 
 ## When to fire / not fire
 
@@ -43,6 +48,17 @@ For each signal item, ask whether it warrants a new or upgraded:
 | **catalog entry** | a tool / plugin / skill discovered or used that is worth recording for reuse |
 | **CLAUDE.md rule** | a correction or convention that should bind future sessions (project or global) |
 | **memory promotion** | a rule that has now bitten 2+ projects belongs in a skill or global CLAUDE.md |
+
+**Self-audit feeder (own-miss stream, paired reader built in):** separately from the tool-gap
+scan above, ask — did this session contain a *reasoning miss* no existing tool would have caught
+(a blind spot, a wrong reading you corrected, an assumption that bit)? That is a different signal
+class from a tool-gap candidate: it needs a captured lesson, not a new tool. Append it as one
+dated line to the **self-audit log** in the central upgrades repo (`SELF-AUDIT.md` at its root;
+create it on first use) — a transcript-verifiable one-liner naming the miss and its mechanism.
+The reader is this same skill: **whenever it fires, first read the self-audit log's still-open
+entries** — any recurring or now-fixable miss becomes a Step-2 tooling candidate on this pass
+(mark the entry resolved when it does). That closed loop is what earns the capture; never open a
+write-only backlog.
 
 ## Step 3 — Filter (the anti-noise gate)
 
@@ -140,6 +156,8 @@ write, or a `git commit`), it injects a one-line non-blocking nudge to run this 
 default 3; `UPGRADE_NUDGE_DISABLE=1` to silence). Pure stdlib, ASCII-only, fails open.
 
 ## Related
+- `SELF-AUDIT.md` (central upgrades repo root) — the self-audit log the Step-2 feeder writes and
+  this skill re-reads on every firing; the own-miss stream, paired with its reader.
 - `update-context` — invokes this at every wrap (Layer 1); its shipped / learned / decided signal
   feeds Step 1.
 - `hooks/upgrade-reflection-nudge.py` — the once-per-session `UserPromptSubmit` nudge (Layer 2).

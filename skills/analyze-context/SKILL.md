@@ -71,6 +71,8 @@ Read these yourself, in parallel where possible:
 5. Latest decision doc (`docs/**/decisions/`, newest) — **in full, not via the HANDOFF's one-line summary of it.** Grounding references (datasets, extracts, research) live in the doc body and the HANDOFF one-liner routinely drops them. No decisions dir → skip; note nothing.
 6. Multi-dev: your own per-dev file's newest entry FIRST (it dates your last session), then `coordination/feed.md` entries newer than that date (or the project's feed cursor). Feeds and per-dev logs are append-only: for session purposes, **entries since your last session ARE the full read**; older entries are tier-3 history, not skipped content.
 
+**Protected workflow docs — read them fully BEFORE assuming the pipeline shape.** Any root file matching `*WORKFLOW*` / `*PIPELINE*` / `*RUNBOOK*` / `*PLAYBOOK*.md` is the canonical description of how the project's process actually runs, and it routinely supersedes an older flow sketched in the HANDOFF or README. Read each such doc top-to-bottom before you state (or act on) the pipeline in the briefing — inferring the shape from the handoff summary is how a stale or superseded flow gets asserted as current. If one carries a LOCKED / DO-NOT-EDIT section, treat that section as canon, not as prose to paraphrase past.
+
 **Size valve — core docs are read fully when ≤ ~40KB.** A core doc over ~40KB (a bloated docket, a 400KB per-dev narrative, an accreted HANDOFF) gets a split read: read its *current-state* portion directly (header, newest entries back to your last session, open-item/priority sections, contract tables) and push the remainder into Step 4's delegated set so coverage still happens — via extracts, not silence. An oversized core doc is also a finding in its own right: surface "rotation overdue — update-context should trim this" in the briefing's Known issues.
 
 ## Step 4 — Depth read (direct or delegated)
@@ -92,9 +94,29 @@ Check total size (`wc -c`), then:
   Synthesize from the extracts. An extract missing its bottom-third quote means the file wasn't fully read — re-dispatch. This keeps a 200K-token corpus out of the main context (~15-25K after delegation) without re-enabling the skim failure.
 - **No subagent support available** (rare) → direct reads in descending relevance order; if ingest approaches ~100KB, stop, and **list what was deferred and why in the briefing's Known issues** — explicit deferral the user can override, never silent omission.
 
+**Search first, then read the hits.** Before hand-walking the memory index, run `/memory-search` (and `/recall` where available) on the topics the context layer surfaced — the entry point in the handoff, the open docket items, any subsystem the next step touches — and open only the few load-bearing hits it returns. The index eyeball is the fallback for what search can't phrase, not the default: an index of 50+ files is exactly where keyword search earns its keep. If the search index is stale or unavailable, degrade to reading the index and the in-scope files directly — a zero-hit search over a stale index proves nothing, so never treat it as "no memory on this."
+
 **Memory navigation** (both modes) — precedence order when signals conflict: **(1) MEMORY.md section assignment** ("top of stack" / "read first" / domain sections — the index always wins) → **(2) priority markers** (⚡/⚡⚡/🔴 are must-reads in their domain) → **(3) prefix heuristics**: `domain_*`/`scope_*` non-negotiable for in-scope content work; `feedback_*` if applicable; `research_*` newest-dated only *unless the index pins an older one*; `memory_*` verdicts are locked decisions. Follow sibling cross-references transitively. Don't read every file every session — but an index of 50+ files producing zero reads means the heuristic is broken.
 
 **Tier-3 (on demand only):** archives, historical pickup points, feed/log entries older than your last session, shipped specs, older decisions, README. Reading them to "feel thorough" wastes tokens and dilutes the briefing.
+
+## Step 4.5 — Verify from live source, then refute the reading
+
+Step 1 proved you have the newest *files*. This step proves the briefing's *claims* are true. It runs after the reads and before the briefing; skip it on the slim path (a `SAME-DAY RESUME CANDIDATE` run — the 3-line summary makes no current-state assertions worth re-deriving).
+
+**Live-source verify pass.** Memory files and handoff prose age; a current-state claim the briefing is about to assert can silently be stale. For any such claim that could have drifted, re-derive it from live source before asserting it — pick the probe by claim type:
+
+| Claim type | Live source to probe |
+|---|---|
+| running processes / a service is "up" | `ps` / the platform's process or job list (`launchctl list`, `systemctl`, Task Manager) |
+| commit / branch / ahead-behind counts | `git log` / `git status` / `git rev-list --count` — not the header stamp |
+| config values, flags, thresholds | the actual config file on disk, read now |
+| test / file / row counts | run the count command; don't quote the handoff's number |
+| balances, positions, prices, external state | the live state file or API, not a memory note |
+
+If the project's CLAUDE.md declares session-start or liveness probes, run those verbatim — declared probes beat guessed equivalents. When a memory file and the live probe disagree, the briefing reports the **live** state and flags the stale source; never silently trust either. Trust order for surfacing a conflict (surface, never auto-pick): **live > git > recent memory > older memory > older HANDOFF > wiki.**
+
+**Refutation cross-check.** The currency gate checks *sources*; nothing yet checks the *synthesis*. Before delivering a non-trivial briefing, hand the draft's **claims only** — one-line status, in-flight items, the counts/branch/process facts, the next-step pointer, never your reasoning or source list — to one independent re-derivation and get back, per claim, `AGREE / DISAGREE (evidence) / UNVERIFIABLE (what's missing)`. Where subagents are available, dispatch one read-only Explore agent carrying the claims; otherwise re-probe each claim yourself in a distinct second pass. A `DISAGREE` resolves per the trust order above **before** delivery; anything unresolved or `UNVERIFIABLE` ships only under the briefing's "Known issues / blockers" as a flagged mismatch, never silently in the body. A cross-check that errors, times out, or skips claims does not waive the check — re-probe those claims yourself before delivery. **Fire it when** the briefing is multi-workstream, any staleness NOTE survived Step 1, a memory file supplied a current-state claim, or the project is money-adjacent; **skip it** for a trivial briefing (and on the slim path, which never reaches this step). This verifies the reading — it never replaces Step 1 or the live probes above.
 
 ## Step 5 — The briefing
 
@@ -146,7 +168,7 @@ Deliver the briefing, then wait. Drill-downs, redirects, and "continue with next
 | Trusting `Updated:`/wave headers as currency | Headers date the paragraph, not the project. Reachability is proof. |
 | Feed/hook silence read as HANDOFF silence | Independent channels; check both. |
 | "That branch was merged, skip it" | Post-merge commits happen. The hash survey decides, not the intuition. |
-| HANDOFF contradicts git/memory/wiki | Flag the contradiction in the briefing; default trust order git > memory > HANDOFF > wiki, but surface, don't silently pick. |
+| HANDOFF contradicts git/memory/wiki | Flag the contradiction in the briefing; default trust order live > git > recent memory > older memory > older HANDOFF > wiki, but surface, don't silently pick. |
 | System date contradicts file/commit dates | Anchor on file/git evidence, flag the discrepancy explicitly. |
 | Briefing = pasted file contents | Synthesis is the product. If you can't state the next concrete move, you didn't synthesize. |
 | Claiming "no context" without checking root AND `context/` AND `continuation/` | The files exist; you skipped them. |

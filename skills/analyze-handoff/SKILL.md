@@ -63,6 +63,10 @@ Before producing the summary, check the handoff's freshness with git evidence (h
 - `git log -1 --format=%ci -- HANDOFF.md` for last modification, and `git rev-list --count <that-sha>..HEAD` for commits-behind — include both in the summary header: `HANDOFF: <date> (<N> commits behind HEAD)`
 - No git repo → file mtime (`ls -l` / `stat`) is the fallback evidence
 
+**Escalation-on-doubt header checks (cheap, run alongside the freshness probe):**
+- **Branch mismatch** — in a git repo where the HANDOFF header stamps `**Branch:**` (per `update-context`'s header template): compare it to `git branch --show-current`. A mismatch means the last wrap was written from a different branch than the one checked out now — the wrong-branch case the slim skill otherwise only names but never detects. Escalate (`/analyze-context`) and stop; don't summarize off a header that describes another branch's state. Read-only command — never checkout, fetch, or pull. (Safe no-op if the header lacks the field.)
+- **No parseable header, non-git project only** — in a NON-git project, if the handoff has no parseable header (no `**Machine:**` / `**Updated:**` line to verify machine or date against), slim mode has no evidence to lean on → escalate to `/analyze-context` and stop. In a git repo, skip this check: the commits-behind evidence above already supersedes it.
+
 If last-modified is more than ~3 days ago, OR the HANDOFF is more than ~3 commits behind HEAD (work landed after the last wrap — the handoff can't describe it), flag it before summarizing:
 
 > *"HANDOFF.md was last updated YYYY-MM-DD (X days ago / N commits behind HEAD). May be stale — want full briefing via `/analyze-context` instead?"*
@@ -86,6 +90,7 @@ Wait for user direction. Do NOT drift into reading memory, archive, or specs on 
 ## What NOT to do
 
 - **Don't read the memory directory** — tier-2/3 reading is `analyze-context`'s territory.
+- **Don't invoke recall-layer commands (`/memory-search`, `/recall`)** — they mandate downstream file reads that burn the ~5K budget this skill exists to protect. Memory recall is `analyze-context`'s read-side duty, not this skill's.
 - **Don't read archive or older pickup points** — same.
 - **Don't produce the 6-section structured briefing** — that's `analyze-context`'s output shape.
 - **Don't auto-escalate to `analyze-context`** if the slim summary feels thin. Tell the user; let them decide.

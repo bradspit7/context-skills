@@ -169,10 +169,28 @@ for MEMDIR in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
   echo "$MEMDIR: $COUNT md files, ${KB}KB total (${READPATH_KB}KB session-start read-path: index+docket)"
   IDX="$MEMDIR/MEMORY.md"
   if [ -f "$IDX" ]; then
-    # dead index links: [text](file.md) entries whose target doesn't exist next to the index
-    grep -oE '\]\([^)]+\.md\)' "$IDX" 2>/dev/null | sed 's/^](//; s/)$//' | sort -u | while read -r tgt; do
-      case "$tgt" in http*|/*) continue ;; esac
+    # Dead index links. Detector covers the three forms a plain `](x.md)` grep misses —
+    # [text](file.md#anchor), URL-encoded targets (%20), and Obsidian [[wiki-links]] —
+    # ported 2026-07-05 from a delivered cross-estate session-evidence variant. Decode is
+    # perl (ships with git-bash + macOS); a printf-%b route was rejected in review — %b
+    # interprets stray backslashes in targets, and bash-3.2/BSD behavior is ambiguous.
+    # No perl -> the raw target is checked undecoded (encoded links may false-flag; rare).
+    grep -oE '\]\([^)]+\)' "$IDX" 2>/dev/null | sed 's/^](//; s/)$//' | sort -u | while IFS= read -r tgt; do
+      case "$tgt" in http*|mailto:*|/*) continue ;; esac
+      tgt=${tgt%%#*}                        # strip #anchor
+      [ -n "$tgt" ] || continue             # pure-anchor link — same-file, never dead
+      case "$tgt" in *%[0-9A-Fa-f][0-9A-Fa-f]*)
+        tgt=$(printf '%s' "$tgt" | perl -pe 's/%([0-9A-Fa-f]{2})/chr(hex($1))/ge' 2>/dev/null || printf '%s' "$tgt") ;;
+      esac                                  # decode %20 etc. only when %XX present
+      case "$tgt" in *.md) ;; *) continue ;; esac
       [ -f "$MEMDIR/$tgt" ] || echo "THRESHOLD dead index link in MEMORY.md -> $tgt (fix or remove the index line this run)"
+    done
+    # Obsidian wiki-links: [[target]], [[target|alias]], [[target#anchor]]
+    grep -oE '\[\[[^]|#]+' "$IDX" 2>/dev/null | sed 's/^\[\[//' | sort -u | while IFS= read -r tgt; do
+      [ -n "$tgt" ] || continue
+      if [ ! -f "$MEMDIR/$tgt" ] && [ ! -f "$MEMDIR/$tgt.md" ]; then
+        echo "THRESHOLD dead index wiki-link in MEMORY.md -> [[$tgt]] (fix or remove the index line this run)"
+      fi
     done
     # Index lines are pointers + hooks, not content: >200 chars means detail belongs in the topic file
     LONG=$(LC_ALL=en_US.UTF-8 awk 'length > 200' "$IDX" | wc -l | tr -d ' ')

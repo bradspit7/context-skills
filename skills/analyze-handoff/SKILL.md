@@ -1,6 +1,6 @@
 ---
 name: analyze-handoff
-description: Slim same-day session resumption — reads ONLY the project's HANDOFF.md (or top pickup point of CONTEXT.md / continuation/context.md if HANDOFF absent) and produces a 3-line summary (last completed / next intended / blocker) plus the open docket (open items by ID). Skips memory dir, archive, and wiki body. Costs ~5K tokens vs analyze-context's 50K+. Fires on explicit `/analyze-handoff`, `/handoff`, "quick resume", "where was I", or "what's next" — but ONLY when same-day continuation is clear. Do NOT fire when the user asks for a full briefing ("catch me up", "brief me", "what's the state"), when more than ~24h have passed, when the user just switched machines, or when no HANDOFF/CONTEXT file is present — route to `analyze-context` for those cases instead.
+description: Slim same-day session resumption — reads ONLY the project's HANDOFF.md (or top pickup point of CONTEXT.md / continuation/context.md if HANDOFF absent) and produces a 3-line summary (last completed / next intended / blocker) plus the docket (open items by ID, with status markers). Skips memory dir, archive, and wiki body. Costs ~5K tokens vs analyze-context's 50K+. Fires on explicit `/analyze-handoff`, `/handoff`, "quick resume", "where was I", or "what's next" — but ONLY when same-day continuation is clear. Do NOT fire when the user asks for a full briefing ("catch me up", "brief me", "what's the state"), when more than ~24h have passed, when the user just switched machines, or when no HANDOFF/CONTEXT file is present — route to `analyze-context` for those cases instead.
 ---
 
 # Analyze Handoff
@@ -54,7 +54,7 @@ If none found: tell the user *"No HANDOFF/CONTEXT file present. Want me to run /
 
 - HANDOFF.md present → read it fully. (It's supposed to be slim per `update-context` discipline. If it's grown to 1000+ lines, surface that as a hint that an `update-context` cleanup is overdue.)
 - CONTEXT.md / context.md only → read top section only, stopping at the first `---` divider (= the current pickup point). Do NOT chunk-read the whole file. That's `analyze-context`'s territory.
-- Do NOT read memory dir, archive, plans, or specs. **The open docket IS in scope** (Step 4): surface the open items the handoff already carries. Only if the docket lives in a *separate* file the handoff points to as the home of open items, read that one file too — nothing else.
+- Do NOT read memory dir, archive, plans, or specs. **The docket IS in scope** (Step 4): surface the open items the handoff already carries. Only if the docket lives in a *separate* file the handoff points to as the home of open items, read that one file too — nothing else.
 - Do NOT run `git pull` / `git fetch` unless the user asked.
 
 ### Step 3 — Stale-check
@@ -73,23 +73,23 @@ If last-modified is more than ~24h ago (1 day — matching the currency-check ro
 
 Then wait for direction. **Don't produce the slim summary on stale data** — the user may make decisions based on it.
 
-### Step 4 — Produce the 3-line summary + open docket
+### Step 4 — Produce the 3-line summary + docket
 
 ```
 **Last completed:** <one line — most recent shipped work>
-**Next intended:** <one line — what's queued, from "next session entry point" or top of docket>
+**Next intended:** <one line — the top ACTIONABLE item; if none is actionable now, say so ("no actionable pickup — see docket")>
 **Blocker:** <one line if any open blocker / pending decision; otherwise "none">
 
-**Open docket:**
-- <ID> — <one line per open item>
+**Docket:**
+- <marker> <ID> — <one line per row>
 - ...
 ```
 
-Source the docket from the handoff you already read (its "Next tasks" / open-items / docket section) — surface open items by their stable ID (`G#`/`#N`) where the docket uses them, one line each, so the user can pick the next item by name. Include still-open pending decisions. Skip resolved/closed rows. Don't expand into the full briefing's per-item detail — one line each is the contract. If the handoff only *points* to a separate docket file as the home of open items, read that one file too (cheap, and it's the whole point of a resume). Optionally append: *"Want full briefing? `/analyze-context`."*
+Reproduce the handoff's docket section (its "Next tasks" / open-items / docket rows) in the order it lists them, **one line each, preserving each row's status marker** (🟢/🟡/⏸ etc.) so a parked or deprioritized row is never shown as actionable — surface each by its stable ID (`G#`/`#N`). Include still-open pending decisions. **Skip only rows the handoff has moved to its Resolved/done section** (`✅`/`✖`); a row that still lives in the open docket but reads "closed/deprioritized" stays, carrying its marker. Don't expand into the full briefing's per-item detail — one line each is the contract. If the handoff only *points* to a separate docket file as the home of open items, read that one file too (cheap, and it's the whole point of a resume). Optionally append: *"Want full briefing? `/analyze-context`."*
 
 ### Step 5 — Stop
 
-Wait for user direction. Do NOT drift into reading memory, archive, or specs on speculation. The summary + open docket are the deliverable; the user picks the next item.
+Wait for user direction. Do NOT drift into reading memory, archive, or specs on speculation. The summary + docket are the deliverable; the user picks the next item.
 
 ## What NOT to do
 

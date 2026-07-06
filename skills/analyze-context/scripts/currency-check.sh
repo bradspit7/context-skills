@@ -4,19 +4,19 @@
 # FINDING or THRESHOLD requires action before synthesis. Always exits 0.
 #
 # Usage: bash currency-check.sh [primary-doc ...]
-#   primary-doc defaults to: HANDOFF.md CONTEXT.md continuation/context.md
+#   primary-doc defaults to: HANDOFF.md context/HANDOFF.md CONTEXT.md continuation/context.md
 #   (first that exists is treated as "the doc" for drift comparison)
 
 set -u
 
-if [ $# -gt 0 ]; then DOCS=("$@"); else DOCS=(HANDOFF.md CONTEXT.md continuation/context.md); fi
+if [ $# -gt 0 ]; then DOCS=("$@"); else DOCS=(HANDOFF.md context/HANDOFF.md CONTEXT.md continuation/context.md); fi
 
 echo "== MACHINE =="
 hostname
 
 echo
 echo "== PATTERN MARKERS =="
-for m in HANDOFF.md CONTEXT.md CLAUDE.md continuation context coordination docs/decisions; do
+for m in HANDOFF.md context/HANDOFF.md CONTEXT.md CLAUDE.md continuation context coordination docs/decisions; do
   [ -e "$m" ] && echo "present: $m"
 done
 for pd in HANDOFF-*.md; do [ -e "$pd" ] && echo "present: $pd (multi-dev marker)"; done
@@ -181,11 +181,15 @@ if [ -n "$DOC" ]; then
 else
   echo
   echo "== NO PRIMARY DOC ON DISK =="
-  # cwd has no handoff doc — check whether any ref carries one (wrong-branch / fresh-clone signal)
+  # cwd has no handoff doc — check whether any ref carries one (wrong-branch / fresh-clone signal).
+  # Iterate the full supported doc set (not just root HANDOFF.md) so a doc that lives only under
+  # context/ — or as CONTEXT.md / continuation/context.md — on another ref is still detected.
   git for-each-ref --sort=-committerdate refs/heads refs/remotes --format='%(refname:short)' | head -10 | while read -r br; do
-    if git ls-tree "$br" -- HANDOFF.md 2>/dev/null | grep -q .; then
-      echo "FINDING doc-exists-elsewhere: $br carries HANDOFF.md but the current checkout does not"
-    fi
+    for D in "${DOCS[@]}"; do
+      if git ls-tree "$br" -- "$D" 2>/dev/null | grep -q .; then
+        echo "FINDING doc-exists-elsewhere: $br carries $D but the current checkout does not"
+      fi
+    done
   done
 fi
 

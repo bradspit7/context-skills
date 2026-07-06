@@ -46,6 +46,8 @@ Look in this order, stop at first match:
 2. `<project-root>/CONTEXT.md` (top section to first `---` divider only)
 3. `<project>/continuation/context.md` (top pickup point to first `---` only)
 
+Whichever matches first is the **pickup doc** — Step 3's freshness probe and the stale warning run against *that* path, never a literal `HANDOFF.md`. A `CONTEXT.md`- or `continuation/context.md`-only project stale-checked against `HANDOFF.md` gets empty `git log` output, so the check silently no-ops against the wrong file.
+
 **Multi-dev projects** (`HANDOFF-<name>.md` files present): read the slim shared `HANDOFF.md` PLUS the top entry of your own `HANDOFF-<dev>.md` (identity via `gh api user --jq .login` mapped through the project CLAUDE.md, fallback `git config user.name`). Still slim — two small reads, no others' files, no feed backlog.
 
 If none found: tell the user *"No HANDOFF/CONTEXT file present. Want me to run /analyze-context for a full briefing instead?"* Stop.
@@ -60,7 +62,7 @@ If none found: tell the user *"No HANDOFF/CONTEXT file present. Want me to run /
 ### Step 3 — Stale-check
 
 Before producing the summary, check the handoff's freshness with git evidence (header stamps are advisory, not proof):
-- `git log -1 --format=%ci -- HANDOFF.md` for last modification, and `git rev-list --count <that-sha>..HEAD` for commits-behind — include both in the summary header: `HANDOFF: <date> (<N> commits behind HEAD)`
+- `git log -1 --format=%ci -- <pickup-doc>` (the doc matched in Step 1, not a literal `HANDOFF.md`) for last modification, and `git rev-list --count <that-sha>..HEAD` for commits-behind — include both in the summary header: `<pickup-doc>: <date> (<N> commits behind HEAD)`. If that `git log` returns **empty output** (the pickup doc is untracked/uncommitted — test the output, not the exit code), fall to the file-mtime evidence below instead of reading a blank as "fresh"
 - No git repo → file mtime (`ls -l` / `stat`) is the fallback evidence
 
 **Escalation-on-doubt header checks (cheap, run alongside the freshness probe):**
@@ -69,7 +71,7 @@ Before producing the summary, check the handoff's freshness with git evidence (h
 
 If last-modified is more than ~24h ago (1 day — matching the currency-check routing gate that downgrades into this contract), OR the HANDOFF is more than ~3 commits behind HEAD (work landed after the last wrap — the handoff can't describe it), flag it before summarizing:
 
-> *"HANDOFF.md was last updated YYYY-MM-DD (X days ago / N commits behind HEAD). May be stale — want full briefing via `/analyze-context` instead?"*
+> *"`<pickup-doc>` was last updated YYYY-MM-DD (X days ago / N commits behind HEAD). May be stale — want full briefing via `/analyze-context` instead?"*
 
 Then wait for direction. **Don't produce the slim summary on stale data** — the user may make decisions based on it.
 

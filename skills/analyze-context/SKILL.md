@@ -44,7 +44,7 @@ One run replaces the old Step 0 + Step 1.5 + pre-briefing checkpoint. It reports
 - **Merged-looking branches still count.** A branch whose PR was squash-merged can keep receiving commits afterward (post-merge resurrection); the survey compares doc hashes regardless of merge status — trust it over the "that branch is done" intuition.
 - **No-git projects:** the script falls back to file mtimes. Doc >7 days old → flag staleness in the briefing header; in-content dates become the staleness evidence.
 
-If `~/.claude/skills/analyze-context/scripts/currency-check.sh` is missing (partial install — don't confuse it with a project-level `scripts/` dir), run the essentials inline: `hostname`; `git fetch --all` (watch for `[new branch]`); `git worktree list`; `git for-each-ref --sort=-committerdate refs/heads refs/remotes --format='%(refname:short) %(committerdate:iso)' | head -15`; `git log --all --since='7 days ago' --format='%h %ai %s' -- HANDOFF.md` and check each hash with `git merge-base --is-ancestor <sha> HEAD`.
+If `~/.claude/skills/analyze-context/scripts/currency-check.sh` is missing (partial install — don't confuse it with a project-level `scripts/` dir), run the essentials inline: `hostname`; `git fetch --all` (watch for `[new branch]`); `git worktree list`; `git for-each-ref --sort=-committerdate refs/heads refs/remotes --format='%(refname:short) %(committerdate:iso)' | head -15`; `git log --all --since='7 days ago' --format='%h %ai %s' -- HANDOFF.md context/HANDOFF.md CONTEXT.md continuation/context.md` and check each hash with `git merge-base --is-ancestor <sha> HEAD`.
 
 ## Step 2 — Detect the pattern
 

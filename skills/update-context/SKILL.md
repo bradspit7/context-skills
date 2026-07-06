@@ -20,7 +20,7 @@ Ground every update in: **(1) the conversation** (what was discussed/decided/bui
 
 ### Verify-from-live-source before writing
 
-Before any current-state claim lands in a file, **re-derive it from live source** — not from the conversation's memory of it, another memory file, or stale handoff content. Perishable facts drift silently between when they were observed and when the wrap writes them (a HANDOFF once shipped an ahead-count that was already wrong the moment the wrap commit landed). Re-probe the perishable ones:
+Before any current-state claim lands in a file, **re-derive it from live source** — not from the conversation's memory of it, another memory file, or stale handoff content. Perishable facts drift silently between when they were observed and when the wrap writes them (a HANDOFF once shipped an ahead-count that was already wrong the moment the wrap commit landed). **This also covers a claim you carry forward verbatim into a rewrite/compression, not only a freshly-authored one** — a preserved current-state line ("left untracked," "edits uncommitted," an ahead-count) can be stale even though you didn't re-type it, so re-probe it before it survives the rewrite. Re-probe the perishable ones:
 
 | Claim type | Live probe |
 |---|---|

@@ -1,6 +1,6 @@
 ---
 name: brainstorm
-description: "Use before any creative or feature work — new features, components, behavior changes, new projects — when requirements aren't fully pinned down. Drop-in replacement for superpowers:brainstorming (prose questions, one recommendation, no option menus, no choice-button UI). Fires on 'let's design', 'I want to build', 'how should we approach', or any build request that lacks an approved spec. Terminal state is an approved spec handed to write-plan."
+description: "Use before any creative or feature work — new features, components, behavior changes, new projects — when requirements aren't fully pinned down. Drop-in replacement for superpowers:brainstorming (prose questions, one recommendation, no option menus, no choice-button UI). Fires on 'let's design', 'I want to build', 'how should we approach', or any build request that lacks an approved spec. Terminal state is an approved design — a spec handed to write-plan for multi-step work, or a direct implement for trivially small non-write-path work."
 ---
 
 # Brainstorm — idea to approved design
@@ -35,16 +35,16 @@ Scope check while reading: if the request spans multiple independent subsystems,
 
 One approval round on the whole design — not per-section sign-off. Revise and re-present if the user redirects.
 
-## Step 4 — Write the spec
+## Step 4 — Write the spec (when it earns its keep)
 
-On approval, write the design to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` (project conventions override the location). Then self-review it once, fixing inline:
+On approval, write the design to `docs/superpowers/specs/YYYY-MM-DD-<topic>-design.md` (project conventions override the location) — **unless the approved work is headed straight to Step-5 implement-directly** (trivially small, single-file, and NOT write-path / filed / matched / registered logic). In that narrow case the approved Step-3 design in this conversation IS the durable record: skip the dated file and go to Step 5, citing the approved design in the implementation commit. Write the spec whenever the work is multi-step (write-plan-bound), spans sessions, touches **write-path / filed / matched / registered logic** (no size exemption — the same carve-out Step 5 makes, whether that work routes to the review fleet or to write-plan), or a zero-context executor / future session would otherwise have to reconstruct the design from scratch — the file is cheap and durable exactly there. When you write it, self-review once, fixing inline:
 
 1. **Placeholders** — no TBD/TODO/vague requirements.
 2. **Internal consistency** — no section contradicts another; architecture matches feature claims.
 3. **Scope** — one implementation plan's worth, or flag for decomposition.
 4. **Ambiguity** — any requirement readable two ways gets pinned to one.
 
-Commit per project law (commit yes; never push unprompted). Tell the user where the spec lives and ask them to flag anything they want changed — then proceed to Step 5 in the same message. The design approval in Step 3 is the authorization; the spec-flag ask is non-blocking, and you revise only if they actually flag something.
+When you wrote the spec: commit per project law (commit yes; never push unprompted), tell the user where it lives, and ask them to flag anything they want changed — then proceed to Step 5 in the same message. When you skipped it, proceed straight to Step 5. The design approval in Step 3 is the authorization; the spec-flag ask is non-blocking, and you revise only if they actually flag something.
 
 ## Step 5 — Hand off
 

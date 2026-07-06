@@ -88,4 +88,14 @@ if [ -f "$A" ] && [ -f "$B" ]; then
                    || FAIL "probe-sync.sh DIFFERS between device-sync and device-handoff"
 fi
 
+# 7. behavioral tests (fixture-based -- the net the structural checks 1-6 cannot give).
+#    Committed tests/*.py run when a working python is present; each exits non-zero on
+#    failure. Needs bash on PATH for the currency-check subprocess (git-bash on Windows) --
+#    the same shell validate.sh itself runs in, so that is already satisfied here.
+if [ -n "$PY" ]; then
+  while IFS= read -r t; do
+    if "$PY" "$t" >/dev/null 2>&1; then OK "behavioral test: $t"; else FAIL "behavioral test: $t"; fi
+  done < <(gate_files 'tests/*.py')
+fi
+
 if [ "$fail" -eq 0 ]; then printf '\nvalidate: PASS\n'; exit 0; else printf '\nvalidate: FAILED\n'; exit 1; fi

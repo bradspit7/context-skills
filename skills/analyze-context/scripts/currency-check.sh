@@ -152,6 +152,43 @@ if [ -n "$DOC" ]; then
   done
   echo "(silence above = no surveyed branch carries a present doc's content outside HEAD's history)"
 
+  # --- Per-dev handoff drift (S1) — NON-BLOCKING NOTEs by design ---
+  # Per-dev HANDOFF-<dev>.md files had ZERO currency check before this: the primary loop above
+  # only iterates the shared-doc set (DOCS never globs HANDOFF-*). They are surveyed here with
+  # the SAME supersession test, but emitted as NOTE, never FINDING — on a multi-dev repo a
+  # teammate's branch legitimately carries their own newer per-dev content, so a FINDING would
+  # STOP-storm normal divergence (S1). A NOTE surfaces "a newer copy of <file> lives on <ref>"
+  # so the resumer (analyze-context, which resolves the dev identity) can act on its OWN file,
+  # without halting synthesis. Scoped inside the primary-DOC block so $SURVEYED/$PRESENT_DOCS
+  # are defined; a repo with per-dev files but NO shared doc still gets the RESUME-CLASS
+  # multi-dev FULL-briefing force plus analyze-context's direct per-dev reads.
+  PERDEV_DOCS=()
+  for pd in HANDOFF-*.md; do [ -f "$pd" ] && PERDEV_DOCS+=("$pd"); done
+  if [ "${#PERDEV_DOCS[@]}" -gt 0 ]; then
+    echo
+    echo "== PER-DEV HANDOFF DRIFT (non-blocking; multi-dev divergence is normal) =="
+    for D in "${PERDEV_DOCS[@]}"; do
+      # skip a per-dev file already surveyed as a primary doc (explicit-arg invocation) — avoid a
+      # confusing double-report (FINDING from the primary loop + NOTE here).
+      skip=""; for pdd in "${PRESENT_DOCS[@]}"; do [ "$pdd" = "$D" ] && skip=1 && break; done
+      [ -n "$skip" ] && continue
+      CUR_HASH=$(git ls-tree HEAD -- "$D" 2>/dev/null | awk '{print $3}')
+      if [ -z "$CUR_HASH" ]; then
+        echo "NOTE perdev-untracked: $D is on disk but not committed on HEAD — local per-dev copy; mtime + in-content dates are its currency evidence"
+        continue
+      fi
+      HIST_BLOBS=$(git log -m --no-abbrev --no-renames --raw --format= HEAD -- "$D" 2>/dev/null | awk '$4 !~ /^0+$/ {print $4}' | sort -u)
+      printf '%s\n' "$SURVEYED" | while read -r br; do
+        [ -n "$br" ] || continue
+        H=$(git ls-tree "$br" -- "$D" 2>/dev/null | awk '{print $3}')
+        if [ -n "$H" ] && [ "$H" != "$CUR_HASH" ] && ! printf '%s\n' "$HIST_BLOBS" | grep -qx "$H"; then
+          echo "NOTE perdev-divergent: $br carries $D content absent from HEAD's history  ($(git log -1 --format='%h %ai' "$br" -- "$D" 2>/dev/null)) — if $D is YOURS a newer copy exists there; a teammate's divergence is normal"
+        fi
+      done
+    done
+    echo "(silence above = no surveyed branch carries per-dev handoff content outside HEAD's history)"
+  fi
+
   echo
   echo "== RECENT $DOC COMMITS — all refs, 7 days, reachability vs HEAD =="
   git log --all --since='7 days ago' --format='%h %ai %s' -- "$DOC" 2>/dev/null | head -10 | while read -r line; do

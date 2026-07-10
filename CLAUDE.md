@@ -1,6 +1,6 @@
 # context-skills
 
-Public repo (github.com/bradspit7/context-skills) publishing ten Claude Code skills: the session-lifecycle set (`analyze-context`, `update-context`, `analyze-handoff`, `reflect-upgrades`), the cross-device pair (`device-sync`, `device-handoff`), and the process suite (`brainstorm`, `write-plan`, `execute-plan`, `orchestrate` — drop-in replacements for the superpowers plugin's core development-loop skills). The `skills/<name>/SKILL.md` files are both the spec and the product; `skills/<name>/scripts/*.sh` are the deterministic helpers the lifecycle skills shell out to (`currency-check.sh`, `session-evidence.sh`, and the device pair's shared `probe-sync.sh`); `analyze-handoff`, `reflect-upgrades`, and the process suite carry no `scripts/` (`reflect-upgrades` bundles a `hooks/` nudge instead). Install/usage docs: `README.md`.
+Public repo (github.com/bradspit7/context-skills) publishing eleven Claude Code skills: the session-lifecycle set (`analyze-context`, `update-context`, `analyze-handoff`, `reflect-upgrades`), the cross-device pair (`device-sync`, `device-handoff`), the process suite (`brainstorm`, `write-plan`, `execute-plan`, `orchestrate` — drop-in replacements for the superpowers plugin's core development-loop skills), and the standalone visual-iteration skill `design-variants`. The `skills/<name>/SKILL.md` files are both the spec and the product; `skills/<name>/scripts/*.sh` are the deterministic helpers the lifecycle skills shell out to (`currency-check.sh`, `session-evidence.sh`, and the device pair's shared `probe-sync.sh`); `analyze-handoff`, `reflect-upgrades`, the process suite, and `design-variants` carry no `scripts/` (`reflect-upgrades` bundles a `hooks/` nudge; `design-variants` bundles a `references/` taste rubric). Install/usage docs: `README.md`.
 
 ## Sync discipline — read before editing anything
 
@@ -14,7 +14,9 @@ This repo is the **third copy** in a one-way chain. Skill edits originate in the
 - This repo can also drift AHEAD via GitHub web edits: `git pull` before any work session here. If a pull lands skill-content changes, ahead-drift resolves UPWARD — back-port them to the live copy and mirror before any other skill edit; never overwrite this repo from live.
 - `README.md` and `CLAUDE.md` are repo-native (authored here, not mirrored).
 
-Sync check (silence = in sync):
+**Exception — deliberately generalized skills.** Some skills whose live copies carry maintainer-specific references (an example script path, personal tool/skill names, embedded project terms, an authorship note) ship here with those references stripped, so their public copies are *intentionally* NOT byte-identical to live/mirror (current cases: `design-variants`, `update-context`, `reflect-upgrades`). Each such divergence is recorded as adjudicated by the maintainer's sync tooling — do **NOT** resolve it by copying live → here, which would reintroduce the stripped references (a codename leak). To change a generalized skill's behavior, edit the live/mirror copy, then re-apply the generalization into this copy.
+
+Sync check (silence = in sync — **except** any deliberately-generalized skill above, which shows an expected diff; the maintainer's sync tooling, not this snippet, is the authority on which divergences are sanctioned):
 
 ```bash
 for d in skills/*/; do s=$(basename "$d"); diff -rq "skills/$s" ~/.claude/skills/"$s"; done

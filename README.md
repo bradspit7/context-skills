@@ -1,6 +1,6 @@
 # Context skills — session lifecycle + process suite
 
-Ten skills in two families, plus a standalone [memory recall layer](recall-layer/README.md).
+Eleven skills in three families, plus a standalone [memory recall layer](recall-layer/README.md).
 
 **Session lifecycle** — keeping project context sane across Claude Code sessions, machines, and developers:
 
@@ -19,6 +19,10 @@ Ten skills in two families, plus a standalone [memory recall layer](recall-layer
 - **`orchestrate/`** — parallel-subagent fan-out under explicit contract: read fan-outs with top/middle/bottom-third verification quotes, implementer-per-task with two-stage review (spec compliance, then quality), adversarial refutation of review findings, background tasks for long commands.
 
 The process suite is deliberately mechanical — judgment is moved into explicit recipes, gates, and status protocols so quality holds up on smaller models, not just frontier ones. It encodes opinions (single recommendation over option menus, continuous execution over check-in theater) — edit them if your taste differs.
+
+**Visual iteration** — one standalone skill for the "give me a few takes and let me pick" workflow (no superpowers equivalent):
+
+- **`design-variants/`** — sandbox-to-selection visual iteration: build N labeled design variants of a surface in isolated sandboxes, present them as localhost links or screenshots, let the user pick by eye (mix-and-match allowed), apply the winner to production, and prove it landed with fresh post-apply evidence. Bundles `references/taste-rubric.md` — a model-independent taste rubric (axes of variation, quality bar, anti-patterns) that drives the variant theses and the pre-present self-critique. Carries two hard-won preview-fidelity gotchas (reveal-JS renders blank in hidden panels; host-cascade repaints on inlining) and apply-time CSS-specificity hardening. It orchestrates whatever design tools you already have — it does not replace them.
 
 **Also ships: `recall-layer/`** — a standalone local memory recall layer over your memory/notes markdown: SQLite FTS5 keyword search plus an optional semantic half (local Ollama embeddings + sqlite-vec), with the hooks, index builders, and `/memory-search` / `/recall` / `/semantic-search` commands that wire it up. Not a skill — install and usage docs live in [`recall-layer/README.md`](recall-layer/README.md).
 
@@ -58,6 +62,7 @@ Copy each skill **directory** (SKILL.md *and* its `scripts/` subdir where presen
 cp -r skills/analyze-context skills/update-context skills/analyze-handoff skills/reflect-upgrades \
       skills/device-sync skills/device-handoff \
       skills/brainstorm skills/write-plan skills/execute-plan skills/orchestrate \
+      skills/design-variants \
       ~/.claude/skills/
 ```
 

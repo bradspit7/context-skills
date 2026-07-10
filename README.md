@@ -26,6 +26,8 @@ The process suite is deliberately mechanical — judgment is moved into explicit
 
 **Also ships: `recall-layer/`** — a standalone local memory recall layer over your memory/notes markdown: SQLite FTS5 keyword search plus an optional semantic half (local Ollama embeddings + sqlite-vec), with the hooks, index builders, and `/memory-search` / `/recall` / `/semantic-search` commands that wire it up. Not a skill — install and usage docs live in [`recall-layer/README.md`](recall-layer/README.md).
 
+**Also ships: `project-scans/`** — two complementary "what should this project do next?" slash commands: `/ultracode-scan` reads the **docket** and matches already-chosen work to `orchestrate`'s parallelization recipes (anti-manufacture — zero picks is a valid result), while `/opportunity-scan` reads the **vision / research / half-built** layer and surfaces high-leverage directions the docket never captured. Report-only by default. Install and usage docs live in [`project-scans/README.md`](project-scans/README.md).
+
 **Superpowers interop:** the process suite references a few superpowers skills it does NOT replace (`systematic-debugging`, `finishing-a-development-branch`). With the plugin installed, those route normally; without it, treat each reference as "do that discipline manually" — nothing breaks. If you run the plugin alongside this suite, add one line to your `~/.claude/CLAUDE.md`: *"Prefer brainstorm / write-plan / execute-plan / orchestrate over their superpowers equivalents."*
 
 Together they form a session-bridging loop on top of the **persistent-markdown-vault-as-agent-context** pattern: each project keeps a structured file set (HANDOFF.md, wiki/running-log, memory/, docket) that survives session boundaries.

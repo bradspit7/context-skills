@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to reflect on whether the session warrants a new or upgraded tool, hook, subagent, skill, slash command, MCP, catalog entry, or rule. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", or proactively when a work session produced durable learnings. Routes generalizable upgrades to a central upgrades repo or catalog and project-specific ones to the current project. Surfaces and files candidates; it does not build them.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-05.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-09.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -75,18 +75,20 @@ Apply the routing rule:
   upgrades repo or catalog** — a docket / "next candidates" item, or a catalog stub.
 - **Project-specific** (only helps the current project) -> the current project's own docket / memory.
 
-**Dual-surface candidates — split, don't bury.** When a candidate touches *shared/central machinery* —
-a lifecycle or process skill, a global instruction file (e.g. `CLAUDE.md`), your catalog, a global
-hook, or the upgrade pipeline itself — it has a generalizable kernel even when its concrete instance
-is project-local. File the kernel **centrally** (and the project-local instance, if any, in the
-project). The project-local surface must not keep the kernel trapped in the project docket. Anti-
-over-filing gate: it must touch named shared machinery, not merely "feel like it could generalize" —
+**Dual-surface candidates — split, don't bury.** When a candidate touches *named shared machinery* —
+a lifecycle or process skill (`update-context`, `analyze-context`, `orchestrate`, ...), a global
+instruction file (e.g. `CLAUDE.md`), your catalog, a global hook, or the upgrade pipeline itself — it
+has a generalizable kernel even when its concrete instance is project-local. File the kernel
+**centrally** (and the project-local instance, if any, in the project). The project-local surface
+must not keep the kernel trapped in the project docket — that is exactly how a real
+`update-context`-rotation kernel once got stranded as a single project's roadmap item. Anti-over-filing
+gate: it must touch the *named* shared machinery above, not merely "feel like it could generalize" —
 Step 3's load-bearing test still applies.
 
 **Filing from another project's session.** Your central upgrades repo is reachable by its local path
 even when the session is rooted elsewhere — write the central entry there directly instead of
 deferring to a someday-harvest. The cross-repo edit lands uncommitted; note it as pending so your next
-central session commits it.
+central session commits it (its session-start status check surfaces the pending edit).
 
 File the surviving candidates to the right home — do not merely mention them. Filing means a docket
 line, a handoff entry, or a catalog stub. It does not mean implementing.
@@ -121,8 +123,8 @@ docket row, strengthen that row instead of filing a sibling.
 If nothing survives the filters, say so in one line: "No tooling upgrades warranted this session."
 That is a valid and common result.
 
-**Log the verdict (if the companion ledger tool is installed):** record the outcome so fires can be
-reconciled against responses (a nudge fire with no recorded response reads as a dismissal):
+**Log the verdict (required, deterministic — the response side of the fires->outcome ledger):**
+whatever the outcome — filed, strengthened, deduped, or zero — record it:
 
 ```bash
 python ~/.claude/upgrade-ledger.py record --layer <nudge|wrap|manual> \
@@ -130,10 +132,13 @@ python ~/.claude/upgrade-ledger.py record --layer <nudge|wrap|manual> \
   --candidate "<ref>[,...]" --reason "<short>" [--session <uuid>]
 ```
 
-`--status` is the strongest outcome; list every ref in `--candidate` (`-` when none); `--reason` is
-required for `zero`/`other`; `--layer` names what prompted this reflection (the hook's nudge, a
-session-wrap, or a manual invocation). If the tool is absent, skip this step — the fires-only log
-still records stimulus. For a SURVIVING candidate the only valid outcomes are `filed-*`,
+`--status` is the strongest outcome (`filed-central` > `filed-project`/`filed-catalog` >
+`strengthened-existing`/`dedup-existing` > `zero`); list every ref in `--candidate` (`-` when none);
+`--reason` is required for `zero`/`other`. `--layer`: `nudge` when this reflection was prompted by the
+`[upgrade-reflection]` nudge, `wrap` when by update-context, `manual` otherwise. Add `--session` when
+the session id is visible (the UUID in the scratchpad path). If the tool is missing or the command
+fails, say so in the report — never silently skip. A fire with no recorded response reads as a
+dismissal in the ledger. For a SURVIVING candidate the only valid outcomes are `filed-*`,
 `strengthened-existing`, or `dedup-existing` — "surfaced-but-not-filed" is deliberately not a
 status, and `other` is not a parking lot for skipped filing; a report row without one of those
 outcomes means go back, file, then record.

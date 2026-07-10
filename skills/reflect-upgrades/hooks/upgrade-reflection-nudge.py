@@ -128,7 +128,12 @@ def main():
         "or process skill, global CLAUDE.md, the catalog, or a global hook - goes to the "
         "central upgrades repo even from inside this project (split it from any project-local "
         "instance; do not let the local surface trap it); project-specific ones to this "
-        "project's docket. Nothing tool-worthy is a fine answer." % signal
+        "project's docket. Nothing tool-worthy is a fine answer - and record whichever "
+        "way it lands (the session id below makes the fires<->responses join exact; "
+        "a considered zero is invisible otherwise): "
+        "python ~/.claude/upgrade-ledger.py record --layer nudge "
+        "--status <filed-central|filed-project|zero|...> "
+        "--candidate <ref or -> --reason \"...\" --session %s" % (signal, session_id)
     )
     try:
         sys.stdout.write(json.dumps({

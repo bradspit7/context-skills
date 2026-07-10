@@ -16,6 +16,8 @@ The contracts below are deliberately mechanical. Follow them as written — they
 
 **Independence test before dispatching:** would any two agents read state another agent mutates, or edit the same file? If yes, serialize those two or isolate via worktrees — never "probably fine."
 
+**Check the catalog before authoring a fan-out script:** glob `~/.claude/catalog/Workflow-recipes/` (start at `_index.md`) for a proven runnable that matches the pattern, and adapt it rather than re-deriving its hardening. (2026-07-09: a hand-authored 23-agent repo sweep convergently re-derived `upgrade-sweep.workflow.js`'s guards at authoring cost and still missed its prior-grounding stage.)
+
 ## The prompt contract (every dispatch, no exceptions)
 
 Subagents inherit NOTHING from this conversation. Every prompt must carry:

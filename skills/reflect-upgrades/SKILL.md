@@ -62,11 +62,16 @@ write-only backlog.
 
 ## Step 3 — Filter (the anti-noise gate)
 
-Every candidate must pass two filters:
+Every candidate must pass three filters:
 1. **Load-bearing test** — *would a future session act differently if this tool existed?* No -> drop
    it. Do not invent work to look productive.
 2. **De-dup** — check your central upgrades repo's docket and your catalog (if you keep one). Already
    queued -> do not re-propose; point at the existing entry instead.
+3. **Target-project-alive** — if the candidate's remediation *target* is a specific project, confirm
+   that project is still active before filing (if you track project lifecycle status). A candidate
+   targeting a discontinued or abandoned project is **dead work — do not file it**. (A dead project's
+   *machine-level* kernels — shell/tooling traps that bite anywhere — stay valid and generalize as
+   usual; only project-*targeted* work dies with it.)
 
 ## Step 4 — Route and file
 

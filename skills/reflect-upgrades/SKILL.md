@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to reflect on whether the session warrants a new or upgraded tool, hook, subagent, skill, slash command, MCP, catalog entry, or rule. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", or proactively when a work session produced durable learnings. Routes generalizable upgrades to a central upgrades repo or catalog and project-specific ones to the current project. Surfaces and files candidates; it does not build them.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-09.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-09.2 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -85,10 +85,16 @@ must not keep the kernel trapped in the project docket — that is exactly how a
 gate: it must touch the *named* shared machinery above, not merely "feel like it could generalize" —
 Step 3's load-bearing test still applies.
 
-**Filing from another project's session.** Your central upgrades repo is reachable by its local path
-even when the session is rooted elsewhere — write the central entry there directly instead of
-deferring to a someday-harvest. The cross-repo edit lands uncommitted; note it as pending so your next
-central session commits it (its session-start status check surfaces the pending edit).
+**Filing from another project's session — durable + receipt-bearing.** Your central upgrades repo is
+reachable by its local path even when the session is rooted elsewhere. File as a **new committed inbox
+file**, never an uncommitted edit to a live central doc: write `DOCKET-INBOX-<date>-<project>.md` at
+the central repo root (rows in docket style, unnumbered — ids are allocated at ingest, which also
+removes counter contention between concurrent filers), **commit it immediately**, and **show the user
+the receipt (path + short sha) in this session's report** — "filed" means a quotable commit, never
+"it's in a working tree." A new file bundles no unrelated work and cannot be clobbered by a concurrent
+session or a snapshot rewrite of the doc it would otherwise have edited. Your next central session
+ingests the inbox: allocate ids, merge into the docket, delete the file (content survives in the
+creating commit).
 
 File the surviving candidates to the right home — do not merely mention them. Filing means a docket
 line, a handoff entry, or a catalog stub. It does not mean implementing.

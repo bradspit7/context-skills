@@ -241,11 +241,17 @@ else
       closedsec=(h ~ /resolved|retired|archived|closed|dropped|shipped|completed|done/)?1:0
       next
     }
-    match($0, /^[[:space:]]*-[[:space:]]*\*\*G#[0-9]+\*\*/) {
-      endpos=RSTART+RLENGTH; hdr=substr($0,RSTART,RLENGTH)
-      match(hdr,/[0-9]+/); n=substr(hdr,RSTART,RLENGTH)+0
-      rest=substr($0,endpos,24)
-      if (closedsec || index(rest,"\342\234\205")>0 || index(rest,"\342\235\214")>0) print n
+    match($0, /^[[:space:]]*-[[:space:]]*\*\*[^*]+\*\*/) {
+      bold=substr($0,RSTART,RLENGTH); rest=substr($0,RSTART+RLENGTH); sub(/^[[:space:]]+/,"",rest)
+      # A close glyph counts ONLY when it is the row LEADING status token (immediately after the
+      # bold ID, per the documented marker convention) -- index()==1. A glyph deep in a row prose
+      # ("...work done. done sub-step") is a sub-step note, not the row status, so it never closes
+      # the row. The leading [^*]+ bold span carries the row subject id(s) -- iterating every G#
+      # token in it catches a grouped **G#a / G#b / G#c** row while ignoring a prose mention (which
+      # sits OUTSIDE the leading bold).
+      if (closedsec || index(rest,"\342\234\205")==1 || index(rest,"\342\235\214")==1) {
+        tmp=bold; while (match(tmp,/G#[0-9]+/)) { print substr(tmp,RSTART+2,RLENGTH-2)+0; tmp=substr(tmp,RSTART+RLENGTH) }
+      }
     }
   ' $COH_DOCKETS 2>/dev/null | sort -un | tr "\n" " ")
 
@@ -260,9 +266,9 @@ else
       if (h ~ /ready signal/) rs++
       next
     }
-    forward && match($0, /^[[:space:]]*-[[:space:]]*\*\*G#[0-9]+\*\*/) {
-      hdr=substr($0,RSTART,RLENGTH); match(hdr,/[0-9]+/); n=substr(hdr,RSTART,RLENGTH)+0
-      if (n in closed) print "STALE " n
+    forward && match($0, /^[[:space:]]*-[[:space:]]*\*\*[^*]+\*\*/) {
+      tmp=substr($0,RSTART,RLENGTH)   # leading bold span = the row subject (handles a grouped **G#a / G#b / G#c** row)
+      while (match(tmp,/G#[0-9]+/)) { n=substr(tmp,RSTART+2,RLENGTH-2)+0; if ((n in closed) && !(n in seen)) { seen[n]=1; print "STALE " n } tmp=substr(tmp,RSTART+RLENGTH) }
     }
     END { if (rs>1) print "RS " rs }
   ' "$COH_HANDOFF")
@@ -288,11 +294,16 @@ else
         FNR==1 { opensec=0 }
         /^#{1,6}[[:space:]]/ {
           h=tolower($0)
-          opensec=(h ~ /open candidate|open work|open item|pick up here|next task|next step/)?1:0
+          # a resolved/retired heading ends the open block; an open-keyword heading starts it; a NEW
+          # top-level (##) section ends it -- but deeper (###/####) descriptive sub-headings (In
+          # progress / Blocked / High) inside the open block keep opensec, so their rows still count.
+          if (h ~ /resolved|retired|archived|closed|dropped|shipped/) opensec=0
+          else if (h ~ /open candidate|open work|open item|pick up here|next task|next step/) opensec=1
+          else if ($0 ~ /^##[[:space:]]/) opensec=0
           next
         }
-        opensec && match($0, /^[[:space:]]*-[[:space:]]*\*\*G#[0-9]+\*\*/) {
-          hdr=substr($0,RSTART,RLENGTH); match(hdr,/[0-9]+/); ids[substr(hdr,RSTART,RLENGTH)+0]=1
+        opensec && match($0, /^[[:space:]]*-[[:space:]]*\*\*[^*]+\*\*/) {
+          tmp=substr($0,RSTART,RLENGTH); while (match(tmp,/G#[0-9]+/)) { ids[substr(tmp,RSTART+2,RLENGTH-2)+0]=1; tmp=substr(tmp,RSTART+RLENGTH) }
         }
         END { c=0; for(k in ids) c++; print c }
       ' "$COH_PRIMARY")

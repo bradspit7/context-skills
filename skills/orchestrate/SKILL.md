@@ -16,7 +16,7 @@ The contracts below are deliberately mechanical. Follow them as written — they
 
 **Independence test before dispatching:** would any two agents read state another agent mutates, or edit the same file? If yes, serialize those two or isolate via worktrees — never "probably fine."
 
-**Check the catalog before authoring a fan-out script:** glob `~/.claude/catalog/Workflow-recipes/` (start at `_index.md`) for a proven runnable that matches the pattern, and adapt it rather than re-deriving its hardening. (A hand-authored sweep convergently re-derived a proven runnable's guards at full authoring cost — and still missed one of its stages.)
+**Check the catalog before authoring a fan-out script:** glob `~/.claude/catalog/Workflow-recipes/` (start at `_index.md`) for a proven runnable that matches the pattern, and adapt it rather than re-deriving its hardening. (2026-07-09: a hand-authored 23-agent repo sweep convergently re-derived `upgrade-sweep.workflow.js`'s guards at authoring cost and still missed its prior-grounding stage.)
 
 ## The prompt contract (every dispatch, no exceptions)
 
@@ -42,6 +42,11 @@ For plan execution with independent tasks:
 - **Never run two implementers concurrently whose file sets overlap.** Disjoint sets may run in parallel; overlap = serialize or worktree-isolate.
 - After each implementer: **spec-compliance review first** (does the diff match the task — nothing missing, nothing extra), **then code-quality review**. Fresh reviewer agents; findings go back to the implementer to fix; re-review after fixes. Never start quality review before spec review passes; never advance a task with open findings.
 - Status handling: `NEEDS_CONTEXT` → supply it, re-dispatch. `BLOCKED` → change something (context, model, task size) or escalate; never re-dispatch unchanged. `DONE_WITH_CONCERNS` → read the concerns before proceeding.
+- **Reviewer dispatch contract** (ported from upstream subagent-driven-development v6 — eval-backed as a set on their benchmarks with documented run-to-run variance, so treat the gains as directional):
+  - **A reviewer has a third verdict — `CANNOT_VERIFY_FROM_DIFF: <what the controller must check>`** — for a claim it cannot honestly adjudicate from the diff alone (runtime behavior, an external contract, an environment fact). The controller performs or dispatches that check itself; it never rounds this verdict into pass or fail. (`DONE_WITH_CONCERNS` is the *implementer's* channel, and crashed-agent handling covers dead reviewers — neither covers an honest live reviewer flagging an out-of-scope claim.)
+  - **Named-risk scope budget:** reviewers work diff-first, and broaden outside the diff only for a concrete NAMED risk — stating the risk and what was checked. The per-task form of the review-tier doctrine: unbounded "review everything nearby" is cost, not rigor.
+  - **Record each task's BASE commit when the task starts and review `BASE..HEAD` — never `HEAD~1`,** which silently reviews only the last commit of a multi-commit task and reads as a full review.
+  - **Anti-coaching tripwire:** the controller never pre-rates severity or pre-filters findings in a reviewer dispatch — no "do not flag X", no "at most Minor", no "the plan chose this so don't question it". Upstream caught controllers doing exactly this in live runs, and the coached-away flaw shipped. (Distinct from Recipe 3's ground-truth rule: that bans handing a lens the author's *inventory*; this bans handing a reviewer the author's *verdict*.)
 - **An agent's extracted string is advisory, not byte-authoritative, when it will KEY a write.** When a fan-out returns exact strings that a later `Edit` consumes as `old_string` (extract-then-apply sweeps, schema-sync, mass find/replace), re-read the real file bytes for the `old_string` rather than trusting the transcription, and let a deterministic re-check (byte-parity / regenerated diff) backstop the write — an LLM paraphrase silently swaps or drops a word, which fail-matches (safe) or, on a near-match, mis-edits the wrong span.
 
 ## Recipe 3 — Review fleet + adversarial verify

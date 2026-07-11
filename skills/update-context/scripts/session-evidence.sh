@@ -211,6 +211,107 @@ for MEMDIR in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
 done
 
 echo
+echo "== COHERENCE (HANDOFF forward sections vs the resolved ledger -- G#84) =="
+# A wrap that APPENDS newer status above stale operational blocks (instead of REWRITING the
+# whole doc) leaves resolved IDs listed as open in the HANDOFF's forward-looking sections and
+# lets a stale ready-signal block survive below the fold -- three consecutive external reviews
+# caught this same class. Deterministic backstop; a THRESHOLD here means "rewrite the stale
+# section THIS run", like any rotation. Read-only. Degrades to a clean skip on any docket that
+# lacks a G# resolved-ledger, so it is safe on every project the mirror reaches.
+COH_HANDOFF=""
+for f in HANDOFF.md context/HANDOFF.md; do [ -f "$f" ] && { COH_HANDOFF="$f"; break; }; done
+if [ -z "$COH_HANDOFF" ]; then
+  echo "(no HANDOFF.md -- coherence check n/a)"
+else
+  # Ledger + open-row sources (files that may carry resolved/retired rows AND open rows).
+  COH_DOCKETS=""
+  for f in roadmap.md "$COH_HANDOFF" ./*docket*.md ./*_docket.md context/*docket*.md; do
+    [ -f "$f" ] && COH_DOCKETS="$COH_DOCKETS $f"
+  done
+  # CLOSED = leading-ID rows that are resolved/retired -- detected by EITHER an ASCII section
+  # heading (Resolved/Retired/Shipped/...) OR the row's own status glyph (check U+2705 / cross
+  # U+274C, matched as UTF-8 octal so this script stays ASCII-clean). Leading-ID only: a
+  # narrative mention of a resolved ID inside another row's prose is deliberately NOT counted
+  # (the rule permits narrative mentions; only an OPEN-ROW claim is incoherent). closedsec
+  # resets per file (FNR==1) so a Resolved section in one file can't bleed into the next.
+  CLOSED=$(awk '
+    FNR==1 { closedsec=0 }
+    /^#{1,6}[[:space:]]/ {
+      h=tolower($0)
+      closedsec=(h ~ /resolved|retired|archived|closed|dropped|shipped|completed|done/)?1:0
+      next
+    }
+    match($0, /^[[:space:]]*-[[:space:]]*\*\*G#[0-9]+\*\*/) {
+      endpos=RSTART+RLENGTH; hdr=substr($0,RSTART,RLENGTH)
+      match(hdr,/[0-9]+/); n=substr(hdr,RSTART,RLENGTH)+0
+      rest=substr($0,endpos,24)
+      if (closedsec || index(rest,"\342\234\205")>0 || index(rest,"\342\235\214")>0) print n
+    }
+  ' $COH_DOCKETS 2>/dev/null | sort -un | tr "\n" " ")
+
+  # (a)+(b): scan the HANDOFF's FORWARD-looking sections ONLY (a resolved ID appearing as an
+  # open row there is the recurring failure -- backward-looking "Recently shipped" legitimately
+  # lists resolved IDs, so it is excluded by header); count ready-signal sections (exactly one).
+  COH_OUT=$(awk -v CLOSEDLIST="$CLOSED" '
+    BEGIN { nc=split(CLOSEDLIST,a," "); for(i=1;i<=nc;i++) if(a[i]!="") closed[a[i]+0]=1 }
+    /^#{1,6}[[:space:]]/ {
+      h=tolower($0)
+      forward=(h ~ /docket|ready signal|pick[ -]?up|open work|open candidate|open item|next task|next step|next session|entry point/)?1:0
+      if (h ~ /ready signal/) rs++
+      next
+    }
+    forward && match($0, /^[[:space:]]*-[[:space:]]*\*\*G#[0-9]+\*\*/) {
+      hdr=substr($0,RSTART,RLENGTH); match(hdr,/[0-9]+/); n=substr(hdr,RSTART,RLENGTH)+0
+      if (n in closed) print "STALE " n
+    }
+    END { if (rs>1) print "RS " rs }
+  ' "$COH_HANDOFF")
+
+  COH_FINDINGS=$(printf '%s\n' "$COH_OUT" | while IFS= read -r ln; do
+    case "$ln" in
+      "STALE "*) echo "THRESHOLD HANDOFF forward section lists G#${ln#STALE } as an OPEN row, but it is resolved/retired in the docket ledger -- REWRITE the stale section (rotate, don't append) this run" ;;
+      "RS "*)    echo "THRESHOLD HANDOFF has ${ln#RS } 'Ready signal' section(s) -- exactly one current signal is allowed; a stale block survived below the fold. Rewrite to one." ;;
+    esac
+  done)
+
+  # (c): open-count recompute -- ONLY when a DEDICATED docket file exists (each open item is its
+  # own row there; an inline HANDOFF docket groups IDs on one row and would mis-count), and only
+  # on a confident numeric mismatch. Clearable: recomputing the stated count clears it.
+  COH_PRIMARY=""
+  for f in roadmap.md ./*docket*.md ./*_docket.md context/*docket*.md; do
+    [ -f "$f" ] && { COH_PRIMARY="$f"; break; }
+  done
+  if [ -n "$COH_PRIMARY" ]; then
+    CLAIMED=$(grep -oE '[0-9]+ open (candidate|item|goal|task)' "$COH_HANDOFF" 2>/dev/null | head -1 | grep -oE '^[0-9]+')
+    if [ -n "$CLAIMED" ]; then
+      RECOMP=$(awk '
+        FNR==1 { opensec=0 }
+        /^#{1,6}[[:space:]]/ {
+          h=tolower($0)
+          opensec=(h ~ /open candidate|open work|open item|pick up here|next task|next step/)?1:0
+          next
+        }
+        opensec && match($0, /^[[:space:]]*-[[:space:]]*\*\*G#[0-9]+\*\*/) {
+          hdr=substr($0,RSTART,RLENGTH); match(hdr,/[0-9]+/); ids[substr(hdr,RSTART,RLENGTH)+0]=1
+        }
+        END { c=0; for(k in ids) c++; print c }
+      ' "$COH_PRIMARY")
+      if [ "${RECOMP:-0}" -ge 1 ] && [ "$CLAIMED" != "$RECOMP" ]; then
+        COH_FINDINGS="${COH_FINDINGS:+$COH_FINDINGS
+}THRESHOLD HANDOFF claims '$CLAIMED open' but $COH_PRIMARY has $RECOMP open G# row(s) -- recompute the count from the docket this run (do not carry it)"
+      fi
+    fi
+  fi
+
+  [ -z "${CLOSED// /}" ] && echo "(no resolved-ledger G# rows detected -- open/closed ID cross-check skipped; ready-signal + count checks still ran)"
+  if [ -n "$COH_FINDINGS" ]; then
+    printf '%s\n' "$COH_FINDINGS"
+  else
+    echo "(coherence clean -- no resolved ID in a HANDOFF forward section; single ready signal; stated open-count consistent)"
+  fi
+fi
+
+echo
 echo "== VERDICT =="
 echo "Every TRIAGE line needs a class (commit/delete/leave-untracked). Every THRESHOLD line triggers"
 echo "the rotation or hygiene pass in THIS run. Porcelain paths missing from the audit artifact = incomplete wrap."

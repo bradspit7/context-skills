@@ -1,6 +1,6 @@
 # Context skills — session lifecycle + process suite
 
-Eleven skills in three families, plus a standalone [memory recall layer](recall-layer/README.md).
+Twelve skills in four families, plus a standalone [memory recall layer](recall-layer/README.md).
 
 **Session lifecycle** — keeping project context sane across Claude Code sessions, machines, and developers:
 
@@ -23,6 +23,10 @@ The process suite is deliberately mechanical — judgment is moved into explicit
 **Visual iteration** — one standalone skill for the "give me a few takes and let me pick" workflow (no superpowers equivalent):
 
 - **`design-variants/`** — sandbox-to-selection visual iteration: build N labeled design variants of a surface in isolated sandboxes, present them as localhost links or screenshots, let the user pick by eye (mix-and-match allowed), apply the winner to production, and prove it landed with fresh post-apply evidence. Bundles `references/taste-rubric.md` — a model-independent taste rubric (axes of variation, quality bar, anti-patterns) that drives the variant theses and the pre-present self-critique. Carries two hard-won preview-fidelity gotchas (reveal-JS renders blank in hidden panels; host-cascade repaints on inlining) and apply-time CSS-specificity hardening. It orchestrates whatever design tools you already have — it does not replace them.
+
+**Rationed audit** — one skill for auditing a whole project *from* a scarce, expensive model without blowing the usage window:
+
+- **`deep-audit/`** — cheap Sonnet finders enumerate candidate defects across the surface; a **capped** few premium verifiers (refute-by-default) confirm only the high-value residue. The hard budget lever is the verifier `cap` — premium spend is bounded by it, not by codebase size (`cap: 0` is a free dry run that prices the audit before you commit premium tokens). Bundles `scripts/scout-then-verify.workflow.js`, the tested rationing engine (per-key accounting, a vacuity gate, overflow-deferred-not-dropped, and needsReverify safety). Uses `orchestrate` for the cheap fan-out.
 
 **Also ships: `recall-layer/`** — a standalone local memory recall layer over your memory/notes markdown: SQLite FTS5 keyword search plus an optional semantic half (local Ollama embeddings + sqlite-vec), with the hooks, index builders, and `/memory-search` / `/recall` / `/semantic-search` commands that wire it up. Not a skill — install and usage docs live in [`recall-layer/README.md`](recall-layer/README.md).
 
@@ -64,7 +68,7 @@ Copy each skill **directory** (SKILL.md *and* its `scripts/` subdir where presen
 cp -r skills/analyze-context skills/update-context skills/analyze-handoff skills/reflect-upgrades \
       skills/device-sync skills/device-handoff \
       skills/brainstorm skills/write-plan skills/execute-plan skills/orchestrate \
-      skills/design-variants \
+      skills/design-variants skills/deep-audit \
       ~/.claude/skills/
 ```
 

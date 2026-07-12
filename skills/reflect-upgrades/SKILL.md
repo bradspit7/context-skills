@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to reflect on whether the session warrants a new or upgraded tool, hook, subagent, skill, slash command, MCP, catalog entry, or rule. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", or proactively when a work session produced durable learnings. Routes generalizable upgrades to a central upgrades repo or catalog and project-specific ones to the current project. Surfaces and files candidates; it does not build them.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-09.2 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-12.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -54,11 +54,21 @@ scan above, ask — did this session contain a *reasoning miss* no existing tool
 (a blind spot, a wrong reading you corrected, an assumption that bit)? That is a different signal
 class from a tool-gap candidate: it needs a captured lesson, not a new tool. Append it as one
 dated line to the **self-audit log** in the central upgrades repo (`SELF-AUDIT.md` at its root;
-create it on first use) — a transcript-verifiable one-liner naming the miss and its mechanism.
-The reader is this same skill: **whenever it fires, first read the self-audit log's still-open
-entries** — any recurring or now-fixable miss becomes a Step-2 tooling candidate on this pass
-(mark the entry resolved when it does). That closed loop is what earns the capture; never open a
-write-only backlog.
+create it on first use) — a transcript-verifiable one-liner naming the miss and its mechanism,
+carrying the **two-state model**: `incident:` (was the specific occurrence corrected?) AND `system:`
+(is the systemic *lesson* encoded? — `unmitigated` / `candidate-filed(<id>)` / `guard-deployed` /
+`recurrence-seen`). The two axes are independent: an incident is routinely corrected in-session while
+its systemic lesson stays unencoded ("standing lesson, not yet a rule").
+
+The reader is this same skill: **whenever it fires, first re-read the self-audit log — every entry
+whose `system:` state is not yet `guard-deployed`**, not just the incident-open ones. A re-read
+scoped to "still-open incidents" drops exactly the corrected-incident/unmitigated-lesson entries this
+model exists to catch. Any still-unmitigated or now-fixable miss becomes a Step-2 tooling candidate on
+this pass — advance its `system:` state when it does (`candidate-filed(<id>)` when routed,
+`guard-deployed` once the mechanism lands + propagates). A **recurrence after deployment** — the same
+miss biting again after its guard shipped — **reopens the linked candidate and marks the prior
+mechanism ineffective** (`system: recurrence-seen`). That closed loop is what earns the capture;
+never open a write-only backlog.
 
 ## Step 3 — Filter (the anti-noise gate)
 
@@ -173,7 +183,8 @@ default 3; `UPGRADE_NUDGE_DISABLE=1` to silence). Pure stdlib, ASCII-only, fails
 
 ## Related
 - `SELF-AUDIT.md` (central upgrades repo root) — the self-audit log the Step-2 feeder writes and
-  this skill re-reads on every firing; the own-miss stream, paired with its reader.
+  this skill re-reads on every firing (every entry whose `system:` state is not `guard-deployed`, per
+  the two-state model above); the own-miss stream, paired with its reader.
 - `update-context` — invokes this at every wrap (Layer 1); its shipped / learned / decided signal
   feeds Step 1.
 - `hooks/upgrade-reflection-nudge.py` — the once-per-session `UserPromptSubmit` nudge (Layer 2).

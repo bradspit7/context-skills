@@ -245,16 +245,27 @@ else
   # incoherent). closedsec resets per file (FNR==1) so a Resolved section in one file can't bleed
   # into the next.
   CLOSED=$(awk '
+    # NEW-7: a table row subject is any dedicated cell whose TRIMMED content LEADS with a (bolded)
+    # G# id -- returns the space-separated ids from every such cell (handles a non-first G# column
+    # and a grouped "**G#a / G#b**" cell) while ignoring a G# mentioned mid-prose in a note cell.
+    function tabsubj(line,   n,i,parts,cell,c2,out) {
+      n=split(line,parts,"|"); out=""
+      for(i=1;i<=n;i++){ cell=parts[i]; sub(/^[[:space:]]+/,"",cell); sub(/[[:space:]]+$/,"",cell); sub(/^\*\*/,"",cell)
+        if(cell ~ /^G#[0-9]+/){ c2=cell; while(match(c2,/G#[0-9]+/)){ out=out" " (substr(c2,RSTART+2,RLENGTH-2)+0); c2=substr(c2,RSTART+RLENGTH) } } }
+      return out
+    }
     FNR==1 { closedsec=0 }
     /^#{1,6}[[:space:]]/ {
       h=tolower($0)
-      # Dedicated resolved-LEDGER heading closes its rows by membership; an OPEN-keyword heading ends
-      # it; a NEW top-level (##) heading also ends it -- INCLUDING a backward-looking "## Recently
-      # shipped" narrative, so a Recently-shipped bullet whose leading bold names a just-FILED OPEN id
-      # (e.g. "- **... G#88 filed**") is NOT mis-closed (NEW-5): it closes only via a leading glyph.
-      # "shipped" is deliberately NOT a section-closer. Deeper (###/####) descriptive sub-headings
-      # KEEP closedsec so resolved rows nested beneath them are not lost (P2-3).
-      if (h ~ /resolved|retired|archived|closed|dropped|completed|done/) closedsec=1
+      # A dedicated resolved-LEDGER heading closes its rows by membership; an OPEN-keyword heading
+      # ends it; a NEW top-level (##) heading also ends it. NEW-5: a backward-looking "## Recently
+      # shipped" NARRATIVE is NOT a ledger -- a bullet there whose leading bold names a just-FILED
+      # OPEN id ("- **... G#88 filed**") must NOT be mis-closed; it closes only via a leading glyph.
+      # But a DEDICATED "## Shipped" ledger IS a closer, so match "recently shipped" FIRST (exclude),
+      # then plain "shipped" (close). Deeper (###/####) descriptive sub-headings KEEP closedsec so
+      # resolved rows nested beneath them are not lost (P2-3).
+      if (h ~ /recently shipped/) closedsec=0
+      else if (h ~ /resolved|retired|archived|closed|dropped|completed|done|shipped/) closedsec=1
       else if (h ~ /open candidate|open work|open item|pick[ -]?up|next task|next step|next session|entry point/) closedsec=0
       else if ($0 ~ /^##[[:space:]]/) closedsec=0
       next
@@ -272,11 +283,11 @@ else
       }
     }
     match($0, /^[[:space:]]*\|/) {
-      # NEW-7: sanctioned TABLE docket row. First cell = the "G# column" (row subject). A close glyph
-      # ANYWHERE in the row also closes it (table status lives in a cell, not a leading token).
-      c=$0; sub(/^[[:space:]]*\|/,"",c); p=index(c,"|"); cell=(p>0)?substr(c,1,p-1):c
-      if (closedsec || index($0,"\342\234\205")>0 || index($0,"\342\235\214")>0 || index($0,"\342\233\224")>0) {
-        tmp=cell; while (match(tmp,/G#[0-9]+/)) { print substr(tmp,RSTART+2,RLENGTH-2)+0; tmp=substr(tmp,RSTART+RLENGTH) }
+      # NEW-7: sanctioned TABLE docket row. The "G# column" may be ANY dedicated cell (tabsubj), not
+      # only the first. A close glyph anywhere in the row also closes it (status lives in a cell).
+      subj=tabsubj($0)
+      if (subj!="" && (closedsec || index($0,"\342\234\205")>0 || index($0,"\342\235\214")>0 || index($0,"\342\233\224")>0)) {
+        m=split(subj,arr," "); for(k=1;k<=m;k++) print arr[k]
       }
     }
   ' ${COH_DOCKETS[@]+"${COH_DOCKETS[@]}"} 2>/dev/null | sort -un | tr "\n" " ")
@@ -289,6 +300,12 @@ else
   # The heading match is EXACT (anchored), not a substring: an arbitrary project's "## READY signal
   # timing fix" must NOT count, or it false-THRESHOLDs any non-convention HANDOFF (P1-1b).
   COH_OUT=$(awk -v CLOSEDLIST="$CLOSED" '
+    function tabsubj(line,   n,i,parts,cell,c2,out) {
+      n=split(line,parts,"|"); out=""
+      for(i=1;i<=n;i++){ cell=parts[i]; sub(/^[[:space:]]+/,"",cell); sub(/[[:space:]]+$/,"",cell); sub(/^\*\*/,"",cell)
+        if(cell ~ /^G#[0-9]+/){ c2=cell; while(match(c2,/G#[0-9]+/)){ out=out" " (substr(c2,RSTART+2,RLENGTH-2)+0); c2=substr(c2,RSTART+RLENGTH) } } }
+      return out
+    }
     BEGIN { nc=split(CLOSEDLIST,a," "); for(i=1;i<=nc;i++) if(a[i]!="") closed[a[i]+0]=1 }
     /^#{1,6}[[:space:]]/ {
       h=tolower($0)
@@ -307,8 +324,8 @@ else
       while (match(tmp,/G#[0-9]+/)) { n=substr(tmp,RSTART+2,RLENGTH-2)+0; if ((n in closed) && !(n in seen)) { seen[n]=1; print "STALE " n } tmp=substr(tmp,RSTART+RLENGTH) }
     }
     forward && match($0, /^[[:space:]]*\|/) {
-      c=$0; sub(/^[[:space:]]*\|/,"",c); p=index(c,"|"); cell=(p>0)?substr(c,1,p-1):c   # NEW-7: table docket row, first cell = the G# column
-      while (match(cell,/G#[0-9]+/)) { n=substr(cell,RSTART+2,RLENGTH-2)+0; if ((n in closed) && !(n in seen)) { seen[n]=1; print "STALE " n } cell=substr(cell,RSTART+RLENGTH) }
+      subj=tabsubj($0); m=split(subj,arr," ")   # NEW-7: G# subject from ANY dedicated cell, not only the first
+      for(k=1;k<=m;k++){ n=arr[k]+0; if ((n in closed) && !(n in seen)) { seen[n]=1; print "STALE " n } }
     }
     END { if (rs>1) print "RS " rs }
   ' "$COH_HANDOFF")
@@ -327,6 +344,14 @@ else
   for f in roadmap.md ./*docket*.md ./*_docket.md context/roadmap.md context/*docket*.md continuation/roadmap.md continuation/*docket*.md; do
     [ -f "$f" ] && { COH_PRIMARY="$f"; break; }
   done
+  # NEW-6: a memory-dir-only docket home must reach the COUNT recompute too, not just the CLOSED scan
+  # -- else a memory-dir docket misses the stale-count + self-contradiction checks. In-repo wins
+  # (precedence above); fall back to the same CANDIDATES memory dirs COH_DOCKETS uses.
+  if [ -z "$COH_PRIMARY" ]; then
+    for d in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
+      for f in "$d/roadmap.md" "$d"/*docket*.md; do [ -f "$f" ] && { COH_PRIMARY="$f"; break 2; }; done
+    done
+  fi
   if [ -n "$COH_PRIMARY" ]; then
     # NEW-2 (member-of-set): the DISTINCT stated open-counts (identical repeats collapse via sort -un).
     # A comparative phrase ("from 9 ... to 2 open candidates") yields multiple values; head -1 would
@@ -342,6 +367,12 @@ else
       #    so a valid-but-EMPTY docket (recomp 0) is still compared against a stale nonzero claim
       #    instead of being skipped as if no section existed (the live docket-exhaustion risk).
       COH_CRES=$(awk -v CLOSEDLIST="$CLOSED" '
+        function tabsubj(line,   n,i,parts,cell,c2,out) {
+          n=split(line,parts,"|"); out=""
+          for(i=1;i<=n;i++){ cell=parts[i]; sub(/^[[:space:]]+/,"",cell); sub(/[[:space:]]+$/,"",cell); sub(/^\*\*/,"",cell)
+            if(cell ~ /^G#[0-9]+/){ c2=cell; while(match(c2,/G#[0-9]+/)){ out=out" " (substr(c2,RSTART+2,RLENGTH-2)+0); c2=substr(c2,RSTART+RLENGTH) } } }
+          return out
+        }
         BEGIN { nc=split(CLOSEDLIST,a," "); for(i=1;i<=nc;i++) if(a[i]!="") closed[a[i]+0]=1 }
         FNR==1 { opensec=0 }
         /^#{1,6}[[:space:]]/ {
@@ -363,14 +394,10 @@ else
           }
         }
         opensec && match($0, /^[[:space:]]*\|/) {
-          # NEW-7: count table docket rows too, else P1-2 (valid open section, recompute 0) false-fires
-          # the count check on a sanctioned table docket. First cell = the G# column (row subject).
-          c2=$0; sub(/^[[:space:]]*\|/,"",c2); p=index(c2,"|"); cell=(p>0)?substr(c2,1,p-1):c2
-          while (match(cell,/G#[0-9]+/)) {
-            n=substr(cell,RSTART+2,RLENGTH-2)+0
-            if (n in closed) contra[n]=1; else ids[n]=1
-            cell=substr(cell,RSTART+RLENGTH)
-          }
+          # NEW-7: count table docket rows too (any dedicated G# cell), else P1-2 (valid open section,
+          # recompute 0) false-fires the count check on a sanctioned table docket.
+          subj=tabsubj($0); m=split(subj,arr," ")
+          for(k=1;k<=m;k++){ n=arr[k]+0; if (n in closed) contra[n]=1; else ids[n]=1 }
         }
         END { c=0; for(k in ids) c++; cc=0; for(k in contra) cc++; print c, valid+0, cc }
       ' "$COH_PRIMARY")

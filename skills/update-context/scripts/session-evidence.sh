@@ -7,18 +7,77 @@
 
 set -u
 
-# Echo the hold expiry date if an UNEXPIRED rotation-hold marker exists in any given file,
-# else echo nothing. Marker (HTML comment): <!-- rotation-hold: until YYYY-MM-DD reason -->
+# Emit the HEAD 'until' date of every ACTIVE rotation-hold marker in a file, one per line.
+# Marker (HTML comment): <!-- rotation-hold: until YYYY-MM-DD reason -->
+#
+# FAIL-SAFE bias (the design axis this function turns on): the dangerous failure is a
+# MISSED real marker -> a doc the author held gets rotated/archived = data loss. Over-holding
+# (dropping a documented example) is merely a deferred rotation the operator can see and undo.
+# So the marker match is PERMISSIVE (never miss a real one) and only HIGH-CONFIDENCE quotes are
+# rejected:
+#   - the comment body may contain '>' (only '-->' closes an HTML comment) and stray formatting
+#     backticks -> both tolerated, so an '-> arrow' or a code-formatted date never drops a marker;
+#   - only the HEAD 'until' date is read, so a date in the free-text reason cannot forge/mask a hold;
+#   - a marker is treated as QUOTED (ignored) only when it sits in a fenced code block (CommonMark
+#     rule: a CLOSING fence carries NO info string, so ```lang is content, not a close), a
+#     blockquote, an indented code block (>=4 spaces or a tab -- the writer emits markers at the
+#     top level, never indented), or is wrapped whole in inline-code backticks.
+_active_hold_dates() {
+  awk '
+    # Collect the head "until" date of each ACTIVE marker on a line: print it directly when
+    # buffer==0 (outside any fence), or hold it in buf[] when buffer==1 (inside a fence that has
+    # not yet closed) so it can be dropped on a real close or flushed if the fence never closes.
+    function scan(line, buffer,   rest, s, after, e, cmt, before, aft, d) {
+      rest = line
+      while ((s = index(rest, "<!--")) > 0) {
+        after = substr(rest, s + 4)
+        e = index(after, "-->")
+        if (e == 0) break                         # no closing --> : not a complete comment
+        cmt = substr(after, 1, e - 1)             # body (may contain > and backticks)
+        before = (s > 1) ? substr(rest, s - 1, 1) : ""
+        aft = substr(rest, s + 4 + e + 2, 1)      # char immediately after -->
+        if (before != "`" || aft != "`") {        # NOT wrapped whole in inline code
+          gsub(/`/, "", cmt)                       # drop formatting backticks inside the comment
+          if (match(cmt, /rotation-hold:[ \t]*until[ \t]+[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) {
+            d = substr(cmt, RSTART, RLENGTH); sub(/.*until[ \t]+/, "", d)
+            if (buffer) buf[++bn] = d; else print d
+          }
+        }
+        rest = substr(rest, s + 4 + e + 2)        # continue scanning after this comment
+      }
+    }
+    {
+      raw = $0
+      if (match(raw, /^ {0,3}(`{3,}|~{3,})/)) {    # a fence line (open or close)
+        m = substr(raw, RSTART, RLENGTH); sub(/^ +/, "", m)
+        mc = substr(m, 1, 1); ml = length(m)
+        if (!infence) { infence = 1; ofc = mc; ofl = ml; bn = 0; next }   # open: start buffering
+        rest2 = substr(raw, RSTART + RLENGTH)
+        if (mc == ofc && ml >= ofl && rest2 ~ /^[[:space:]]*$/) { infence = 0; bn = 0; next }  # bare CLOSE: buffered markers were truly fenced -> drop
+        next                                       # info-string / mismatched line: still fenced
+      }
+      if (infence)                 { scan(raw, 1); next }   # inside an as-yet-unclosed fence: buffer
+      if (raw ~ /^ {0,3}>/)        next            # blockquote  -> quoted
+      if (raw ~ /^(    |\t)/)      next            # indented code block -> quoted
+      scan(raw, 0)                                 # outside any fence: emit directly
+    }
+    END { if (infence) for (i = 1; i <= bn; i++) print buf[i] }  # UNCLOSED fence never really quotes -> flush (fail-safe: never miss a real marker)
+  ' "$1" 2>/dev/null
+}
+
+# Echo the expiry date of the first UNEXPIRED active rotation-hold marker across the given
+# files, else echo nothing. EVERY active marker's head date is evaluated, so an expired marker
+# never hides a later active one.
 _rotation_hold() {
   local today f d
   today=$(date +%Y-%m-%d 2>/dev/null) || return 0
   for f in "$@"; do
     [ -f "$f" ] || continue
-    d=$(grep -oE 'rotation-hold:[[:space:]]*until[[:space:]]+[0-9]{4}-[0-9]{2}-[0-9]{2}' "$f" 2>/dev/null \
-        | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)
-    [ -n "$d" ] || continue
-    [[ "$d" < "$today" ]] && continue   # expired marker — ignore
-    printf '%s' "$d"; return 0
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      [[ "$d" < "$today" ]] && continue   # expired marker — check the next one
+      printf '%s' "$d"; return 0          # first unexpired marker holds
+    done < <(_active_hold_dates "$f")
   done
   return 0
 }

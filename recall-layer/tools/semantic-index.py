@@ -67,6 +67,13 @@ CHUNK_HARD_MAX = 1800
 EMBED_CHAR_CAP = 8000  # final safety truncation before embedding
 BATCH = 64
 
+# Similarity floor (0-100%). SINGLE SOURCE for both the interactive query path and the
+# semantic-recall.sh hook (which reads it from here via --json's `below_floor` instead of
+# hardcoding its own copy). On-topic hits land ~62-63, off-topic ~55-59, so 58 catches the
+# relevant band. Rows below the floor are ANNOTATED, never silently dropped, so a near-miss
+# stays visible. Override per-invocation with --min-similarity.
+DEFAULT_MIN_SIMILARITY = 58
+
 
 def corpus_roots() -> list[Path]:
     env = os.environ.get("CLAUDE_FTS_ROOTS")
@@ -255,8 +262,26 @@ def rebuild(db_path: Path, quiet: bool = False) -> tuple[int, int, int]:
         conn.close()
 
 
+def _best_per_path(rows: list[tuple[str, float, str]],
+                   limit: int) -> list[tuple[str, float, str]]:
+    """Collapse to the nearest chunk per path. `rows` must already be ascending by
+    distance (nearest first): keep the first (closest) chunk seen for each path and
+    cap at `limit` distinct paths."""
+    seen: set[str] = set()
+    best: list[tuple[str, float, str]] = []
+    for path, dist, body in rows:
+        if path in seen:
+            continue
+        seen.add(path)
+        best.append((path, dist, body))
+        if len(best) >= limit:
+            break
+    return best
+
+
 def query(db_path: Path, q: str, limit: int,
-          http_timeout: float = 180) -> list[tuple[str, float, str]]:
+          http_timeout: float = 180,
+          distinct_paths: bool = False) -> list[tuple[str, float, str]]:
     if not db_path.exists():
         raise FileNotFoundError(
             f"Semantic index not found at {db_path}. Run with --rebuild first."
@@ -264,29 +289,39 @@ def query(db_path: Path, q: str, limit: int,
     conn = connect(db_path)
     try:
         qvec = embed_batch([q], QUERY_PREFIX, timeout=http_timeout)[0]
-        # sqlite-vec needs an explicit `k = ?` for the neighbor count when the
-        # vec0 table is joined (a bare LIMIT is ambiguous to it).
+        # A single long note produces many chunks, so the naive top-`limit` neighbours
+        # can be several chunks of ONE file, crowding out other distinct notes. When
+        # --distinct-paths is set, over-fetch a wider neighbour window then keep the
+        # closest chunk per path; default OFF returns the exact prior rows (back-compat).
+        # sqlite-vec needs an explicit `k = ?` for the neighbor count when the vec0
+        # table is joined (a bare LIMIT is ambiguous to it).
+        k = max(limit * 4, 40) if distinct_paths else limit
         cur = conn.execute(
             "SELECT c.path, v.distance, c.body "
             "FROM vec_chunks v JOIN chunks c ON c.id = v.rowid "
             "WHERE v.embedding MATCH ? AND k = ? ORDER BY v.distance",
-            (sqlite_vec.serialize_float32(qvec), limit),
+            (sqlite_vec.serialize_float32(qvec), k),
         )
-        return list(cur.fetchall())
+        rows = list(cur.fetchall())
     finally:
         conn.close()
+    return _best_per_path(rows, limit) if distinct_paths else rows
 
 
-def format_results(results: list[tuple[str, float, str]]) -> str:
+def format_results(results: list[tuple[str, float, str]],
+                   min_similarity: int | None = None) -> str:
     if not results:
         return "(no matches)"
     out = []
     for path, dist, body in results:
         # Cosine distance in [0,2]; smaller = closer. Show as a rough similarity %.
         sim = max(0.0, 1.0 - dist / 2.0) * 100.0
+        # Annotate (never drop) hits below the shared floor, so a near-miss stays visible.
+        mark = " [below floor]" if (
+            min_similarity is not None and round(sim) < min_similarity) else ""
         one_line = " ".join(body.split())
         snip = one_line[:200] + ("..." if len(one_line) > 200 else "")
-        out.append(f"[{sim:4.0f}% match] {path}\n  {snip}")
+        out.append(f"[{sim:4.0f}% match]{mark} {path}\n  {snip}")
     return "\n\n".join(out)
 
 
@@ -312,6 +347,13 @@ def main() -> int:
                         help=f"Index path (default {DB_PATH}).")
     parser.add_argument("--roots", action="store_true",
                         help="Print the resolved corpus roots and exit.")
+    parser.add_argument("--distinct-paths", action="store_true",
+                        help="Collapse to the nearest chunk per path (over-fetches "
+                             "neighbours first). Default off = exact prior behaviour.")
+    parser.add_argument("--min-similarity", type=int, default=DEFAULT_MIN_SIMILARITY,
+                        help="Similarity floor (percent) for below-floor annotation "
+                             f"(default {DEFAULT_MIN_SIMILARITY}; the single source the "
+                             "recall hook reads via --json below_floor).")
     args = parser.parse_args()
 
     if args.roots:
@@ -335,24 +377,29 @@ def main() -> int:
             # never crashes the caller or blocks a prompt.
             try:
                 results = query(args.db, args.query, args.limit,
-                                http_timeout=args.http_timeout)
+                                http_timeout=args.http_timeout,
+                                distinct_paths=args.distinct_paths)
             except BaseException:  # noqa: BLE001
                 print("[]")
                 return 0
             print(json.dumps([
                 {"path": p,
-                 "similarity": round(max(0.0, 1.0 - d / 2.0) * 100),
+                 "similarity": (sim := round(max(0.0, 1.0 - d / 2.0) * 100)),
+                 # Single-sourced floor: annotate (do not drop) so the hook can mark
+                 # weak hits instead of hardcoding + silently filtering its own copy.
+                 "below_floor": sim < args.min_similarity,
                  "snippet": " ".join(b.split())[:200]}
                 for p, d, b in results
             ]))
             return 0
         try:
             results = query(args.db, args.query, args.limit,
-                            http_timeout=args.http_timeout)
+                            http_timeout=args.http_timeout,
+                            distinct_paths=args.distinct_paths)
         except FileNotFoundError as e:
             print(str(e), file=sys.stderr)
             return 2
-        print(format_results(results))
+        print(format_results(results, min_similarity=args.min_similarity))
     return 0
 
 

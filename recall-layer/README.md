@@ -80,7 +80,7 @@ Run the wrapper through git-bash. **Enable "Run task as soon as possible after a
 
 ## Optional — always-on auto-recall (`hooks/semantic-recall.sh`)
 
-A `UserPromptSubmit` hook that injects the top semantic hits as context on every substantive prompt (so relevant past notes surface without invoking `/semantic-search`). Skips prompts under 25 chars and slash-commands, min-similarity 58, top-3, short HTTP timeout, **always exits 0 / fails silent**. Needs `jq` + the semantic venv. Tunables via `RECALL_MIN_SIMILARITY` / `RECALL_MAX_RESULTS` / `RECALL_HTTP_TIMEOUT`. Wire it:
+A `UserPromptSubmit` hook that injects the top semantic hits as context on every substantive prompt (so relevant past notes surface without invoking `/semantic-search`). Skips prompts under 25 chars and slash-commands; top-3; short HTTP timeout; **always exits 0 / fails silent**. The similarity floor is **single-sourced** in `tools/semantic-index.py` as `DEFAULT_MIN_SIMILARITY` (default 58); rows below it are **annotated `[below floor]`, not silently dropped**, so a near-miss stays visible (this injects the weak hit as context rather than hiding it — bounded to top-3). Recalled content is wrapped in an **untrusted-data fence** so it reads as data, not instructions. Needs `jq` + the semantic venv. Tunables via `RECALL_MIN_SIMILARITY` (overrides the shared floor) / `RECALL_MAX_RESULTS` / `RECALL_HTTP_TIMEOUT`. Wire it:
 
 ```json
 "hooks": { "UserPromptSubmit": [ { "hooks": [ {

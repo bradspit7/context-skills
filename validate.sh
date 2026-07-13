@@ -2,7 +2,8 @@
 # validate.sh - repo-level integrity gate for context-skills.
 #
 # Catches the drift classes that have actually bitten this repo:
-#   1. SKILL.md frontmatter rot (missing name/description, no --- delimiters)
+#   1. SKILL.md frontmatter rot (missing name/description, over-1024-char
+#      description that silently unregisters the skill, no --- delimiters)
 #   2. docs/skill-list drift (a skill dir not mentioned in README.md / CLAUDE.md)
 #   3. shell scripts that no longer parse (bash -n)
 #   4. python files that no longer compile
@@ -50,6 +51,22 @@ for d in skills/*/; do
   fm=$(sed -n "2,$((close-1))p" "$f")
   printf '%s\n' "$fm" | grep -q '^name:'        || FAIL "$s/SKILL.md: frontmatter missing 'name:'"
   printf '%s\n' "$fm" | grep -q '^description:' || FAIL "$s/SKILL.md: frontmatter missing 'description:'"
+  # description length: Claude Code silently UNREGISTERS a skill whose frontmatter
+  # description: exceeds 1024 CHARACTERS (not bytes) - no error is shown. Count
+  # codepoints locale-free (total bytes minus UTF-8 continuation bytes 0x80-0xBF)
+  # so multibyte em-dashes are not over-counted into a false failure. The 950 band
+  # is an advisory early-warning (note only), not an enforced limit.
+  desc=$(printf '%s\n' "$fm" | sed -n 's/^description:[[:space:]]*//p' | head -1)
+  if [ -n "$desc" ]; then
+    dnb=$(printf '%s' "$desc" | LC_ALL=C wc -c | tr -d ' ')
+    dnc=$(printf '%s' "$desc" | LC_ALL=C tr -cd '\200-\277' | LC_ALL=C wc -c | tr -d ' ')
+    dlen=$((dnb - dnc))
+    if [ "$dlen" -gt 1024 ]; then
+      FAIL "$s/SKILL.md: description is $dlen chars (>1024) - Claude Code silently unregisters it"
+    elif [ "$dlen" -ge 950 ]; then
+      note "WARN $s/SKILL.md: description $dlen chars - approaching the 1024 cap (advisory)"
+    fi
+  fi
 done
 
 # 2. every skill dir is named in both README.md and CLAUDE.md (catches list drift)

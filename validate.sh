@@ -94,7 +94,20 @@ fi
 #    the same shell validate.sh itself runs in, so that is already satisfied here.
 if [ -n "$PY" ]; then
   while IFS= read -r t; do
-    if "$PY" "$t" >/dev/null 2>&1; then OK "behavioral test: $t"; else FAIL "behavioral test: $t"; fi
+    out=$("$PY" "$t" 2>&1); rc=$?
+    if [ "$rc" -eq 0 ]; then
+      OK "behavioral test: $t"
+      # A test can PASS while skipping an optional leg (e.g. the jq-gated semantic-recall path on
+      # a box with no jq executable). Surface each skip as UNVERIFIED so a green gate never hides
+      # skipped coverage -- but do NOT fail this portable base gate on an optional dependency. A
+      # jq-equipped box runs the same leg and these lines simply do not appear.
+      while IFS= read -r s; do
+        [ -n "$s" ] && note "UNVERIFIED (optional leg skipped): $s"
+      done < <(printf '%s\n' "$out" | grep '^SKIP ' || true)
+    else
+      FAIL "behavioral test: $t"
+      printf '%s\n' "$out" | sed 's/^/     /'   # show the failure output (was suppressed)
+    fi
   done < <(gate_files 'tests/*.py')
 fi
 

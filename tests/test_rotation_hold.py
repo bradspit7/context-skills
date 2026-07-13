@@ -72,6 +72,10 @@ CASES = [
     ("Q_unclosed_fence_above_marker_holds",
      "## Commands\n%sbash\nbash bin/refresh-mirror.sh\n\n## Docket\n"
      "<!-- rotation-hold: until %s-06-06 keep -->\n" % (BT, F), "%s-06-06" % F),
+    ("R_backtick_infostring_is_not_a_fence",
+     # CommonMark: a backtick fence's info string may not contain a backtick, so ```lang`bad is
+     # NOT a valid opener -> the marker below it is LIVE, not fenced. Must hold (data-loss dir).
+     "%slang`bad\n<!-- rotation-hold: until %s-10-10 real -->\n%s\n" % (BT, F, BT), "%s-10-10" % F),
     # --- quoted / expired: must NOT hold ---
     ("B_inline_single_quoted",
      "see `<!-- rotation-hold: until %s-01-01 x -->` in prose\n" % F, ""),
@@ -79,6 +83,14 @@ CASES = [
      "see ``<!-- rotation-hold: until %s-02-02 x -->`` in prose\n" % F, ""),
     ("fenced_backtick", "%s\n<!-- rotation-hold: until %s-03-03 x -->\n%s\n" % (BT, F, BT), ""),
     ("fenced_tilde", "~~~\n<!-- rotation-hold: until %s-04-04 x -->\n~~~\n" % F, ""),
+    ("S_valid_backtick_infostring_still_fences",
+     # a backtick fence WITH a backtick-free info string is a real fence -> still suppress
+     # (accepts-good boundary: the fix must reject ONLY a backtick-bearing info string)
+     "%spython\n<!-- rotation-hold: until %s-11-11 x -->\n%s\n" % (BT, F, BT), ""),
+    ("T_tilde_infostring_with_tilde_still_fences",
+     # CommonMark permits tildes/backticks in a TILDE info string, so ~~~lang~bad IS a valid
+     # fence -> suppress (the fix is scoped to backtick fences only, per the reviewer)
+     "~~~lang~bad\n<!-- rotation-hold: until %s-12-12 x -->\n~~~\n" % F, ""),
     ("K_infostring_inner_fence",
      "%s\ninner example:\n%sbash\n<!-- rotation-hold: until %s-05-05 x -->\n%s\n"
      % (BT, BT, F, BT), ""),

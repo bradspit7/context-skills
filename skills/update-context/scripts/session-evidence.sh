@@ -51,7 +51,14 @@ _active_hold_dates() {
       if (match(raw, /^ {0,3}(`{3,}|~{3,})/)) {    # a fence line (open or close)
         m = substr(raw, RSTART, RLENGTH); sub(/^ +/, "", m)
         mc = substr(m, 1, 1); ml = length(m)
-        if (!infence) { infence = 1; ofc = mc; ofl = ml; bn = 0; next }   # open: start buffering
+        if (!infence) {
+          # CommonMark: a BACKTICK fence info string may not contain a backtick, so ```lang`x is
+          # a paragraph, not a fence. Rejecting it as an opener keeps a marker below it LIVE
+          # (fail-safe: never fence-suppress a real hold). Tilde fences allow ~ and ` in the info
+          # string, so this check is scoped to backtick openers only. (no apostrophes in this awk.)
+          if (mc == "`" && index(substr(raw, RSTART + RLENGTH), "`") > 0) { scan(raw, 0); next }
+          infence = 1; ofc = mc; ofl = ml; bn = 0; next                    # open: start buffering
+        }
         rest2 = substr(raw, RSTART + RLENGTH)
         if (mc == ofc && ml >= ofl && rest2 ~ /^[[:space:]]*$/) { infence = 0; bn = 0; next }  # bare CLOSE: buffered markers were truly fenced -> drop
         next                                       # info-string / mismatched line: still fenced

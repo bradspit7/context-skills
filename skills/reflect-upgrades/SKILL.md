@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to reflect on whether the session warrants a new or upgraded tool, hook, subagent, skill, slash command, MCP, catalog entry, or rule. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", or proactively when a work session produced durable learnings. Routes generalizable upgrades to a central upgrades repo or catalog and project-specific ones to the current project. Surfaces and files candidates; it does not build them.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-12.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-13.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -144,25 +144,28 @@ docket row, strengthen that row instead of filing a sibling.
 If nothing survives the filters, say so in one line: "No tooling upgrades warranted this session."
 That is a valid and common result.
 
-**Log the verdict (required, deterministic — the response side of the fires->outcome ledger):**
-whatever the outcome — filed, strengthened, deduped, or zero — record it:
+**Log the verdict (required — record every outcome; the response side of the fires->outcome
+ledger):** whatever the outcome — filed, strengthened, deduped, or zero — record it durably. The
+*record* is required; *where* and *how* you keep it is yours — a log line, a docket entry, an issue,
+your own tracking tool. Capture these fields:
 
-```bash
-python ~/.claude/upgrade-ledger.py record --layer <nudge|wrap|manual> \
-  --status <filed-central|filed-project|filed-catalog|strengthened-existing|dedup-existing|zero|other> \
-  --candidate "<ref>[,...]" --reason "<short>" [--session <uuid>]
+```text
+layer:     nudge | wrap | manual
+status:    filed-central | filed-project | filed-catalog | strengthened-existing | dedup-existing | zero | other
+candidate: <ref>[,...]        (- when none)
+reason:    <short>            (required when status is zero or other)
+session:   <uuid>            (when the session id is visible)
 ```
 
-`--status` is the strongest outcome (`filed-central` > `filed-project`/`filed-catalog` >
-`strengthened-existing`/`dedup-existing` > `zero`); list every ref in `--candidate` (`-` when none);
-`--reason` is required for `zero`/`other`. `--layer`: `nudge` when this reflection was prompted by the
-`[upgrade-reflection]` nudge, `wrap` when by update-context, `manual` otherwise. Add `--session` when
-the session id is visible (the UUID in the scratchpad path). If the tool is missing or the command
-fails, say so in the report — never silently skip. A fire with no recorded response reads as a
-dismissal in the ledger. For a SURVIVING candidate the only valid outcomes are `filed-*`,
-`strengthened-existing`, or `dedup-existing` — "surfaced-but-not-filed" is deliberately not a
-status, and `other` is not a parking lot for skipped filing; a report row without one of those
-outcomes means go back, file, then record.
+Use the **strongest applicable** `status` (`filed-central` > `filed-project`/`filed-catalog` >
+`strengthened-existing`/`dedup-existing` > `zero`); **list every ref** in `candidate` (`-` when none);
+`reason` is required for `zero`/`other`. `layer` is `nudge` when this reflection was prompted by the
+`[upgrade-reflection]` nudge, `wrap` when by update-context, `manual` otherwise; add `session` when the
+session id is visible (the UUID in the scratchpad path). If you can't record it anywhere in the moment, say so in your report — never
+silently skip: a fire with no recorded response reads as a dismissal. For a SURVIVING candidate the
+only valid outcomes are `filed-*`, `strengthened-existing`, or `dedup-existing` — "surfaced-but-not-filed"
+is deliberately not a status, and `other` is not a parking lot for skipped filing; a record without one
+of those outcomes means go back, file, then record.
 
 ## Do NOT
 - Build the upgrades — surface and file only (a trivial single-edit the user approves on the spot is

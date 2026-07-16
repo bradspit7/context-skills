@@ -131,9 +131,9 @@ def main():
         "project's docket. Nothing tool-worthy is a fine answer - and record whichever "
         "way it lands (the session id below makes the fires<->responses join exact; "
         "a considered zero is invisible otherwise): "
-        "python ~/.claude/upgrade-ledger.py record --layer nudge "
-        "--status <filed-central|filed-project|zero|...> "
-        "--candidate <ref or -> --reason \"...\" --session %s" % (signal, session_id)
+        "layer: nudge, "
+        "status: <filed-central|filed-project|zero|...>, "
+        "candidate: <ref or ->, reason: <short>, session: %s" % (signal, session_id)
     )
     try:
         sys.stdout.write(json.dumps({

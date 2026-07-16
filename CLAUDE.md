@@ -12,6 +12,8 @@ Local `main` is ahead of `origin/main` and **would fast-forward cleanly** — no
 
 **Lift only when** `git ls-remote origin refs/heads/main` reports a SHA *starting with* `d87c07b` (it prints the full 40-char hash, so match on the prefix — never string-equal the short form) — i.e. the pin has landed. After that a base move costs nothing: rebase local `main` onto the new tip, push normally, and delete this section.
 
+**Carve-out — the pinned push itself is NOT held.** This hold blocks pushing *other* commits to `main`. The gated apply's own terminal act — pushing the pinned SHA by explicit refspec (`git push origin d87c07b:refs/heads/main`) from the machine that holds the pin, after its own G5/G6 asserts — is the act this hold exists to protect: `d87c07b`'s parent *is* `97f54d2`, so it fast-forwards the pin into place rather than moving the base out from under it. Do not read "do not push `main`" as blocking it, or the hold deadlocks the thing it is guarding.
+
 Scope: `main` only. Other refs — feature/WIP branches tracking their own upstreams — are unaffected, since pushing those cannot move `main`.
 
 ## Sync discipline — read before editing anything

@@ -519,18 +519,24 @@ PLAN_FINDINGS=""
 for pf in ${PLAN_FILES[@]+"${PLAN_FILES[@]}"}; do
   PLAN_OUT=$(awk '
     # header region = every line before the FIRST "## " section heading (the preamble + status
-    # blockquotes). K_claim = the HIGHEST "Tasks 1<sep>K ...(implemented|done|complete)" frontier
-    # stated there (max across accreted checkpoints). A single "#"-level title does not close it.
+    # blockquotes). K_claim = the HIGHEST "Tasks 1<sep>K" frontier whose completion word
+    # (implemented|done|complete) FOLLOWS the range in the SAME CLAUSE (no . or ; between) -- so a mixed
+    # "Tasks 1-7 pending; Task 8 complete" does not bind "complete" to the pending 1-7 range (F14/c), and
+    # the leading [^a-z] stops "incomplete"/"unimplemented"/"undone" from counting as completion (F14/a).
+    # Fenced ``` regions are skipped so an EXAMPLE record/status inside a code block is not parsed (F14/d).
+    # The frontier VALUE is number-derived; the status word only GATES the extraction (not a polarity
+    # parse). A single "#"-level title does not close the header region.
+    /^```/ { infence = !infence; next }
     NR==1 { inhdr=1 }
-    /^##[[:space:]]/ { inhdr=0 }
-    inhdr {
+    /^##[[:space:]]/ { if (!infence) inhdr=0 }
+    inhdr && !infence {
       line=tolower($0)
-      if (line ~ /implemented|done|complete/ && match(line, /task[s]?[^0-9]*1[^0-9]+[0-9]+/)) {
+      if (match(line, /task[s]?[^0-9]*1[^0-9]+[0-9]+[^.;]*[^a-z](implemented|done|complete)/)) {
         seg=substr(line,RSTART,RLENGTH)
         if (match(seg, /[0-9]+[^0-9]*$/)) { k=substr(seg,RSTART)+0; if (k>kclaim) kclaim=k; haveclaim=1 }
       }
     }
-    # N_rec = the highest task number in a heading that says "execution record" AND is NOT marked
+    # N_rec = the highest task number in a NON-fenced heading that says "execution record" AND is NOT marked
     # not-done. A record whose heading carries a not-done disposition (the repo convention
     # "### Task N execution record -- <disposition>", e.g. "-- WIP / NO-GO at device handoff") means the
     # work is legitimately incomplete, so the TOP header correctly NOT claiming it is COHERENT, not a
@@ -539,7 +545,7 @@ for pf in ${PLAN_FILES[@]+"${PLAN_FILES[@]}"}; do
     # Disposition is read from the heading suffix; over-exclusion fails SAFE for this advisory -- it can
     # only miss a real lag (under-fire), never manufacture a bad rewrite. A plain "## Task N:" DEFINITION
     # heading is not a record and is deliberately ignored.
-    /^#{2,6}[[:space:]]/ {
+    !infence && /^#{2,6}[[:space:]]/ {
       hl=tolower($0)
       if (hl ~ /execution record/ && hl !~ /wip|no-?go|failed|pending|block|abandon|incomplete|deferred|not (yet )?(done|complete|implemented)|in progress|todo/ && match(hl, /task[^0-9]*[0-9]+/)) {
         seg=substr(hl,RSTART,RLENGTH)

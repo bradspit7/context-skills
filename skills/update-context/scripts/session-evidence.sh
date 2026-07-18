@@ -497,6 +497,58 @@ EOF2
   fi
 fi
 
+# == PLAN-DOC COHERENCE (G#211): a plan doc's TOP status header vs its own per-task execution records ==
+# The doc that RECORDS the work (a per-task execution record) and the doc/section that ROUTES the next
+# session (the plan's TOP status header) are different surfaces; a wrap that appends the record but
+# leaves the header stale sends the next session to redo finished work -- record correct, router
+# contradicts it, sometimes INSIDE THE SAME FILE (measured twice, G#211: a header
+# "Tasks 1-7 implemented" above a Task-8 execution record; a NO-GO/OPEN header above a Task-10 COMPLETE
+# record). CONSERVATIVE FRONTIER CHECK, by design: fire ONLY when the topmost "Tasks 1-K
+# implemented/done" claim counts FEWER tasks than the highest task that already carries an "execution
+# record" heading below. Two properties keep the false-positive rate near zero: (1) it parses task
+# NUMBERS, never status WORDS -- a doc that deliberately preserves an old NO-GO checkpoint beneath a
+# corrected top status never fires; (2) it takes the MAX stated frontier across the accreted header
+# checkpoints, so a stale lower checkpoint alongside a current higher one is not flagged. Encoding-
+# robust ([^0-9]+ spans an en/em-dash of any bytes so "Tasks 1-10" and "Tasks 1–– 10" both parse).
+# Read-only; degrades to a clean skip on any project with no plan docs. Independent of HANDOFF presence.
+PLAN_FILES=()
+while IFS= read -r pf; do [ -f "$pf" ] && PLAN_FILES+=("$pf"); done < <(
+  find docs context continuation -type f -path '*plans*' -name '*.md' 2>/dev/null
+)
+PLAN_FINDINGS=""
+for pf in ${PLAN_FILES[@]+"${PLAN_FILES[@]}"}; do
+  PLAN_OUT=$(awk '
+    # header region = every line before the FIRST "## " section heading (the preamble + status
+    # blockquotes). K_claim = the HIGHEST "Tasks 1<sep>K ...(implemented|done|complete)" frontier
+    # stated there (max across accreted checkpoints). A single "#"-level title does not close it.
+    NR==1 { inhdr=1 }
+    /^##[[:space:]]/ { inhdr=0 }
+    inhdr {
+      line=tolower($0)
+      if (line ~ /implemented|done|complete/ && match(line, /task[s]?[^0-9]*1[^0-9]+[0-9]+/)) {
+        seg=substr(line,RSTART,RLENGTH)
+        if (match(seg, /[0-9]+[^0-9]*$/)) { k=substr(seg,RSTART)+0; if (k>kclaim) kclaim=k; haveclaim=1 }
+      }
+    }
+    # N_rec = the highest task number in a heading that ALSO says "execution record" (the record
+    # surface). A plain "## Task N:" DEFINITION heading is not a record and is deliberately ignored.
+    /^#{2,6}[[:space:]]/ {
+      hl=tolower($0)
+      if (hl ~ /execution record/ && match(hl, /task[^0-9]*[0-9]+/)) {
+        seg=substr(hl,RSTART,RLENGTH)
+        if (match(seg, /[0-9]+/)) { r=substr(seg,RSTART)+0; if (r>nrec) nrec=r; haverec=1 }
+      }
+    }
+    END { if (haveclaim && haverec && kclaim < nrec) print kclaim, nrec }
+  ' "$pf")
+  if [ -n "$PLAN_OUT" ]; then
+    set -- $PLAN_OUT
+    PLAN_FINDINGS="${PLAN_FINDINGS:+$PLAN_FINDINGS
+}THRESHOLD plan doc ($pf) TOP status claims 'Tasks 1-$1 implemented' but a Task-$2 execution record exists below -- the routing header lags the record (rewrite the top status THIS run; append-record-and-update-routing are one commit, G#211)"
+  fi
+done
+[ -n "$PLAN_FINDINGS" ] && printf '%s\n' "$PLAN_FINDINGS"
+
 echo
 echo "== VERDICT =="
 echo "Every TRIAGE line needs a class (commit/delete/leave-untracked). Every THRESHOLD line triggers"

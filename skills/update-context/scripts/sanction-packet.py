@@ -5001,11 +5001,10 @@ def _receipt_target_state(lock: dict[str, Any], spec: dict[str, Any], target_id:
     # A rename can ALSO carry an executable-mode change: correct bytes at the new
     # path with the wrong mode is not fully at target.  current["mode"] is the new
     # (target) path's mode for a rename, so this target-side downgrade is exact.
-    # It fires only when the mode is observable (matching the modify at_target
-    # guard below, which stays TARGET on an unobservable platform); the base side
-    # (old path restored) is deliberately left to identity because current["mode"]
-    # describes the new path, not the old.  Delete has no target mode and stays
-    # excluded.
+    # Each branch fires only when its mode is observable (matching the modify
+    # at_target guard below, which stays TARGET on an unobservable platform --
+    # bytes/location still discriminate for a rename, so identity carries the
+    # verdict there, same as a byte-changing modify).
     if (
         op == "rename"
         and target_mode is not None
@@ -5014,6 +5013,35 @@ def _receipt_target_state(lock: dict[str, Any], spec: dict[str, Any], target_id:
         and at_target
         and current["mode_observable"]
         and not _mode_matches(current["mode"], target_mode, observable=current["mode_observable"])
+    ):
+        return "UNKNOWN"
+    # Symmetric BASE side (external review 2026-07-18, F4 residual): the OLD
+    # path restored to base bytes with a drifted mode is mode-drifted, not
+    # confidently BASE.  current["old_mode"]/["old_mode_observable"] describe
+    # the old path -- the same capture _freshness_state already compares -- so
+    # the earlier "current['mode'] describes the new path" rationale for
+    # leaving this side to identity was stale, not a justification.
+    if (
+        op == "rename"
+        and target_mode is not None
+        and base_mode is not None
+        and target_mode != base_mode
+        and at_base
+        and current["old_mode_observable"]
+        and not _mode_matches(current["old_mode"], base_mode, observable=current["old_mode_observable"])
+    ):
+        return "UNKNOWN"
+    # A delete target restored to base bytes with a drifted mode is likewise
+    # not confidently BASE (same review).  Delete has no target mode, so the
+    # gate is the locked base mode alone -- the comparison _freshness_state's
+    # delete path already makes at pre-apply.  A false BASE here feeds the
+    # receipt's "no live compensation needed" -- a silent all-clear.
+    if (
+        op == "delete"
+        and base_mode is not None
+        and at_base
+        and current["mode_observable"]
+        and not _mode_matches(current["mode"], base_mode, observable=current["mode_observable"])
     ):
         return "UNKNOWN"
     if mode_discriminates:
@@ -5243,7 +5271,21 @@ def write_partial_receipt(lock_path: Path, out: Path, failure_point: str, key_pa
             # evidence exists").
             compensation = "unsafe for automatic compensation: target was already-applied before this transaction (no transaction-ownership evidence); preserve and adjudicate"
         elif state == "TARGET":
-            compensation = "candidate: transaction-owned target still exact; restore only from captured base after recheck"
+            # A pre-apply target now at its target bytes reached them by SOME
+            # apply -- but the helper never writes targets (apply is external:
+            # there is no apply subcommand), so no identity-bound
+            # transaction-ownership evidence exists or can exist, and in a
+            # shared checkout a concurrent actor can have produced the same
+            # bytes.  Plan step: "compensation only when identity-bound
+            # transaction-ownership evidence exists" -- none can, so never
+            # recommend restoration (external review 2026-07-18, F2 residual;
+            # the sibling already-applied branch above applies the identical
+            # reasoning).
+            compensation = (
+                "unsafe for automatic compensation: pre-apply target reached "
+                "target bytes with no transaction-ownership evidence "
+                "(apply is external); preserve and adjudicate"
+            )
         elif state == "BASE":
             compensation = "no live compensation needed"
         else:

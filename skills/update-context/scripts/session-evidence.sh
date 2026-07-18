@@ -530,11 +530,18 @@ for pf in ${PLAN_FILES[@]+"${PLAN_FILES[@]}"}; do
         if (match(seg, /[0-9]+[^0-9]*$/)) { k=substr(seg,RSTART)+0; if (k>kclaim) kclaim=k; haveclaim=1 }
       }
     }
-    # N_rec = the highest task number in a heading that ALSO says "execution record" (the record
-    # surface). A plain "## Task N:" DEFINITION heading is not a record and is deliberately ignored.
+    # N_rec = the highest task number in a heading that says "execution record" AND is NOT marked
+    # not-done. A record whose heading carries a not-done disposition (the repo convention
+    # "### Task N execution record -- <disposition>", e.g. "-- WIP / NO-GO at device handoff") means the
+    # work is legitimately incomplete, so the TOP header correctly NOT claiming it is COHERENT, not a
+    # lag. (G#211/F12: reading record PRESENCE not DISPOSITION false-fired on coherent WIP device-handoff
+    # checkpoints and would have ordered a rewrite that MANUFACTURES the incoherence this check prevents.)
+    # Disposition is read from the heading suffix; over-exclusion fails SAFE for this advisory -- it can
+    # only miss a real lag (under-fire), never manufacture a bad rewrite. A plain "## Task N:" DEFINITION
+    # heading is not a record and is deliberately ignored.
     /^#{2,6}[[:space:]]/ {
       hl=tolower($0)
-      if (hl ~ /execution record/ && match(hl, /task[^0-9]*[0-9]+/)) {
+      if (hl ~ /execution record/ && hl !~ /wip|no-?go|failed|pending|block|abandon|incomplete|deferred|not (yet )?(done|complete|implemented)|in progress|todo/ && match(hl, /task[^0-9]*[0-9]+/)) {
         seg=substr(hl,RSTART,RLENGTH)
         if (match(seg, /[0-9]+/)) { r=substr(seg,RSTART)+0; if (r>nrec) nrec=r; haverec=1 }
       }

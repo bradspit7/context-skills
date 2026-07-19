@@ -212,7 +212,12 @@ log(`Scout done: ${scouts.length} usable, ${confirmed.length} confirmed → prem
     (overflow.length ? ` (CAPPED; ${overflow.length} overflow deferred, NOT dropped: ${overflow.map(o => o.key).join(', ')})` : ''))
 
 phase('Verify')
-let verified = [], verifyDropped = []
+// `adjudicated` = every item that reached a BINDING verdict (survived OR refuted). It is NOT the
+// clean set (that is `survivors`, survives===true only). Never NAME this `verified` — the value is
+// "the verify stage produced a verdict payload," which READS to a consumer as "is clean" while it
+// still holds refuted findings; a downstream keying on such a field misreads a flagged item as
+// real. Name it for what it checks.
+let adjudicated = [], verifyDropped = []
 if (toVerify.length > 0) {
   const opts = { phase: 'Verify', model: VERIFY_MODEL, effort: VERIFY_EFFORT, schema: VERIFY_SCHEMA }
   if (VERIFY_AGENT_TYPE) opts.agentType = VERIFY_AGENT_TYPE
@@ -220,19 +225,19 @@ if (toVerify.length > 0) {
     agent(verifyPrompt(candidateByKey[c.key], c), Object.assign({ label: `verify:${c.key}` }, opts))
       .then(v => v ? { scout: c, verify: v } : null)   // a null agent must STAY null — never wrap it into a truthy row
   ))
-  verified = rawVerify.filter(r => r && r.verify)
+  adjudicated = rawVerify.filter(r => r && r.verify)
   verifyDropped = toVerify.filter((c, i) => !(rawVerify[i] && rawVerify[i].verify)).map(c => c.key)
-  log(`Verify: ${toVerify.length} in -> ${verified.length} returned / ${verifyDropped.length} null(dropped): ${verifyDropped.join(', ') || '—'}`)
+  log(`Verify: ${toVerify.length} in -> ${adjudicated.length} returned / ${verifyDropped.length} null(dropped): ${verifyDropped.join(', ') || '—'}`)
 } else {
   log(`Verify: skipped (cap=${CAP}${CAP === 0 ? ' — triage-only dry run' : ', nothing confirmed'})`)
 }
 
-const survivors = verified.filter(r => r.verify.survives === true)
-log(`scout-then-verify: ${survivors.length} survivor(s) of ${verified.length} verified; ${needsReverify.length} needsReverify; ${overflow.length} overflow; ${holes.length} hole(s)`)
+const survivors = adjudicated.filter(r => r.verify.survives === true)
+log(`scout-then-verify: ${survivors.length} survivor(s) of ${adjudicated.length} adjudicated; ${needsReverify.length} needsReverify; ${overflow.length} overflow; ${holes.length} hole(s)`)
 
 return {
-  survivors,
-  verified,
+  survivors,       // survives===true ONLY — THE confirmed-real / clean set (what a consumer should act on)
+  adjudicated,     // reached a binding verdict (survived OR refuted); NOT clean — never read this as the real set
   needsReverify,
   triage: scouts,
   confirmed_count: confirmed.length,

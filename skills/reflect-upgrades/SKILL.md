@@ -175,6 +175,17 @@ drawn from `status` invalid. Put the scope on each ref instead (`<ref>@central`,
 reader *which repo holds that ref's receipt* — a central ref filed from inside a project session lives
 in the central repo, not in the directory the reflection ran in.
 
+**Tag each ref with where it ACTUALLY landed — never copy the scope from `status`.** The status is one
+strongest outcome for the whole ROW; it names neither which ref earned it nor, on its own, where that
+ref went. (Measured: a `filed-project` row whose single ref's own `reason` says the kernel was *filed
+to the central docket*. One counterexample is enough — a row-level status cannot be safely attributed
+to an individual candidate, even when the row names exactly one.) On a `filed-*` status the write path
+warns — non-blocking, the row still records — when a ref carries no tag, when a tag contradicts the
+status, **and when no ref is supplied at all**, since that filing then appears nowhere in the per-ref
+scope distribution. The warning deliberately never tells you which scope to use: prescribing one would
+persist a guess, and a *stored* tag (unlike a report-time label) decides which repo that ref's receipt
+is looked up in.
+
 Use the **strongest applicable** `status` (`filed-central` > `filed-project`/`filed-catalog` >
 `strengthened-existing`/`dedup-existing` > `zero`); **list every ref** in `candidate` (`-` when none);
 `reason` is required for `zero`/`other`. `layer` is `nudge` when this reflection was prompted by the

@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to reflect on whether the session warrants a new or upgraded tool, hook, subagent, skill, slash command, MCP, catalog entry, or rule. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", or proactively when a work session produced durable learnings. Routes generalizable upgrades to a central upgrades repo or catalog and project-specific ones to the current project. Surfaces and files candidates; it does not build them.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-13.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-24.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -33,6 +33,11 @@ From the conversation plus git state, list what this session actually produced: 
 decisions, debugged gotchas, repeated manual sequences, friction hit more than once, and any memory
 files written. If `update-context` already computed shipped / learned / decided / deferred, reuse it
 — do not recompute.
+
+**Scope note — this signal is REACTIVE by construction.** It is what the session *hit*. A capability
+this project ought to have but has never been bitten for lacking will not appear in it, and
+originating one is not this skill's job — that belongs to a generative vision-layer scan (see
+Related). Do not stretch Step 2 to invent one; do not route one back here.
 
 ## Step 2 — Scan against the upgrade surface
 
@@ -75,8 +80,13 @@ never open a write-only backlog.
 Every candidate must pass three filters:
 1. **Load-bearing test** — *would a future session act differently if this tool existed?* No -> drop
    it. Do not invent work to look productive.
-2. **De-dup** — check your central upgrades repo's docket and your catalog (if you keep one). Already
-   queued -> do not re-propose; point at the existing entry instead.
+2. **De-dup — against the corpus this candidate's ROUTE points at, not only the central one.** A
+   *generalizable* candidate: your central upgrades repo's docket and your catalog (if you keep one).
+   A *project-specific* candidate (Step 4's other branch): **that project's own docket / handoff** —
+   checking only the central corpus de-dups it against a corpus that structurally cannot contain its
+   duplicate, so the same project-local candidate can be re-filed session after session with nothing
+   noticing. A *dual-surface* candidate checks **both**. Already queued -> do not re-propose; point at
+   the existing entry instead.
 3. **Target-project-alive** — if the candidate's remediation *target* is a specific project, confirm
    that project is still active before filing (if you track project lifecycle status). A candidate
    targeting a discontinued or abandoned project is **dead work — do not file it**. (A dead project's
@@ -191,3 +201,10 @@ default 3; `UPGRADE_NUDGE_DISABLE=1` to silence). Pure stdlib, ASCII-only, fails
 - `update-context` — invokes this at every wrap (Layer 1); its shipped / learned / decided signal
   feeds Step 1.
 - `hooks/upgrade-reflection-nudge.py` — the once-per-session `UserPromptSubmit` nudge (Layer 2).
+- `/opportunity-scan` (ships in this repo's `project-scans/`) — the GENERATIVE counterpart. **The
+  boundary is reactive vs generative, not product vs tooling.** This skill is session-bound (Step 1),
+  so it surfaces tooling whose absence already bit; a project-native capability the project's own
+  shape implies — a project-specific skill, workflow, subagent, hook, command, or rule it should have
+  but has never been hurt for lacking — belongs to that scan's project-native-tooling lens. Neither
+  pass hands its own class to the other: a durable learning *this session generated* is this skill's,
+  and there is no step here that could receive a generative direction.

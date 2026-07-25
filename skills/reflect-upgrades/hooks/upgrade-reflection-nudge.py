@@ -133,7 +133,10 @@ def main():
         "a considered zero is invisible otherwise): "
         "layer: nudge, "
         "status: <filed-central|filed-project|zero|...>, "
-        "candidate: <ref or ->, reason: <short>, session: %s" % (signal, session_id)
+        "candidate: <ref or -> (tag each ref with its scope -- <ref>@central / @project / "
+        "@catalog -- because status keeps only the STRONGEST outcome, so a reflection that "
+        "files both ways loses its project leg unless the scope rides on the ref), "
+        "reason: <short>, session: %s" % (signal, session_id)
     )
     try:
         sys.stdout.write(json.dumps({

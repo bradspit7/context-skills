@@ -162,10 +162,18 @@ your own tracking tool. Capture these fields:
 ```text
 layer:     nudge | wrap | manual
 status:    filed-central | filed-project | filed-catalog | strengthened-existing | dedup-existing | zero | other
-candidate: <ref>[,...]        (- when none)
+candidate: <ref>[@central|@project|@catalog][,...]   (- when none; a bare ref reads as untyped)
 reason:    <short>            (required when status is zero or other)
 session:   <uuid>            (when the session id is visible)
 ```
+
+**Tag every ref with its SCOPE.** `status` records only ONE strongest outcome per reflection, so a
+reflection that filed centrally *and* project-locally records the central one and **loses the project
+leg entirely** — two real filings collapsed into one status, which makes any central-vs-project ratio
+drawn from `status` invalid. Put the scope on each ref instead (`<ref>@central`, `<ref>@project`,
+`<ref>@catalog`); a bare ref stays legal and reads as untyped. The scope is also what tells a later
+reader *which repo holds that ref's receipt* — a central ref filed from inside a project session lives
+in the central repo, not in the directory the reflection ran in.
 
 Use the **strongest applicable** `status` (`filed-central` > `filed-project`/`filed-catalog` >
 `strengthened-existing`/`dedup-existing` > `zero`); **list every ref** in `candidate` (`-` when none);

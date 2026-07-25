@@ -22,7 +22,7 @@ read across all fitting lenses.
 - **PROACTIVE + CREATIVE + product-focused:** "what should this project become, given its own stated vision and research?" You ARE allowed — encouraged — to propose net-new directions that are not in the docket.
 - **NOT `/ultracode-scan`.** That scan routes *existing docket work* to orchestration recipes and is anti-manufacture (zero is its common, correct result). This one deliberately goes *beyond* the docket. Do not relax `/ultracode-scan`'s gates to do this job — they are two complementary passes.
 - **NOT `brainstorm` (the skill).** `brainstorm` interactively designs a feature the user has *already named*. This scan reads a project cold and *surfaces* which directions are worth naming in the first place.
-- **NOT `reflect-upgrades`.** That routes durable *tooling* learnings (hooks/skills/rules) to the upgrades pipeline. This is about the *product/content* — game mechanics, content series, growth, depth. If a tooling idea surfaces here, leave it for reflect-upgrades.
+- **COMPLEMENTARY to `reflect-upgrades` — the boundary is REACTIVE vs GENERATIVE, not product vs tooling.** `reflect-upgrades` is session-bound: its Step 1 reads *what this session produced* and routes the friction the session actually hit, so it can only propose tooling whose absence already hurt. It has no step that can originate a capability nothing has forced yet. Therefore a **project-native tooling direction** — a skill, workflow, subagent, hook, command, or rule THIS project should have but has never been bitten for lacking — is **in scope here** and belongs in the ranked list like any other direction, judged by the work the project repeatedly does rather than by friction already logged. What still belongs to `reflect-upgrades` is a durable learning *this session generated* (a gotcha, a repeated manual step, a correction worth binding). **Do not hand a generative tooling direction back to it** — nothing there can receive one.
 
 ## Step 1 — Read the project's VISION cold (you have no memory of prior conversations)
 
@@ -36,7 +36,9 @@ If the project's vision/research docs are **thin**, say so — and mark your ide
 
 ## Step 2 — Ideate across creative lenses (be genuinely creative, not generic)
 
-Generate candidate directions across the lenses that fit this project: **new mechanic/system · new content/series · audience-growth/distribution · retention/depth · monetization (only if apt) · novel use of tech you already have · cross-pollination from a reference title or sibling project.**
+Generate candidate directions across the lenses that fit this project: **new mechanic/system · new content/series · audience-growth/distribution · retention/depth · monetization (only if apt) · novel use of tech you already have · cross-pollination from a reference title or sibling project · project-native tooling.**
+
+**The project-native-tooling lens** (fires in any project type, and is the one lens no other pass generates): read what this project *repeatedly does by hand* and what its own shape implies it will keep doing — its verify loop, its release/deploy ritual, its review habits, the file conventions it re-derives, the multi-step judgment its docket keeps replaying — and propose the skill / workflow / subagent / hook / command / rule that would make that native. Ground it the same way as every other lens: in this project's own materials, not in generic best practice. The test is *"this project does X often enough that X should be a capability"*, **never** *"this session hit friction Y"* — that second one is `reflect-upgrades`' job and is out of scope here.
 
 - Prefer the **non-obvious high-leverage** move over the safe one. Be a little contrarian.
 - **No filler.** Reject generic SaaS-brain suggestions (leaderboards, achievements, "add social sharing," "start a newsletter") unless one is genuinely the single highest-leverage move for *this specific project*.

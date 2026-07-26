@@ -42,6 +42,10 @@ import unicodedata
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 if os.name == "nt":
     import ctypes
     from ctypes import wintypes

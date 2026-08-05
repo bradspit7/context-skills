@@ -21,6 +21,68 @@ for m in HANDOFF.md context/HANDOFF.md CONTEXT.md CLAUDE.md continuation context
 done
 for pd in HANDOFF-*.md; do [ -e "$pd" ] && echo "present: $pd (multi-dev marker)"; done
 
+# ---------- RESUME CLASS emitter — called by BOTH the git and no-git paths ----------
+# G#359: this block used to live inside the git path only, so on a no-git project the
+# section the skill's routing contract keys on was ABSENT ENTIRELY — and an absent class
+# has no defined caller behaviour, so every no-git project paid the full deep read at
+# every session start, forever, including on textbook same-day resumes. A capability
+# advertised as "mechanical" that only one branch emits is not mechanical; it is
+# conditional on an environment property the caller is never told about.
+#
+# It lives in ONE function rather than two copies on purpose: a second copy kept in step
+# by a comment is exactly the drift this script would then be unable to detect in itself.
+#
+# Args: 1 doc · 2 age-in-hours ("" = unknown) · 3 reasons already accumulated
+#       4 provenance phrase for the clean line · 5 basis caveat for the clean line
+emit_resume_class() {
+  RC_DOC="$1"; RC_AGE_H="$2"; RC_REASONS="$3"; RC_PROV="$4"; RC_BASIS="$5"
+  echo
+  echo "== RESUME CLASS (routing signal: full briefing vs the slim analyze-handoff path) =="
+  # Mechanizes the analyze-context <-> analyze-handoff routing that invocation-time judgment
+  # measurably never performs (2026-07-04 audit: 0 slim-path uses in 204 sessions; 20+
+  # same-day resumes each paid the full briefing). The slim path requires ALL of: zero
+  # FINDING lines, doc written <24h ago, single-doc pattern, and a machine stamp MATCHING
+  # this host — an absent stamp cannot confirm the machine, so it forces the full briefing
+  # (fail-safe). The git path adds a commits-behind gate; see its call site.
+  # G#35 (2026-07-05): the stamp may sit MID-LINE in a combined header
+  # (`**Updated:** ... · **Machine:** X · **Branch:** ...`) — extract the segment wherever
+  # it appears instead of anchoring on line start. The old ^-anchored grep reported
+  # "no machine stamp" against stamped combined headers, silently forcing FULL on every
+  # resume in those projects (fail-safe held: cost-only, never a wrong slim read).
+  RC_STAMP=$(grep -m1 -oE '\*\*(Machine|Last write from):\*\* *[A-Za-z0-9_.-]+' "$RC_DOC" 2>/dev/null | sed -E 's/^\*\*(Machine|Last write from):\*\* *//')
+  RC_HOST=$(hostname 2>/dev/null)
+  RC_MULTIDEV=""
+  for pd in HANDOFF-*.md; do [ -e "$pd" ] && RC_MULTIDEV=1 && break; done
+  [ "${FINDINGS_N:-0}" -gt 0 ] && RC_REASONS="$RC_REASONS; ${FINDINGS_N} FINDING line(s) in the report (resolve source-of-truth first)"
+  # An UNDATEABLE doc can never yield SLIM. If the caller already explained why (the git
+  # path says "never committed", which is more useful than a generic message) the reason
+  # list is non-empty and FULL is already forced, so adding a second one would only be
+  # noise; if it did not, this fallback is what closes the gate. Either way SLIM is
+  # unreachable without a known age — checked in that order so the guarantee is structural
+  # rather than dependent on every caller remembering to supply a reason.
+  if [ -z "$RC_AGE_H" ]; then
+    [ -z "$RC_REASONS" ] && RC_REASONS="$RC_REASONS; cannot date $RC_DOC"
+  else
+    [ "$RC_AGE_H" -ge 24 ] && RC_REASONS="$RC_REASONS; $RC_DOC last written ${RC_AGE_H}h ago (>=24h)"
+  fi
+  [ -n "$RC_MULTIDEV" ] && RC_REASONS="$RC_REASONS; multi-dev pattern (per-dev files + feed need the full read)"
+  if [ -z "$RC_STAMP" ]; then
+    RC_REASONS="$RC_REASONS; no machine stamp in $RC_DOC (cannot confirm same machine)"
+  elif [ -n "$RC_HOST" ] && [ "$(printf '%s' "$RC_STAMP" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$RC_HOST" | tr '[:upper:]' '[:lower:]')" ]; then
+    RC_REASONS="$RC_REASONS; machine stamp '$RC_STAMP' != host '$RC_HOST' (machine switch -> device-sync, then the full briefing)"
+  fi
+  if [ -z "$RC_REASONS" ]; then
+    echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); ${RC_PROV}; machine stamp matches; single-doc pattern.${RC_BASIS}"
+    echo "=> UNLESS the user asked for a full briefing: take the SLIM PATH (analyze-handoff contract):"
+    echo "   read $RC_DOC fully, deliver the 3-line summary (last completed / next intended / blocker)"
+    echo "   PLUS the docket (open items by ID, one line each, preserving each row's status marker) from"
+    echo "   $RC_DOC's own next-tasks/open-items section -- or the separate docket file it points to, if any."
+    echo "   Then offer the full briefing on request. Skip the deep content reads (memory/specs/archive)."
+  else
+    echo "FULL BRIEFING — reason(s): ${RC_REASONS#; }"
+  fi
+}
+
 # ---------- no-git fallback ----------
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   echo
@@ -44,6 +106,22 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
       [ "$AGE_D" -gt 7 ] && echo "NOTE stale-doc-nogit: $f last modified ${AGE_D}d ago (>7d, no git to verify) — flag staleness in the briefing header; confirm currency from in-content dates"
     fi
   done
+  # G#359: emit the SAME routing signal here. The primary doc is the first that exists,
+  # matching the git path's $DOC selection; age comes from mtime rather than a commit,
+  # which is the only dating evidence a no-git project has. There is deliberately NO
+  # commits-behind analogue — a project with no history cannot have work land "after the
+  # wrap" in any observable way, so the gate is dropped rather than faked, and the class
+  # line says so instead of implying a check that did not run.
+  NG_DOC=""
+  for f in "${DOCS[@]}"; do [ -f "$f" ] && NG_DOC="$f" && break; done
+  if [ -n "$NG_DOC" ]; then
+    NG_EPOCH=$(date -r "$NG_DOC" '+%s' 2>/dev/null || stat -c '%Y' "$NG_DOC" 2>/dev/null || stat -f '%m' "$NG_DOC" 2>/dev/null)
+    NG_AGE_H=""
+    [ -n "${NG_EPOCH:-}" ] && NG_AGE_H=$(( ($(date +%s) - NG_EPOCH) / 3600 ))
+    emit_resume_class "$NG_DOC" "$NG_AGE_H" "" \
+      "$NG_DOC last modified ${NG_AGE_H:-?}h ago (mtime — no git)" \
+      " Basis: mtime + machine stamp only; no commits-behind check exists without git."
+  fi
   echo
   echo "== VERDICT =="
   echo "No git history to verify currency against. Any NOTE above => flag staleness in the briefing header; in-content dates are the staleness evidence."
@@ -251,52 +329,22 @@ printf '%s\n' "$REPORT"
 FINDINGS_N=$(printf '%s\n' "$REPORT" | grep -c '^FINDING')
 
 if [ -n "$DOC" ]; then
-  echo
-  echo "== RESUME CLASS (routing signal: full briefing vs the slim analyze-handoff path) =="
-  # Mechanizes the analyze-context <-> analyze-handoff routing that invocation-time judgment
-  # measurably never performs (2026-07-04 audit: 0 slim-path uses in 204 sessions; 20+
-  # same-day resumes each paid the full briefing). The slim path requires ALL of: zero
-  # FINDING lines (counted mechanically from the captured report), doc committed <24h ago,
-  # <=3 commits behind HEAD, single-doc pattern, and a machine stamp MATCHING this host —
-  # an absent stamp cannot confirm the machine, so it forces the full briefing (fail-safe).
+  # Git-path inputs to the shared emitter. Age comes from the last COMMIT touching the doc
+  # (reachability, not mtime), and this path adds the one gate the no-git path cannot have:
+  # commits landed after the wrap.
   LAST_DOC_SHA=$(git log -1 --format=%H -- "$DOC" 2>/dev/null)
   DOC_EPOCH=$(git log -1 --format=%ct -- "$DOC" 2>/dev/null)
   BEHIND_N=$(git rev-list --count "${LAST_DOC_SHA:-HEAD}"..HEAD 2>/dev/null)
-  # G#35 (2026-07-05): the stamp may sit MID-LINE in a combined header
-  # (`**Updated:** ... · **Machine:** X · **Branch:** ...`) — extract the segment wherever
-  # it appears instead of anchoring on line start. The old ^-anchored grep reported
-  # "no machine stamp" against stamped combined headers, silently forcing FULL on every
-  # resume in those projects (fail-safe held: cost-only, never a wrong slim read).
-  STAMP=$(grep -m1 -oE '\*\*(Machine|Last write from):\*\* *[A-Za-z0-9_.-]+' "$DOC" 2>/dev/null | sed -E 's/^\*\*(Machine|Last write from):\*\* *//')
-  HOSTN=$(hostname 2>/dev/null)
-  MULTIDEV=""
-  for pd in HANDOFF-*.md; do [ -e "$pd" ] && MULTIDEV=1 && break; done
+  GIT_REASONS=""
   AGE_H=""
-  REASONS=""
-  [ "${FINDINGS_N:-0}" -gt 0 ] && REASONS="$REASONS; $FINDINGS_N FINDING line(s) in the report (resolve source-of-truth first)"
   if [ -z "${DOC_EPOCH:-}" ]; then
-    REASONS="$REASONS; $DOC has no commit history (never committed)"
+    GIT_REASONS="$GIT_REASONS; $DOC has no commit history (never committed)"
   else
     AGE_H=$(( ($(date +%s) - DOC_EPOCH) / 3600 ))
-    [ "$AGE_H" -ge 24 ] && REASONS="$REASONS; last $DOC commit ${AGE_H}h ago (>=24h)"
   fi
-  [ "${BEHIND_N:-0}" -gt 3 ] && REASONS="$REASONS; $DOC is ${BEHIND_N} commits behind HEAD (work landed after the last wrap)"
-  [ -n "$MULTIDEV" ] && REASONS="$REASONS; multi-dev pattern (per-dev files + feed need the full read)"
-  if [ -z "$STAMP" ]; then
-    REASONS="$REASONS; no machine stamp in $DOC (cannot confirm same machine)"
-  elif [ -n "$HOSTN" ] && [ "$(printf '%s' "$STAMP" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$HOSTN" | tr '[:upper:]' '[:lower:]')" ]; then
-    REASONS="$REASONS; machine stamp '$STAMP' != host '$HOSTN' (machine switch -> device-sync, then the full briefing)"
-  fi
-  if [ -z "$REASONS" ]; then
-    echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); last $DOC commit ${AGE_H}h ago; ${BEHIND_N:-0} commit(s) since; machine stamp matches; single-doc pattern."
-    echo "=> UNLESS the user asked for a full briefing: take the SLIM PATH (analyze-handoff contract):"
-    echo "   read $DOC fully, deliver the 3-line summary (last completed / next intended / blocker)"
-    echo "   PLUS the docket (open items by ID, one line each, preserving each row's status marker) from"
-    echo "   $DOC's own next-tasks/open-items section -- or the separate docket file it points to, if any."
-    echo "   Then offer the full briefing on request. Skip the deep content reads (memory/specs/archive)."
-  else
-    echo "FULL BRIEFING — reason(s): ${REASONS#; }"
-  fi
+  [ "${BEHIND_N:-0}" -gt 3 ] && GIT_REASONS="$GIT_REASONS; $DOC is ${BEHIND_N} commits behind HEAD (work landed after the last wrap)"
+  emit_resume_class "$DOC" "$AGE_H" "$GIT_REASONS" \
+    "last $DOC commit ${AGE_H:-?}h ago; ${BEHIND_N:-0} commit(s) since" ""
 fi
 
 echo

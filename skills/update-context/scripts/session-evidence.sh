@@ -146,12 +146,21 @@ fi
 
 echo
 echo "== ROTATION SIGNALS =="
+# A project's pickup-point HEADER SHAPE and inline KEEP CEILING are both declarable.
+# A running log that uses its own header format (e.g. '**Last Updated:**' /
+# '**Prior:**' headers) counts 0 against the literal 'PICKUP POINT' forever, so the rotation
+# THRESHOLD can never fire and the miss reports as a clean zero. Declaring the ceiling
+# matters too: a project that legitimately keeps ~24 entries inline would otherwise trade
+# a permanent false zero for a permanent false alarm. Both defaults reproduce the generic
+# contract byte-for-byte. Siblings: READPATH_KB_LIMIT, MAXLINE_LIMIT.
+PICKUP_RE=${PICKUP_HEADER_RE:-PICKUP POINT}
+PICKUP_KEEP=${PICKUP_KEEP_LIMIT:-3}
 for w in continuation/context.md CONTEXT.md; do
   [ -f "$w" ] || continue
-  P=$(grep -c 'PICKUP POINT' "$w" 2>/dev/null); P=${P:-0}
+  P=$(grep -cE "$PICKUP_RE" "$w" 2>/dev/null); P=${P:-0}
   L=$(wc -l < "$w" | tr -d ' ')
   echo "$w: $L lines, $P pickup points"
-  [ "$P" -gt 3 ] && echo "THRESHOLD $w holds $P pickup points (keep newest 3 inline) — rotate older to archive this run"
+  [ "$P" -gt "$PICKUP_KEEP" ] && echo "THRESHOLD $w holds $P pickup points (keep newest $PICKUP_KEEP inline) — rotate older to archive this run"
 done
 if [ -f HANDOFF.md ]; then
   L=$(wc -l < HANDOFF.md | tr -d ' ')
@@ -179,10 +188,16 @@ for pd in HANDOFF-*.md; do
 done
 # Single-line accretion: rolling digests / SUPERSEDED chains hide tens of KB inside ONE
 # physical line, evading every line-count check above. Max-line-length is the detector.
+# Overridable for parity with its two sibling size checks (HANDOFF_STRUCT_KB_LIMIT,
+# READPATH_KB_LIMIT): a project whose log format is deliberately one dense entry per
+# physical line trips the literal every wrap with "acknowledge, do not act" as the only
+# correct response — a THRESHOLD that can only ever be ignored trains the wrap to ignore
+# THRESHOLDs. Declare a real ceiling in .claude/settings.json -> env instead.
+MAXLINE_LIMIT=${MAXLINE_LIMIT:-4000}
 for f in continuation/context.md CONTEXT.md HANDOFF.md context/HANDOFF.md HANDOFF-*.md; do
   [ -f "$f" ] || continue
   MAXLEN=$(LC_ALL=en_US.UTF-8 awk '{ if (length > m) m = length } END { print m+0 }' "$f")
-  [ "$MAXLEN" -gt 4000 ] && echo "THRESHOLD $f max line length ${MAXLEN} chars (>4000) — single-line accretion; rewrite that line to current state and archive the displaced history this run"
+  [ "$MAXLEN" -gt "$MAXLINE_LIMIT" ] && echo "THRESHOLD $f max line length ${MAXLEN} chars (>${MAXLINE_LIMIT}) — single-line accretion; rewrite that line to current state and archive the displaced history this run"
 done
 
 echo

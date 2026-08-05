@@ -17,6 +17,17 @@ to surface ONE off-focus direction when it is genuinely higher-leverage than any
 finding what the user didn't ask for is half this scan's value. No focus supplied = the default cold
 read across all fitting lenses.
 
+**When the focus names an operational FLOW** — an intake or onboarding flow, a billing/collections
+process, a release ritual, a support queue, any sequence a human actually walks — **ask for the user's
+OWN rundown of how it runs today, and rerun the scan against it.** A cold read reconstructs an ops flow
+from artifacts (code, docs, schemas) and reliably misses where the time actually goes, because the
+expensive steps are usually the ones nothing writes down. Offer it explicitly rather than waiting to be
+corrected: *"before I scan this flow — walk me through how it actually runs today, and I'll scan against
+that instead."* If the user declines or isn't available, scan cold but **label the flow-dependent
+directions as reconstructed from artifacts**, so their weaker grounding is visible. Measured: a rerun
+against the owner's own process rundown produced categorically better directions than the cold read that
+preceded it.
+
 ## What this is (and is not)
 
 - **PROACTIVE + CREATIVE + vision-focused:** "what should this project become, given its own stated vision and research?" You ARE allowed — encouraged — to propose net-new directions that are not in the docket.
@@ -69,7 +80,9 @@ Produce a **short, ranked findings list** (not prose):
 
 1. **Vision** — one sharp line: what this project is really trying to be (as you read it).
 2. **Reference anchors** — the proven titles / competitors / works it draws from.
-3. **Ranked directions (3–5, best-first).** For each: title · lens · pitch (1–2 concrete sentences) · why-this-project (why it fits THIS vision, not generic) · grounding (the project's-own-materials source you cite) · effort (S/M/L) · impact (why high-leverage) · orchestratable (would a multi-agent build help) · honesty (`novel-high-value` / `solid-extension` / `borderline-busywork`).
+3. **Ranked directions (3–5, best-first).** For each: title · lens · **pitch — in OPERATOR / BUSINESS-VALUE terms** (1–2 concrete sentences: who saves what time or money, what breaks less, what revenue or risk is protected) · **mechanism** (ONE line, *below* the pitch — the endpoint, surface, or plumbing it runs on) · why-this-project (why it fits THIS vision, not generic) · grounding (the project's-own-materials source you cite) · effort (S/M/L) · impact (why high-leverage) · orchestratable (would a multi-agent build help) · honesty (`novel-high-value` / `solid-extension` / `borderline-busywork`).
+
+   **Never lead with mechanism.** *"Probe the `/api/v2/visits` endpoint"* / *"add a second intake surface"* / *"wire a webhook"* tells the owner nothing about whether the direction is worth wanting — it describes the plumbing of an outcome they have not been given. Measured pushback on a scan that led with API mechanics, verbatim: *"What do these actually do for the business though? you didnt explain their actual usefullness very well at all."* The mechanism line exists so the owner can judge **feasibility** once they have already decided the **outcome** matters; it never substitutes for the outcome. Effort/orchestratable columns are mechanism too — they rank below the pitch, never in place of it.
 4. **Top pick** — the single highest-leverage direction and one line on why.
 5. **Creative thesis** — 2–3 sentences on where this project's real upside lives.
 

@@ -504,6 +504,131 @@ EOF2
     fi
   fi
 
+  # (d) G#208: a commit that CLAIMS to have shipped/closed a G# row whose row marker is still OPEN.
+  # Measured origin: a docket's own shipment log recorded 3 rows as shipped ("Phase 3a (68bcc23): #194
+  # + #200-t1 + #201 ... ship-check clean") while all 3 ROWS stayed open in the SAME file; the
+  # contradiction survived multiple sessions and two external-review passes, then sent a fresh
+  # 25-agent session at work already done.
+  #
+  # ADVISORY (INFO), never THRESHOLD and never auto-flipping -- both constraints come from the row and
+  # both are load-bearing: commits legitimately reference rows they do not close, and a row can be
+  # RIGHT to stay open (a tier-1 fix shipping does not close a row whose tier-2 is pending; one of the
+  # four measured fixes was genuinely incomplete). Auto-flipping here would reproduce the false-closure
+  # mechanism G#460 was built to stop.
+  #
+  # PRECISION, deliberately, and it took two cuts: a BARE mention of an id is NOT a claim. An ingest
+  # commit legitimately names every id it files (this repo's own ingest commits name 20+ open ids
+  # each), so firing on bare mentions would make this a permanently-noisy line that gets ignored --
+  # the disabled-gate failure this estate already documents.
+  #
+  # SAME-LINE co-occurrence of a verb and an id is ALSO too weak -- measured on this repo's own
+  # history, it produced 22 findings of which the large majority were prose ("...unreferenced URL
+  # (G#491); G#455 shipped the re-derivation..." puts `shipped` and G#491 on one physical line while
+  # asserting nothing about G#491). The predicate is therefore ADJACENCY: a closure verb and the id
+  # separated only by other ids, list separators, or a small filler set. That accepts the real
+  # shapes -- "close G#459, G#412, G#234" (one verb, a list) and "G#123 RESOLVED" (verb after) --
+  # and rejects prose where an unrelated clause sits between them.
+  # Accepted false-negatives, stated rather than discovered later: a claim whose verb is on a
+  # different line from the id, and one whose verb is separated from it by unlisted filler.
+  # Verb matching runs in awk (tolower + punctuation-folded, so "closes:" and "(fixed)" both match),
+  # never `grep -i`, which SIGABRTs on git-bash grep 3.0 with -F or 2+ patterns.
+  #
+  # SCOPE IS PRINTED, NOT IMPLIED (G#493): this reads COMMITTED history only (G#432 -- an uncommitted
+  # fix is invisible to it) and only the most recent SE_COMMIT_WINDOW commits. The complement is
+  # DERIVED and printed beside the verdict, and prints UNKNOWN rather than 0 if it cannot be derived,
+  # because 0 is the one value meaning "nothing was skipped".
+  SE_COMMIT_WINDOW="${SE_COMMIT_WINDOW:-200}"
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    # Every id that EXISTS as a docket row (leading-bold row subject or dedicated table cell). An id
+    # named by a commit but absent from the docket is NOT reported: it is an unknown/foreign id
+    # (another repo's numbering, a PR ref), not a stale row.
+    COH_ALLROWS=$(awk '
+      function tabsubj(line,   n,i,parts,cell,c2,out) {
+        n=split(line,parts,"|"); out=""
+        for(i=1;i<=n;i++){ cell=parts[i]; sub(/^[[:space:]]+/,"",cell); sub(/[[:space:]]+$/,"",cell); sub(/^\*\*/,"",cell)
+          if(cell ~ /^G#[0-9]+/){ c2=cell; while(match(c2,/G#[0-9]+/)){ out=out" " (substr(c2,RSTART+2,RLENGTH-2)+0); c2=substr(c2,RSTART+RLENGTH) } } }
+        return out
+      }
+      match($0, /^[[:space:]]*-[[:space:]]*\*\*[^*]+\*\*/) {
+        tmp=substr($0,RSTART,RLENGTH)
+        while (match(tmp,/G#[0-9]+/)) { print substr(tmp,RSTART+2,RLENGTH-2)+0; tmp=substr(tmp,RSTART+RLENGTH) }
+      }
+      match($0, /^[[:space:]]*\|/) { subj=tabsubj($0); m=split(subj,arr," "); for(k=1;k<=m;k++) print arr[k] }
+    ' ${COH_DOCKETS[@]+"${COH_DOCKETS[@]}"} 2>/dev/null | sort -un | tr "\n" " ")
+
+    COH_TOTALC=$(git rev-list --count HEAD 2>/dev/null || echo "")
+    if [ -z "$COH_TOTALC" ]; then
+      COH_SCANNED="UNKNOWN"; COH_SKIPPED="UNKNOWN"
+    else
+      COH_SCANNED="$COH_TOTALC"
+      [ "$COH_TOTALC" -gt "$SE_COMMIT_WINDOW" ] && COH_SCANNED="$SE_COMMIT_WINDOW"
+      COH_SKIPPED=$((COH_TOTALC - COH_SCANNED))
+    fi
+    COH_DIRTY=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
+    echo "INFO commit-vs-open-row scope: HEAD $(git rev-parse --short HEAD 2>/dev/null || echo '?'), scanned $COH_SCANNED of ${COH_TOTALC:-UNKNOWN} commit(s), $COH_SKIPPED NOT scanned; ${COH_DIRTY:-0} uncommitted change(s) NOT included (committed history only)"
+
+    COH_SHIPCLAIMS=$(git log -n "$SE_COMMIT_WINDOW" --format='%x01%h %s%n%b' 2>/dev/null | awk -v CLOSEDLIST="$CLOSED" -v ALLLIST="$COH_ALLROWS" '
+      BEGIN {
+        nc=split(CLOSEDLIST,a," "); for(i=1;i<=nc;i++) if(a[i]!="") closed[a[i]+0]=1
+        na=split(ALLLIST,b," ");    for(i=1;i<=na;i++) if(b[i]!="") known[b[i]+0]=1
+        nv=split("close closes closed closing fix fixes fixed resolve resolves resolved ship ships shipped land lands landed complete completes completed done",v," ")
+        for(i=1;i<=nv;i++) isverb[v[i]]=1
+        nf=split("the this that and plus also both all now row rows item items id ids docket",f," ")
+        for(i=1;i<=nf;i++) isfill[f[i]]=1
+      }
+      # A token chain is CLAIMED when a verb reaches the id through nothing but other ids or filler.
+      # "|" is a CLAUSE BREAK (";", ":", ".", "!", "?") and always disarms -- without it, prose like
+      # "...(G#491); G#455 shipped..." chains across the semicolon and reports G#491, which is the
+      # single largest false-positive source measured on the history of this repo.
+      #
+      # The two directions get DIFFERENT id-passthrough budgets, and the asymmetry is the point:
+      #   backward (verb BEFORE id) -- "close G#459, G#412, G#234, G#142, G#143" -- a list after a
+      #     verb is idiomatic and unambiguous, so an unlimited run of ids is allowed.
+      #   forward  (verb AFTER id)  -- "G#295/G#296 RESOLVED" -- is far likelier to be prose that
+      #     merely ends in a verb, so at most ONE intervening id is allowed. Measured: this is what
+      #     rejects "(G#411-G#412) and G#412 shipped" (2 intervening ids) while keeping the real
+      #     "G#295/G#296 RESOLVED" claim.
+      function reaches(t, n, from, step, maxids,   j, tok, ids) {
+        ids=0
+        for (j=from+step; j>=1 && j<=n; j+=step) {
+          tok=t[j]
+          if (tok=="") continue
+          if (tok=="|") return 0
+          if (isverb[tok]) return 1
+          if (isfill[tok]) continue
+          if (tok ~ /^g#[0-9]+$/) { ids++; if (maxids>=0 && ids>maxids) return 0; continue }
+          return 0
+        }
+        return 0
+      }
+      {
+        line=$0
+        # A record emitted by --format begins with \001<hash>; every other line is a body line
+        # belonging to the most recent header seen, so a multi-line body attributes correctly.
+        if (substr(line,1,1)=="\001") { line=substr(line,2); cur=line; sub(/ .*/,"",cur) }
+        # Clause terminators become an explicit break token FIRST, then the rest folds to spaces.
+        # "#" is kept so a G# id survives as one token, and "_" is kept so an identifier such as
+        # resolve_ref_repo() stays whole instead of shedding a bare "resolve" that reads as a verb
+        # (measured: that split alone produced two false positives on this repo).
+        vt=tolower(line); gsub(/[;:.!?]/," | ",vt); gsub(/[^a-z0-9#_|]+/," ",vt)
+        ntok=split(vt,tk," ")
+        for (i=1;i<=ntok;i++) {
+          if (tk[i] !~ /^g#[0-9]+$/) continue
+          n=substr(tk[i],3)+0
+          if (!(n in known) || (n in closed) || (n in seen)) continue
+          if (reaches(tk,ntok,i,-1,-1) || reaches(tk,ntok,i,1,1)) { seen[n]=1; print cur " G#" n }
+        }
+      }')
+    if [ -n "$COH_SHIPCLAIMS" ]; then
+      printf '%s\n' "$COH_SHIPCLAIMS" | while IFS=' ' read -r ch cid; do
+        [ -n "$cid" ] || continue
+        echo "INFO commit $ch claims to have shipped/closed $cid, but its row marker is still OPEN -- verify, then either close the row or record why it stays open. ADVISORY: do NOT auto-flip; a commit may legitimately reference a row it does not close, and a tier-1 fix shipping does not close a row whose tier-2 is pending"
+      done
+    else
+      echo "(no commit in the scanned window claims to have shipped/closed a still-open G# row)"
+    fi
+  fi
+
   [ -z "${CLOSED// /}" ] && echo "(no resolved-ledger G# rows detected -- open/closed ID cross-check skipped; ready-signal + count checks still ran)"
   if [ -n "$COH_FINDINGS" ]; then
     printf '%s\n' "$COH_FINDINGS"

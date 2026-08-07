@@ -39,8 +39,24 @@ def rotation_hold(md_text):
         fns = os.path.join(d, "_fns.sh")
         script = (
             "set -u\n"
-            "sed -n '/^_active_hold_dates() {/,/^}/p; /^_rotation_hold() {/,/^}/p' \"$SE\" > \"$FNS\"\n"
+            # Every function in the call chain must be extracted, INCLUDING helpers the
+            # named ones delegate to. `_active_hold_dates` became a thin wrapper over
+            # `_active_marker_values`; omitting the callee made the sourced shim call an
+            # undefined function, which returns EMPTY rather than erroring -- so every
+            # expects-a-date case failed while every expects-'' case kept passing, and the
+            # suite reported a partial pass instead of an obvious break.
+            "sed -n '/^_active_marker_values() {/,/^}/p; /^_active_hold_dates() {/,/^}/p;"
+            " /^_rotation_hold() {/,/^}/p' \"$SE\" > \"$FNS\"\n"
             "source \"$FNS\"\n"
+            # Fail LOUD if the chain is incomplete again: an undefined callee returns EMPTY,
+            # which is a legitimate expected value for half these cases -- so a silent break
+            # reads as a partial pass. Emit on STDOUT, not stderr: this harness compares
+            # stdout and DISCARDS stderr, so a stderr message is invisible to the operator
+            # (measured -- the first cut of this guard wrote to stderr and changed nothing).
+            # On stdout every case fails, including the expects-'' ones, and each names why.
+            "for f in _active_marker_values _active_hold_dates _rotation_hold; do\n"
+            "  command -v \"$f\" >/dev/null || { echo \"EXTRACTION-INCOMPLETE:$f\"; exit 3; }\n"
+            "done\n"
             "_rotation_hold \"$FX\"\n"
         )
         env = dict(os.environ, SE=SE, FNS=fns, FX=fx)

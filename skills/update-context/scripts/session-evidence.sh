@@ -606,6 +606,15 @@ EOF2
         # A record emitted by --format begins with \001<hash>; every other line is a body line
         # belonging to the most recent header seen, so a multi-line body attributes correctly.
         if (substr(line,1,1)=="\001") { line=substr(line,2); cur=line; sub(/ .*/,"",cur) }
+        # A commit message that QUOTES a closure claim is not making one. Strip double-quoted
+        # and backticked spans before tokenising. Found on the FIRST run of this gate against its
+        # own history: the commit that SHIPPED this check quotes the example "G#295/G#296 RESOLVED"
+        # in its body, and the gate read that quotation as a claim about two open rows. That is
+        # the same disease as a needle matching its own documentation -- a detector firing on
+        # prose ABOUT its subject -- and the fix is one structural rule (a quoted span is
+        # somebody else words), never a growing list of excluded phrases.
+        gsub(/"[^"]*"/, " ", line)
+        gsub(/`[^`]*`/, " ", line)
         # Clause terminators become an explicit break token FIRST, then the rest folds to spaces.
         # "#" is kept so a G# id survives as one token, and "_" is kept so an identifier such as
         # resolve_ref_repo() stays whole instead of shedding a bare "resolve" that reads as a verb

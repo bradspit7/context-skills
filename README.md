@@ -87,3 +87,7 @@ These skills evolved through real-use post-mortems (worktree staleness, wrong-br
 ## Modify freely
 
 These are starting points. Adapt trigger phrases, thresholds (40/60/100KB, pickup-point counts), and pattern detection to your own projects.
+
+## License
+
+[MIT](LICENSE) — copy, modify, redistribute, and use commercially; keep the copyright notice. Provided as is, without warranty.

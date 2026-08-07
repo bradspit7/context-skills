@@ -7,7 +7,18 @@
 
 set -u
 
-# Emit the HEAD 'until' date of every ACTIVE rotation-hold marker in a file, one per line.
+# Emit the captured VALUE of every ACTIVE marker matching an ERE, one per line.
+#
+# G#505: there are now TWO inline markers (rotation-hold, rotation-threshold) and there
+# will be more. The fence / blockquote / indented-code / inline-code awareness below is
+# the hard part and is easy to get subtly wrong, so it lives in ONE operation both
+# markers funnel through rather than being copied per marker (G#352). A second
+# hand-copied scanner is exactly the artifact nothing compares and that drifts silently
+# while its own callers keep passing (G#415).
+#
+# $1 = file, $2 = match ERE (applied to the comment body), $3 = ERE stripped from the
+# front of each match to leave the captured value.
+#
 # Marker (HTML comment): <!-- rotation-hold: until YYYY-MM-DD reason -->
 #
 # FAIL-SAFE bias (the design axis this function turns on): the dangerous failure is a
@@ -22,8 +33,8 @@ set -u
 #     rule: a CLOSING fence carries NO info string, so ```lang is content, not a close), a
 #     blockquote, an indented code block (>=4 spaces or a tab -- the writer emits markers at the
 #     top level, never indented), or is wrapped whole in inline-code backticks.
-_active_hold_dates() {
-  awk '
+_active_marker_values() {
+  awk -v pat="$2" -v strip="$3" '
     # Collect the head "until" date of each ACTIVE marker on a line: print it directly when
     # buffer==0 (outside any fence), or hold it in buf[] when buffer==1 (inside a fence that has
     # not yet closed) so it can be dropped on a real close or flushed if the fence never closes.
@@ -38,8 +49,8 @@ _active_hold_dates() {
         aft = substr(rest, s + 4 + e + 2, 1)      # char immediately after -->
         if (before != "`" || aft != "`") {        # NOT wrapped whole in inline code
           gsub(/`/, "", cmt)                       # drop formatting backticks inside the comment
-          if (match(cmt, /rotation-hold:[ \t]*until[ \t]+[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) {
-            d = substr(cmt, RSTART, RLENGTH); sub(/.*until[ \t]+/, "", d)
+          if (match(cmt, pat)) {
+            d = substr(cmt, RSTART, RLENGTH); sub(strip, "", d)
             if (buffer) buf[++bn] = d; else print d
           }
         }
@@ -70,6 +81,34 @@ _active_hold_dates() {
     }
     END { if (infence) for (i = 1; i <= bn; i++) print buf[i] }  # UNCLOSED fence never really quotes -> flush (fail-safe: never miss a real marker)
   ' "$1" 2>/dev/null
+}
+
+# Emit the HEAD 'until' date of every ACTIVE rotation-hold marker in a file, one per line.
+# Only the HEAD date is read, so a date in the free-text reason cannot forge or mask a hold.
+_active_hold_dates() {
+  _active_marker_values "$1" \
+    'rotation-hold:[ \t]*until[ \t]+[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]' \
+    '.*until[ \t]+'
+}
+
+# G#505: echo a doc's OWN declared rotation threshold for one key, else nothing.
+# Marker (HTML comment): <!-- rotation-threshold: pickup-points 24 -->
+#
+# WHY a structured marker and not the header prose: the doc that motivated this declares
+# its ceiling in an English sentence ("Rotate the TAIL (entries 4..N) ... when inline
+# entries exceed ~24"). A detector that parses English rotation instructions is the
+# needle-is-a-word trap the owed-review gate already shipped broken once (G#402), so the
+# pin must be declared in a shape a machine can read exactly.
+#
+# A MALFORMED marker matches nothing, so the generic default applies and any real excess
+# still raises a THRESHOLD. That is the visible direction: a spurious THRESHOLD is
+# something the operator sees and can fix, whereas silently adopting a garbled ceiling
+# would suppress a real rotation signal.
+_declared_threshold() {
+  [ -f "$1" ] || return 0
+  _active_marker_values "$1" \
+    "rotation-threshold:[ \t]*$2[ \t]+[0-9]+" \
+    ".*$2[ \t]+" | head -1
 }
 
 # Echo the expiry date of the first UNEXPIRED active rotation-hold marker across the given
@@ -154,13 +193,25 @@ echo "== ROTATION SIGNALS =="
 # a permanent false zero for a permanent false alarm. Both defaults reproduce the generic
 # contract byte-for-byte. Siblings: READPATH_KB_LIMIT, MAXLINE_LIMIT.
 PICKUP_RE=${PICKUP_HEADER_RE:-PICKUP POINT}
-PICKUP_KEEP=${PICKUP_KEEP_LIMIT:-3}
 for w in continuation/context.md CONTEXT.md; do
   [ -f "$w" ] || continue
   P=$(grep -cE "$PICKUP_RE" "$w" 2>/dev/null); P=${P:-0}
   L=$(wc -l < "$w" | tr -d ' ')
+  # G#505 precedence: the DOC's own marker > project env > generic default. The doc-local
+  # marker wins because it sits beside the content it governs — declaring the ceiling in
+  # .claude/settings.json instead splits one decision across two files, and the reader of
+  # the wiki cannot see the pin that governs it.
+  PINNED=$(_declared_threshold "$w" 'pickup-points')
+  if [ -n "$PINNED" ]; then PICKUP_KEEP=$PINNED; else PICKUP_KEEP=${PICKUP_KEEP_LIMIT:-3}; fi
   echo "$w: $L lines, $P pickup points"
-  [ "$P" -gt "$PICKUP_KEEP" ] && echo "THRESHOLD $w holds $P pickup points (keep newest $PICKUP_KEEP inline) — rotate older to archive this run"
+  if [ "$P" -gt "$PICKUP_KEEP" ]; then
+    echo "THRESHOLD $w holds $P pickup points (keep newest $PICKUP_KEEP inline) — rotate older to archive this run"
+  elif [ -n "$PINNED" ]; then
+    # Same fail-toward-visible shape as rotation-hold: the pin is still REPORTED, it is
+    # just not re-adjudicated. Silence here would be cheaper and wrong — the next wrap
+    # would have no way to see that a ceiling was ever declared.
+    echo "INFO $w pinned at $PICKUP_KEEP pickup points by the doc's own header ($P inline) — no action this run"
+  fi
 done
 if [ -f HANDOFF.md ]; then
   L=$(wc -l < HANDOFF.md | tr -d ' ')

@@ -27,6 +27,20 @@ A two-engine, fully-local recall layer over your Claude memory + notes. Nothing 
 2. `fts-roots.txt` next to the DBs (`~/.claude/memory-sync/fts-roots.txt`) — one dir per line, `#` comments allowed
 3. fallback: every `~/.claude/projects/*/memory` directory
 
+> **⚠ Read item 3 again before wiring an auto-recall hook — the default corpus is EVERY project, not the one you are sitting in.**
+> With no `CLAUDE_FTS_ROOTS` and no `fts-roots.txt`, the index covers all of `~/.claude/projects/*/memory`. That is a
+> deliberate and often useful default for on-demand `/recall` — you frequently *want* the answer you wrote down in another
+> project. But the always-on hooks below (`semantic-recall.sh`, `fts-recall.py`) inject their top hits as context on ordinary
+> prompts, so **one project's session will surface excerpts of another project's notes, by design**. If your projects include
+> client work, anything under NDA, or material you keep separated for any reason, set explicit roots **before** wiring a hook:
+>
+> ```bash
+> printf '%s\n' "$HOME/.claude/projects/<this-project-slug>/memory" > ~/.claude/memory-sync/fts-roots.txt
+> ```
+>
+> The on-demand commands (`/recall`, `/memory-search`, `/semantic-search`) have the same reach — the difference is only that
+> you invoked them. Scope is a property of the roots, never of which project you happen to be in.
+
 Point both indexers at the identical roots and the two DBs cover the same corpus by construction. Both skip `.git/.obsidian/node_modules/.venv/__pycache__/vendor/worktrees` and `.bak/.tmp/.swp` files. A note is keyword-findable right after an FTS rebuild; semantic-findable after the next vector rebuild — so if recency matters, lean on FTS (its rebuilds are cheap).
 
 ---
@@ -85,9 +99,13 @@ A `UserPromptSubmit` hook that injects the top semantic hits as context on every
 ```json
 "hooks": { "UserPromptSubmit": [ { "hooks": [ {
   "type": "command",
-  "command": "bash %USERPROFILE%/.claude/hooks/semantic-recall.sh"
+  "command": "bash \"$HOME/.claude/hooks/semantic-recall.sh\""
 } ] } ] }
 ```
+
+Note `$HOME`, not `%USERPROFILE%`: this command runs under **bash**, where `%USERPROFILE%` is a literal
+string that never expands (it is `cmd.exe` syntax, correct only in the `schtasks` block above). If your
+setup resolves neither, hardcode the absolute path — see the note under the keyword hooks below.
 
 The on-demand `/recall` works fully without the hook — the hook is just the ambient version.
 
@@ -105,15 +123,29 @@ cp hooks/fts-recall.py hooks/fts-refresh.py ~/.claude/hooks/   # the wiring belo
 ```json
 "hooks": {
   "UserPromptSubmit": [ { "hooks": [ {
-    "type": "command", "command": "python %USERPROFILE%/.claude/hooks/fts-recall.py", "shell": "bash"
+    "type": "command", "command": "python \"$HOME/.claude/hooks/fts-recall.py\"", "shell": "bash"
   } ] } ],
   "SessionStart": [ { "hooks": [ {
-    "type": "command", "command": "python %USERPROFILE%/.claude/hooks/fts-refresh.py", "shell": "bash"
+    "type": "command", "command": "python \"$HOME/.claude/hooks/fts-refresh.py\"", "shell": "bash"
   } ] } ]
 }
 ```
 
-Use a real `python` (not the MS Store `python3` stub on Windows). Composes with `semantic-recall.sh` — run keyword now, add semantic later, or both.
+**Two Windows gotchas, both learned the hard way — the working configuration hardcodes absolute paths for
+each.** (1) `"shell": "bash"` means `%USERPROFILE%` never expands; it is `cmd.exe` syntax and arrives as a
+literal. Use `$HOME`, or an absolute path. (2) Use a **real** `python` — bare `python3` on Windows resolves
+to a Microsoft Store *App Execution Alias* stub that opens the Store instead of running anything, and a hook
+firing on every prompt will do that every time. Installing Python does not fix it; the alias is the problem.
+
+The most robust form on Windows is fully absolute on both halves, which is what a long-running setup
+converges to anyway:
+
+```json
+{ "type": "command", "shell": "bash",
+  "command": "C:/Users/<you>/AppData/Local/Programs/Python/Python311/python.exe C:/Users/<you>/.claude/fts-recall.py" }
+```
+
+Composes with `semantic-recall.sh` — run keyword now, add semantic later, or both.
 
 ---
 

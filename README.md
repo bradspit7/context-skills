@@ -78,7 +78,18 @@ Or install individual skills with the [skills CLI](https://skills.sh):
 npx skills add bradspit7/context-skills -s brainstorm -a claude-code -g -y
 ```
 
-Claude Code auto-discovers them on session start. The lifecycle scripts are plain bash and run on Windows git-bash and macOS alike; if a script is missing, each SKILL.md carries an inline fallback. The process-suite skills are SKILL.md-only.
+Claude Code auto-discovers **skills** on session start. The lifecycle scripts are plain bash and run on Windows git-bash and macOS alike; if a script is missing, each SKILL.md carries an inline fallback. The process-suite skills are SKILL.md-only.
+
+**Hooks are NOT auto-discovered — copying is not installing.** `reflect-upgrades` bundles a once-per-session `UserPromptSubmit` nudge at `skills/reflect-upgrades/hooks/upgrade-reflection-nudge.py`. The `cp -r` above puts the file on disk and nothing else: until it is registered in `settings.json` it never fires, and the failure is silent — the skill still works when invoked by name, so the only symptom is a nudge that never arrives. Register it explicitly:
+
+```json
+"hooks": { "UserPromptSubmit": [ { "hooks": [ {
+  "type": "command", "shell": "bash",
+  "command": "python \"$HOME/.claude/skills/reflect-upgrades/hooks/upgrade-reflection-nudge.py\""
+} ] } ] }
+```
+
+On Windows use a real `python` and prefer absolute paths for both interpreter and script — bare `python3` resolves to a Microsoft Store alias stub that opens the Store rather than running the hook, and `%USERPROFILE%` does not expand under `"shell": "bash"`. The same applies to the recall layer, whose hooks and index builders need their own wiring — see [`recall-layer/README.md`](recall-layer/README.md), and read its corpus-scope warning before enabling always-on recall.
 
 ## Spec lineage
 

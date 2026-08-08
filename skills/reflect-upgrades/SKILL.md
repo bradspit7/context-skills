@@ -114,7 +114,14 @@ Step 3's load-bearing test still applies.
 reachable by its local path even when the session is rooted elsewhere. File as a **new committed inbox
 file**, never an uncommitted edit to a live central doc: write `DOCKET-INBOX-<date>-<project>.md` at
 the central repo root (rows in docket style, unnumbered — ids are allocated at ingest, which also
-removes counter contention between concurrent filers), **commit it immediately**, and **show the user
+removes counter contention between concurrent filers), **commit it immediately** — and prefer an
+**atomic filer** over `git add && git commit` if your central repo is ever open in more than one
+session at a time. Build the commit in a *temporary* index rather than the shared one (`git read-tree`
+→ `git update-index --add` the single file → `git write-tree` → `git commit-tree` → a compare-and-swap
+`git update-ref`). That is sweep-immune in both directions — a concurrent session's staged work cannot
+land in your filing and yours cannot be swept into theirs — it lands on the branch you name regardless
+of what is checked out, and it retries a concurrent tip move instead of losing it. Plain
+`git add && git commit` of the one file is the fallback, not the default. Then **show the user
 the receipt (path + short sha) in this session's report** — "filed" means a quotable commit, never
 "it's in a working tree." A new file bundles no unrelated work and cannot be clobbered by a concurrent
 session or a snapshot rewrite of the doc it would otherwise have edited. Your next central session

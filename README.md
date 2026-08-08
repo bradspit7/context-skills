@@ -95,6 +95,10 @@ On Windows use a real `python` and prefer absolute paths for both interpreter an
 
 These skills evolved through real-use post-mortems (worktree staleness, wrong-branch drift, post-merge branch resurrection, untracked-artifact loss, speculative wraps, black-box-datamine false negatives). The v2 rewrite preserved every hardening rule from that lineage — three-source triangle, untracked-file triage with git as the ignore authority, porcelain-derived audit artifacts, append-only-with-corrections, no-unverified-negatives, date-drift flagging, machine/branch header stamps, auto-commit-never-push — stated once, enforced by script where possible, and verified by executing the skills against the real projects that produced the original failures.
 
+## Provenance markers
+
+Comments in the bundled scripts occasionally carry `G#NNN` tokens (e.g. `G#505`). These cite entries in the maintainer's private engineering docket — the incident record that motivated the surrounding code. Treat them as opaque provenance citations: the comment beside each one always states the operative rationale in full, so nothing in these scripts requires resolving a `G#` to understand or modify it. Published `SKILL.md` files are kept free of these tokens; scripts deliberately keep them so the design rationale stays traceable for the maintainer.
+
 ## Modify freely
 
 These are starting points. Adapt trigger phrases, thresholds (40/60/100KB, pickup-point counts), and pattern detection to your own projects.

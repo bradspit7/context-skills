@@ -128,6 +128,72 @@ _rotation_hold() {
   return 0
 }
 
+# Repo-relative docket/roadmap homes. ONE definition, TWO consumers with different filters:
+# the session-start READ PATH (this list + each memory dir's MEMORY.md) and the COHERENCE
+# ledger scan (this list PLUS the HANDOFF, which is a legitimate source of resolved-row ids
+# but must stay OUT of the read-path sum -- it carries its own HANDOFF_STRUCT_KB_LIMIT ceiling
+# and its own rotation hold, and counting it twice would make one oversized HANDOFF fire two
+# THRESHOLDs prescribing two different rotations).
+#
+# Why a shared function and not a second glob list: a measuring gate whose glob misses a home
+# does not report an improvement, it reports its own blindness (G#228) -- and a roster that
+# shares the implementation's boundary cannot fail (G#447). The read path had exactly that bug:
+# its sum lived INSIDE `for MEMDIR in CANDIDATES` and looked only at "$MEMDIR"/roadmap.md, so a
+# project whose docket sits at the REPO ROOT had its largest session-start artifact counted by
+# nothing (measured: a 1,199,627 B root roadmap.md printed as a 10KB read path), and a project
+# with NO memory dir never entered the loop at all -- printing silence rather than UNKNOWN.
+# Requires CANDIDATES to be resolved (the MEMORY HEALTH pass), so call it no earlier.
+#
+# A `*docket*` SUBSTRING glob is not a docket test, and both directions were measured live:
+# it MISSES `docs/DOCKET-ACTIVE.md` (CRELIO's real docket -- ALL-CAPS, and in a `docs/` home
+# neither glob reached, so that project's session-start cost was reported as its MEMORY.md
+# alone), and it ADMITS things that are not the docket and are not read at session start --
+# a transient `DOCKET-INBOX-*.md` cross-repo filing, and an on-demand memory TOPIC file whose
+# name merely mentions dockets (`docket_rederivation_2026-08-19.md`, 25KB, which the old sum
+# was silently counting while this very check's text promised topic files are "NOT the cause").
+# So: enumerate case-insensitively, then require a declared docket BASENAME. A project using
+# some other name is not silently dropped -- it lands in the complement the read path prints.
+#
+# $2 = "strict" for a MEMORY DIR, where the PREFIX form is not admitted. A memory dir's other
+# contents are on-demand TOPIC files by definition, and the two shapes are indistinguishable by
+# name: `docs/DOCKET-ACTIVE.md` (CRELIO's real docket) and `continuation/memory/
+# docket_rederivation_2026-08-19.md` (a 25KB one-off note) are both `docket<sep>*.md`. Location
+# is the honest discriminator -- a project-level docket lives at a project home, so the prefix
+# form is admitted there and not inside a memory dir. The SUFFIX forms (`* docket.md`,
+# `*_docket.md`, `*-docket.md`) are admitted everywhere: the separator may be a SPACE, which the
+# committed coherence suite pins with a real `my docket.md` fixture -- a first cut of this
+# predicate dropped it, and that test is what caught it.
+_is_docket_name() {
+  local b had_ncm rc=1
+  b=${1##*/}
+  shopt -q nocasematch && had_ncm=1 || had_ncm=0
+  shopt -s nocasematch
+  case "$b" in
+    docket-inbox-*) rc=1 ;;                                      # transient filing, not the docket
+    roadmap.md|docket.md|*[-_" "]docket.md) rc=0 ;;
+    docket[-_" "]*.md) [ "${2:-}" = strict ] || rc=0 ;;
+  esac
+  [ "$had_ncm" = 1 ] || shopt -u nocasematch
+  return $rc
+}
+_docket_files() {
+  local f d had_ncg
+  shopt -q nocaseglob && had_ncg=1 || had_ncg=0
+  shopt -s nocaseglob
+  for f in roadmap.md docket.md ./*docket*.md ./*_docket.md \
+           context/roadmap.md context/*docket*.md \
+           continuation/roadmap.md continuation/*docket*.md \
+           docs/roadmap.md docs/*docket*.md; do
+    [ -f "$f" ] && _is_docket_name "$f" && printf '%s\n' "$f"
+  done
+  for d in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
+    for f in "$d/roadmap.md" "$d"/*docket*.md; do
+      [ -f "$f" ] && _is_docket_name "$f" strict && printf '%s\n' "$f"
+    done
+  done
+  [ "$had_ncg" = 1 ] || shopt -u nocaseglob
+}
+
 echo "== MACHINE =="
 hostname
 
@@ -186,8 +252,8 @@ fi
 echo
 echo "== ROTATION SIGNALS =="
 # A project's pickup-point HEADER SHAPE and inline KEEP CEILING are both declarable.
-# A running log that uses its own header format (e.g. '**Last Updated:**' /
-# '**Prior:**' headers) counts 0 against the literal 'PICKUP POINT' forever, so the rotation
+# A running log that uses its own header format (RRWEBSITE writes '**Last Updated:**' /
+# '**Prior:**') counts 0 against the literal 'PICKUP POINT' forever, so the rotation
 # THRESHOLD can never fire and the miss reports as a clean zero. Declaring the ceiling
 # matters too: a project that legitimately keeps ~24 entries inline would otherwise trade
 # a permanent false zero for a permanent false alarm. Both defaults reproduce the generic
@@ -219,7 +285,30 @@ if [ -f HANDOFF.md ]; then
   PS=$(grep -o 'Prior summary:' HANDOFF.md 2>/dev/null | wc -l | tr -d ' ')
   echo "HANDOFF.md: $L lines, $PS 'Prior summary:' occurrence(s)"
   [ "$PS" -gt 0 ] && echo "THRESHOLD HANDOFF.md header has accreted $PS prior-session summary block(s) — rotate ALL of them into the log/archive this run"
-  if [ ! -d continuation ]; then   # running-log root HANDOFF is a deliberately-slim snapshot — skip
+  # G#565 — the WRITE side of the machine stamp. The wrap AUTHORS this header; analyze-context's
+  # routing gate READS it at every session start and, when it cannot extract a machine, forces a
+  # FULL briefing instead of the slim path. Nothing ever checked that the header the wrap just
+  # produced is readable by that gate, so a project could sit unparseable for its entire history
+  # while both sides behaved exactly as designed (measured 2026-09-07: 4 of 9 live project
+  # HANDOFFs, one for all ~190 of its commits; 63 of 118 FULL briefings in a 4-week window named
+  # the missing stamp as their SOLE reason). A producer/consumer contract with a strict reader and
+  # no write-side validator fails silently and in the expensive direction (G#382: the guard fires
+  # only for headers that already declare themselves correctly).
+  # The pattern is a VERBATIM copy of currency-check.sh's RC_STAMP grep class. A comment cannot
+  # keep two copies in step (G#415), so tests/test-stamp-parity.py extracts BOTH at test time and
+  # asserts them byte-identical.
+  RC_STAMP_PAT='\*\*(Machine|Last write from):\*\* *`?[A-Za-z0-9_.-]+'
+  if ! grep -qE "$RC_STAMP_PAT" HANDOFF.md 2>/dev/null; then
+    echo "THRESHOLD HANDOFF.md carries no machine stamp that analyze-context can parse — every session start in this project pays a FULL briefing instead of the slim path, silently. Add or normalize the header line to '**Machine:** $(hostname 2>/dev/null)' (the label is required; a backticked value is fine, a machine named only inside an '**Updated:**' parenthetical or under an author-named label is NOT) this run"
+  fi
+  # G#565: this check USED to be skipped whenever a `continuation/` dir existed, on the stated
+  # premise that "a running-log root HANDOFF is a deliberately-slim snapshot". That premise is
+  # the very thing the measurement tests, and it is false where it matters most: measured
+  # 2026-09-07, a running-log project's HANDOFF.md was 91,644 B against this 40KB ceiling and
+  # was exempt from the only gate that would ever have flagged it. An exemption scoped by
+  # DIRECTORY PRESENCE rather than by the reason it cites is the G#384 over-broad carve-out;
+  # if the snapshot really is slim, the check is silent anyway and the carve-out bought nothing.
+  if true; then
     HB=$(wc -c < HANDOFF.md | tr -d ' '); HKB=$(( HB / 1024 )); HLIMIT=${HANDOFF_STRUCT_KB_LIMIT:-40}
     if [ "$HKB" -gt "$HLIMIT" ]; then
       HOLD=$(_rotation_hold HANDOFF.md)
@@ -293,12 +382,7 @@ READPATH_KB_LIMIT=${READPATH_KB_LIMIT:-50}
 for MEMDIR in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
   COUNT=$(ls "$MEMDIR"/*.md 2>/dev/null | wc -l | tr -d ' ')
   KB=$(ls -l "$MEMDIR"/*.md 2>/dev/null | awk '{s+=$5} END {printf "%d", s/1024}')
-  RP_BYTES=0
-  for f in "$MEMDIR/MEMORY.md" "$MEMDIR"/roadmap.md "$MEMDIR"/*docket*.md; do
-    [ -f "$f" ] && RP_BYTES=$(( RP_BYTES + $(wc -c < "$f" 2>/dev/null || echo 0) ))
-  done
-  READPATH_KB=$(( RP_BYTES / 1024 ))
-  echo "$MEMDIR: $COUNT md files, ${KB}KB total (${READPATH_KB}KB session-start read-path: index+docket)"
+  echo "$MEMDIR: $COUNT md files, ${KB}KB total (topic-file bulk; the session-start read path is reported once, below)"
   IDX="$MEMDIR/MEMORY.md"
   if [ -f "$IDX" ]; then
     # Dead index links. Detector covers the three forms a plain `](x.md)` grep misses —
@@ -330,17 +414,58 @@ for MEMDIR in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
   else
     [ "$COUNT" -gt 5 ] && echo "THRESHOLD $MEMDIR has $COUNT files but NO MEMORY.md index — create one this run"
   fi
-  # Trigger on session-start READ-PATH bloat ONLY (index + docket/roadmap loaded every start) — never on
-  # on-demand topic-file bulk. Clearable by design: trimming the named files clears it; topic files don't.
-  if [ "${READPATH_KB:-0}" -gt "$READPATH_KB_LIMIT" ]; then
-    HOLD=$(_rotation_hold "$MEMDIR"/roadmap.md "$MEMDIR"/*docket*.md)
-    if [ -n "$HOLD" ]; then
-      echo "INFO $MEMDIR session-start read-path ${READPATH_KB}KB — docket rotation on HOLD until ${HOLD}; no action this run"
-    else
-      echo "THRESHOLD $MEMDIR session-start read-path ${READPATH_KB}KB (>${READPATH_KB_LIMIT}KB: MEMORY.md + docket/roadmap, loaded every session start) — trim/rotate the index + docket this run; if the bloat is closed/resolved docket rows or durable wiki/reference content, apply structural rotation (Step 5: archive closed rows / extract durable reference to docs/), not just trimming. On-demand topic files are NOT the cause"
-    fi
-  fi
 done
+
+# ---- session-start READ PATH: computed ONCE, over every home ------------------------------
+# Was computed inside the per-memory-dir loop above and over "$MEMDIR"/roadmap.md only, so a
+# root-level docket was counted by nothing and a project with no memory dir computed no figure
+# at all. Both are fixed by moving the sum out here and sourcing it from _docket_files().
+RP_FILES=(); RP_SEEN=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  rp=$(realpath "$f" 2>/dev/null || printf '%s' "$f")
+  key=$(printf '%s' "$rp" | tr ' ' '\001')      # squash spaces so the key is a single token
+  case " $RP_SEEN " in *" $key "*) continue ;; esac
+  RP_SEEN="$RP_SEEN $key"; RP_FILES+=("$f")
+done < <({ _docket_files; for d in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do [ -f "$d/MEMORY.md" ] && printf '%s\n' "$d/MEMORY.md"; done; })
+
+RP_BYTES=0
+for f in ${RP_FILES[@]+"${RP_FILES[@]}"}; do
+  RP_BYTES=$(( RP_BYTES + $(wc -c < "$f" 2>/dev/null || echo 0) ))
+done
+READPATH_KB=$(( RP_BYTES / 1024 ))
+
+if [ "${#RP_FILES[@]}" -eq 0 ]; then
+  echo "session-start read-path: UNKNOWN — no index or docket/roadmap file discovered in any home (root, context/, continuation/, memory dirs). Not the same fact as 0KB; if this project has a docket, it is somewhere this scan does not look"
+else
+  echo "session-start read-path: ${READPATH_KB}KB from ${#RP_FILES[@]} file(s) — $(for f in "${RP_FILES[@]}"; do printf '%s %sB; ' "$f" "$(wc -c < "$f" 2>/dev/null || echo 0)"; done)"
+  # G#493: a verdict names what it SCANNED and stays silent on what it SKIPPED, and the reader
+  # multiplies the two lines only if the second one exists. So derive the complement -- tracked
+  # docket-shaped files NOT in the start set (archive/, docs/, drafts/) -- and print UNKNOWN
+  # rather than 0 when it cannot be derived, because 0 is the one value meaning "nothing skipped".
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    RP_ALL=$(git ls-files -- '*roadmap*.md' '*docket*.md' '*DOCKET*.md' 'MEMORY.md' '*/MEMORY.md' 2>/dev/null | sort -u | wc -l | tr -d ' ')
+    echo "  not in the start set: $(( RP_ALL > ${#RP_FILES[@]} ? RP_ALL - ${#RP_FILES[@]} : 0 )) other tracked docket/index-shaped file(s) (archive, docs, drafts) — visibility only, not a finding"
+  else
+    echo "  not in the start set: UNKNOWN (no git; the complement cannot be derived here)"
+  fi
+fi
+
+# Trigger on session-start READ-PATH bloat ONLY — never on on-demand topic-file bulk.
+if [ "${READPATH_KB:-0}" -gt "$READPATH_KB_LIMIT" ]; then
+  HOLD=$(_rotation_hold ${RP_FILES[@]+"${RP_FILES[@]}"})
+  if [ -n "$HOLD" ]; then
+    echo "INFO session-start read-path ${READPATH_KB}KB — docket rotation on HOLD until ${HOLD}; no action this run"
+  else
+    # TWO sanctioned responses, and naming only the first is what makes this class of check
+    # untrustworthy: where the OPEN rows alone exceed the ceiling, "rotate the closed ones" is an
+    # instruction that provably cannot clear the finding, and a THRESHOLD that can only ever be
+    # ignored trains the wrap to ignore THRESHOLDs (the reasoning this file already applies to
+    # MAXLINE_LIMIT). G#227: the env ceiling is the escape valve for a legitimately-large docket,
+    # and it appeared in no operator-facing text until now.
+    echo "THRESHOLD session-start read-path ${READPATH_KB}KB (>${READPATH_KB_LIMIT}KB: index + docket/roadmap, loaded every session start) — EITHER rotate this run (archive closed/resolved docket rows, extract durable reference to docs/; Step 5 structural rotation, not just trimming), OR, if what remains after rotating everything closed is still over the ceiling, declare a real one: READPATH_KB_LIMIT in .claude/settings.json -> env. On-demand topic files are NOT the cause and rotating them will not move this number"
+  fi
+fi
 
 echo
 echo "== COHERENCE (HANDOFF forward sections vs the resolved ledger -- G#84) =="
@@ -359,16 +484,13 @@ else
   # so a docket filename containing a space is ONE element, not word-split into broken paths (P2-4).
   # Sources cover the in-repo homes AND the running-log (continuation/) + out-of-repo memory-dir
   # homes the old flat globs missed (NEW-6).
+  # Same discovery as the read path (_docket_files, defined once at the top) plus the HANDOFF,
+  # which belongs HERE and not there: it is a legitimate source of resolved-row ids for this scan,
+  # while the read-path sum must exclude it because it carries its own ceiling and its own hold.
+  # One function, two filters -- never two glob lists that drift (G#228/G#447).
   COH_DOCKETS=()
-  for f in roadmap.md "$COH_HANDOFF" ./*docket*.md ./*_docket.md context/roadmap.md context/*docket*.md \
-           continuation/roadmap.md continuation/*docket*.md; do
-    [ -f "$f" ] && COH_DOCKETS+=("$f")
-  done
-  # memory-dir docket homes (a project whose docket lives in its out-of-repo memory dir). CANDIDATES
-  # was resolved by the MEMORY HEALTH pass above; guard empty-array expansion under set -u (bash 3.2).
-  for d in ${CANDIDATES[@]+"${CANDIDATES[@]}"}; do
-    for f in "$d/roadmap.md" "$d"/*docket*.md; do [ -f "$f" ] && COH_DOCKETS+=("$f"); done
-  done
+  while IFS= read -r f; do [ -n "$f" ] && COH_DOCKETS+=("$f"); done < <(_docket_files)
+  [ -f "$COH_HANDOFF" ] && COH_DOCKETS+=("$COH_HANDOFF")
   # CLOSED = leading-ID rows that are resolved/retired -- detected by EITHER a dedicated resolved-
   # LEDGER section heading (Resolved/Retired/Archived/Closed/Dropped/Completed/Done) OR the row's
   # own leading status glyph (U+2705 check / U+274C cross / U+26D4 no-entry "dropped", matched as
@@ -701,7 +823,7 @@ fi
 # The doc that RECORDS the work (a per-task execution record) and the doc/section that ROUTES the next
 # session (the plan's TOP status header) are different surfaces; a wrap that appends the record but
 # leaves the header stale sends the next session to redo finished work -- record correct, router
-# contradicts it, sometimes INSIDE THE SAME FILE (measured twice, G#211: a header
+# contradicts it, sometimes INSIDE THE SAME FILE (measured twice, Claude upgrades G#211: a header
 # "Tasks 1-7 implemented" above a Task-8 execution record; a NO-GO/OPEN header above a Task-10 COMPLETE
 # record). CONSERVATIVE FRONTIER CHECK, by design: fire ONLY when the topmost "Tasks 1-K
 # implemented/done" claim counts FEWER tasks than the highest task that already carries an "execution

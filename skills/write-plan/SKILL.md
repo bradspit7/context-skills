@@ -47,8 +47,12 @@ Each task: 2-5 minute steps, one action per step, checkbox-tracked.
 - [ ] **Step 2: Verify it fails** — `<command>` → expected: FAIL with <message>
 - [ ] **Step 3: Implement** — (the actual code, shown)
 - [ ] **Step 4: Verify it passes** — `<command>` → expected: <output>
-- [ ] **Step 5: Commit** — `git add <paths> && git commit -m "<message>"`
+- [ ] **Step 5: Commit** — `git add <paths> && git commit -m "<message>" -- <paths>`
 ````
+
+**Step 5 names its paths TWICE, and both halves are load-bearing (G#95).** A bare `git commit` commits the whole index, so anything a concurrent session staged between your `add` and your `commit` ships inside your commit — file-proven: with a sibling file staged, the bare form committed **2 files** and left the tree clean, while the `-- <paths>` form committed **1** and left the sibling still staged. The `git add` cannot be dropped in favour of the pathspec alone: a pathspec commit naming an untracked file exits **1** (`did not match any file(s) known to git`), and plan tasks routinely commit newly created files.
+
+**Carve-out — a path with intentional partial staging (`git add -p`) must NOT use the pathspec form.** A pathspec commit re-reads the named path from the **working tree**, not the index: file-proven, with the index holding `v2` and the worktree `v3`, `git commit -- F` committed **v3** and left nothing unstaged, while the bare commit committed **v2**. So for such a path, verify with `git diff --cached --name-only` that the index holds exactly the intended set, then commit bare.
 
 Where the house style isn't test-first (e.g., scene/asset work), steps 1-4 become: make the change → run the project verify loop → check the observable result (named explicitly: which scene, which page, which output line).
 

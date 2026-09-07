@@ -49,7 +49,14 @@ emit_resume_class() {
   # it appears instead of anchoring on line start. The old ^-anchored grep reported
   # "no machine stamp" against stamped combined headers, silently forcing FULL on every
   # resume in those projects (fail-safe held: cost-only, never a wrong slim read).
-  RC_STAMP=$(grep -m1 -oE '\*\*(Machine|Last write from):\*\* *[A-Za-z0-9_.-]+' "$RC_DOC" 2>/dev/null | sed -E 's/^\*\*(Machine|Last write from):\*\* *//')
+  # G#564 (2026-09-07): the same class again, one token further right -- the VALUE may be
+  # backtick-wrapped (`**Machine:** `<host>` * **Branch:** `main``) -- measured on one project
+  # in 34 of 34 of its history commits, which the old character class could not enter. Both the
+  # grep and the sed learn an optional backtick. Deliberately NOT widened past the LABEL:
+  # binding a machine token by POSITION in free prose would extract a MENTIONED machine
+  # ("**Updated:** ... (<host-A> -- arrival sync from <host-B>)") and route SLIM on
+  # the wrong host -- the one failure this gate's conservatism has never produced.
+  RC_STAMP=$(grep -m1 -oE '\*\*(Machine|Last write from):\*\* *`?[A-Za-z0-9_.-]+' "$RC_DOC" 2>/dev/null | sed -E 's/^\*\*(Machine|Last write from):\*\* *`?//')
   RC_HOST=$(hostname 2>/dev/null)
   RC_MULTIDEV=""
   for pd in HANDOFF-*.md; do [ -e "$pd" ] && RC_MULTIDEV=1 && break; done
@@ -69,7 +76,10 @@ emit_resume_class() {
   if [ -z "$RC_STAMP" ]; then
     RC_REASONS="$RC_REASONS; no machine stamp in $RC_DOC (cannot confirm same machine)"
   elif [ -n "$RC_HOST" ] && [ "$(printf '%s' "$RC_STAMP" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$RC_HOST" | tr '[:upper:]' '[:lower:]')" ]; then
-    RC_REASONS="$RC_REASONS; machine stamp '$RC_STAMP' != host '$RC_HOST' (machine switch -> device-sync, then the full briefing)"
+    # G#55 -- a comparison reports STATE, not CAUSE. This branch fires on a genuine machine
+    # switch AND on an abbreviated/aliased stamp for THIS host (one project stamps `PC` while
+    # the hostname is `<longer-name>_PC`), so it must not assert a switch it cannot distinguish.
+    RC_REASONS="$RC_REASONS; machine stamp '$RC_STAMP' != host '$RC_HOST' -- the writing machine is UNCONFIRMED (a real switch, or an abbreviated/aliased stamp); if you did switch machines, device-sync first, then the full briefing"
   fi
   if [ -z "$RC_REASONS" ]; then
     echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); ${RC_PROV}; machine stamp matches; single-doc pattern.${RC_BASIS}"
@@ -77,6 +87,11 @@ emit_resume_class() {
     echo "   read $RC_DOC fully, deliver the 3-line summary (last completed / next intended / blocker)"
     echo "   PLUS the docket (open items by ID, one line each, preserving each row's status marker) from"
     echo "   $RC_DOC's own next-tasks/open-items section -- or the separate docket file it points to, if any."
+    echo "   BOUND that docket file: wc -c first; at or under ~40KB read it fully, above that"
+    echo "   read only its open-item region"
+    echo "   (header + open/next-tasks, stopping at the first Resolved/Archived/Closed heading)"
+    echo "   and REPORT the unread remainder as a number. This line is the copy the reader"
+    echo "   actually sees on the load-bearing downgrade path, so the bound has to live here too."
     echo "   Then offer the full briefing on request. Skip the deep content reads (memory/specs/archive)."
   else
     echo "FULL BRIEFING — reason(s): ${RC_REASONS#; }"

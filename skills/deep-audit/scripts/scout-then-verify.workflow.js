@@ -115,14 +115,21 @@ Judge the ORIGINAL CANDIDATE against the scout's inline evidence below. The scou
 ORIGINAL CANDIDATE: ${JSON.stringify(candidate)}
 SCOUT RESULT: ${JSON.stringify(scout)}`
 
-// --- GATE:BEGIN --- (extracted verbatim by the accompanying test — keep the sentinels)
+// --- GATE:BEGIN --- (extracted verbatim by scout-then-verify.test.js — keep the sentinels)
 // A bare `.filter(Boolean)` silently conflates a dropped/errored agent with a candidate that
 // triaged clean, and a schema-valid object can still be vacuous ("shape-valid garbage"). Account
 // for EVERY agent BY KEY and reject empty results BEFORE they reach the rationed premium phase.
 // Conservative by design: every rejection is logged, so a false-drop is visible, never silent.
 const MIN_EVIDENCE = 8
 const PLACEHOLDER = /^(test|todo|tbd|n\/?a|none|null|example|sample|foo|bar|baz|xxx|placeholder|lorem|[a-z]|\d+)$/i
-const SHORT_CITATION = /^[\w./-]+:\d+(?::\d+)?\b/   // e.g. x.py:1 — a real terse citation, exempt from the length floor
+// e.g. x.py:1 — a real terse citation, exempt from the length floor. The optional drive-letter
+// prefix is load-bearing on Windows, and its absence failed in the SILENT direction: `\w` cannot
+// match the `:` in `C:/repo/file.md:52`, so a bare Windows citation scored NOT-a-citation ->
+// hasExcerpt true -> `bindable` -> it burned a premium CAP slot the comment below says such items
+// must never burn, and came back a BINDING REFUTATION (verifyPrompt orders survives=false when the
+// evidence is a citation the verifier cannot open). A real finding killed, and absent from the one
+// surface the SKILL promises will carry it. Repro: hasExcerpt('C:/repo/file.md:52') was true.
+const SHORT_CITATION = /^(?:[A-Za-z]:[\\/])?[\w./\\-]+:\d+(?::\d+)?\b/
 function isVacuous(r) {
   if (!r) return true
   const ev = String(r.evidence == null ? '' : r.evidence).trim()
@@ -158,14 +165,30 @@ function reconcile(raw, keys, label, logFn) {
   return { ok, droppedKeys, vacuousKeys }
 }
 // An inline-only verdict can only bind on inline content (the verifier is INSTRUCTED not to re-read,
-// though a default-type agent still could). `hasExcerpt` is true when evidence carries substantive
-// content BEYOND a bare locator: strip one leading file:line and require a real remainder.
-// 'x.py:1' -> '' (citation-only, NOT bindable); 'x.py:1 returns null on empty input' and
+// though a default-type agent still could -- G#80). `hasExcerpt` is true when evidence carries
+// substantive content BEYOND a bare locator: strip one leading file:line and require a real
+// remainder. 'x.py:1' -> '' (citation-only, NOT bindable); 'x.py:1 returns null on empty input' and
 // 'grep found 3 matches in orchestrate/SKILL.md' -> substantive (bindable).
 function hasExcerpt(r) {
   if (!r) return false
   const ev = String(r.evidence == null ? '' : r.evidence).trim()
   return ev.replace(SHORT_CITATION, '').trim().length >= MIN_EVIDENCE
+}
+// The VERIFY-side vacuity gate. A SEPARATE predicate, never a reuse of isVacuous/hasExcerpt: both
+// key on `r.evidence`, and VERIFY_SCHEMA has no such field (only survives/final_verdict/reasoning/
+// refutation_attempt). File-proven by extracting this block into node -- reusing the scout gate
+// scores a GOOD verifier verdict and the empty `{survives:true, final_verdict:'', reasoning:''}`
+// defect IDENTICALLY vacuous, i.e. it is non-discriminating and would divert every premium verdict.
+//
+// Without this, a schema-valid but EMPTY survives:true became a survivor: the schema constrains
+// only `type`, never minLength, so the premium tier could return nothing and be believed.
+function verifyIsVacuous(v) {
+  if (!v) return true
+  const t = (String(v.final_verdict == null ? '' : v.final_verdict) + ' ' +
+             String(v.reasoning == null ? '' : v.reasoning)).trim()
+  if (t.length < MIN_EVIDENCE) return true
+  const tok = t.match(/[A-Za-z]+|\d+/g) || []
+  return tok.length === 0 || tok.every(w => PLACEHOLDER.test(w))
 }
 // --- GATE:END ---
 
@@ -199,9 +222,9 @@ const rank = { high: 0, medium: 1, low: 2 }
 confirmed.sort((a, b) => (rank[a.benefit] == null ? 3 : rank[a.benefit]) - (rank[b.benefit] == null ? 3 : rank[b.benefit]))
 
 // A verifier judging inline-only can't bind on a bare citation it is not meant to open (and must
-// not be ASSUMED able to open — never assume it can re-read, never assume it can't). Unless the
-// caller opted into a file-reading verifier (verifyAgentType, e.g. 'Explore'), citation-only
-// findings are diverted to needsReverify — never a binding survivor, and they don't burn a cap slot.
+// not be ASSUMED able to open -- G#80: never assume it can't re-read, never assume it can). Unless the caller opted into a
+// file-reading verifier (verifyAgentType, e.g. 'Explore'), citation-only findings are diverted to
+// needsReverify — never a binding survivor, and they don't burn a premium cap slot.
 const useReader = !!VERIFY_AGENT_TYPE
 const bindable = useReader ? confirmed : confirmed.filter(hasExcerpt)
 const needsReverify = useReader ? [] : confirmed.filter(c => !hasExcerpt(c)).map(c => c.key)
@@ -213,11 +236,11 @@ log(`Scout done: ${scouts.length} usable, ${confirmed.length} confirmed → prem
 
 phase('Verify')
 // `adjudicated` = every item that reached a BINDING verdict (survived OR refuted). It is NOT the
-// clean set (that is `survivors`, survives===true only). Never NAME this `verified` — the value is
-// "the verify stage produced a verdict payload," which READS to a consumer as "is clean" while it
-// still holds refuted findings; a downstream keying on such a field misreads a flagged item as
-// real. Name it for what it checks.
-let adjudicated = [], verifyDropped = []
+// clean set (that is `survivors`, survives===true only). G#137: never NAME this `verified` — the
+// value is "the verify stage produced a verdict payload," which READS to a consumer as "is clean"
+// while it still holds refuted findings; a downstream keying on such a field misreads a flagged
+// item as real. Name it for what it checks.
+let adjudicated = [], verifyDropped = [], verifyVacuous = []
 if (toVerify.length > 0) {
   const opts = { phase: 'Verify', model: VERIFY_MODEL, effort: VERIFY_EFFORT, schema: VERIFY_SCHEMA }
   if (VERIFY_AGENT_TYPE) opts.agentType = VERIFY_AGENT_TYPE
@@ -227,26 +250,43 @@ if (toVerify.length > 0) {
   ))
   adjudicated = rawVerify.filter(r => r && r.verify)
   verifyDropped = toVerify.filter((c, i) => !(rawVerify[i] && rawVerify[i].verify)).map(c => c.key)
+  // One gate, UPSTREAM of `survivors`, so nothing downstream has to remember to re-check.
+  verifyVacuous = adjudicated.filter(r => verifyIsVacuous(r.verify)).map(r => r.scout.key)
+  adjudicated = adjudicated.filter(r => !verifyIsVacuous(r.verify))
   log(`Verify: ${toVerify.length} in -> ${adjudicated.length} returned / ${verifyDropped.length} null(dropped): ${verifyDropped.join(', ') || '—'}`)
 } else {
   log(`Verify: skipped (cap=${CAP}${CAP === 0 ? ' — triage-only dry run' : ', nothing confirmed'})`)
 }
 
 const survivors = adjudicated.filter(r => r.verify.survives === true)
-log(`scout-then-verify: ${survivors.length} survivor(s) of ${adjudicated.length} adjudicated; ${needsReverify.length} needsReverify; ${overflow.length} overflow; ${holes.length} hole(s)`)
+log(`scout-then-verify: ${survivors.length} survivor(s) of ${adjudicated.length} adjudicated; ${verifyDropped.length} verify-dropped; ${verifyVacuous.length} verify-vacuous; ${needsReverify.length} needsReverify; ${overflow.length} overflow; ${holes.length} hole(s)`)
 
 return {
   survivors,       // survives===true ONLY — THE confirmed-real / clean set (what a consumer should act on)
-  adjudicated,     // reached a binding verdict (survived OR refuted); NOT clean — never read this as the real set
+  adjudicated,     // G#137: reached a binding verdict (survived OR refuted); NOT clean — never read this as the real set
   needsReverify,
   triage: scouts,
   confirmed_count: confirmed.length,
   overflow,
+  // Its OWN symbol, deliberately NOT merged into needsReverify. Three causes with three different
+  // remedies would otherwise share one key list and nothing downstream could tell them apart
+  // (G#339): citation-only-never-sent-to-premium (re-run with verifyAgentType:'Explore'),
+  // premium-agent-DIED (re-dispatch into an unspent cap slot), premium-returned-NO-SUBSTANCE
+  // (escalate / hand-adjudicate). A dropped verifier previously appeared only inside
+  // `reconciliation`, which the SKILL's summarize step never told anyone to read.
+  verify_unresolved: { dropped: verifyDropped, vacuous: verifyVacuous },
+  // Keyed on dropped/vacuous/holes ONLY. NOT on needsReverify or overflow: in THIS recipe both are
+  // by-design routine buckets (needsReverify = citation-only findings diverted on the default path;
+  // overflow = confirmed beyond cap, which is the entire normal rationed case), so keying on them
+  // would make INCOMPLETE the outcome of nearly every healthy run and train callers to ignore the
+  // field. That is the review-fleet's rule ported without its dialect (G#377).
+  status: (verifyDropped.length || verifyVacuous.length || holes.length) ? 'INCOMPLETE' : 'COMPLETE',
   reconciliation: {
     scout_dropped: recon.droppedKeys,
     scout_vacuous: recon.vacuousKeys,
     scout_redispatched: redispatched,
     verify_dropped: verifyDropped,
+    verify_vacuous: verifyVacuous,
     unrecovered_holes: holes,
   },
 }

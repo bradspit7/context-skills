@@ -29,14 +29,14 @@ Don't hand-roll a fleet. Route the rationed core through the tested runnable bun
 1. **Scope** — turn the directed prompt into (a) the audit surface (which files/dirs) and (b) the focus (correctness / security / a specific concern). List the substantive files first (a quick glob or one Sonnet recon agent) so you size to reality, not to a guess.
 2. **Enumerate cheaply** — fan out **Sonnet** finders over the surface to produce a discrete candidate list of findings (high-recall breadth). This is the cheap half, and it prices how much premium work exists before the premium tier spends a token. **REQUIRED SUB-SKILL:** use `orchestrate` for the fan-out discipline (contracts, verification quotes, count reconciliation).
 3. **Ration the premium tier** — hand the candidate list to the bundled `scripts/scout-then-verify.workflow.js` with `verifyModel` set to your session's premium model (e.g. `'fable'`) and `cap` = your per-audit premium budget. Premium spend is bounded by `cap`; confirmed findings beyond it return as `overflow` (deferred, not dropped); citation-only findings return as `needsReverify`. **REQUIRED SUB-SKILL:** scout-then-verify carries the accounting, vacuity gate, and needsReverify safety — don't reinvent them.
-4. **Synthesize** — read `survivors` (plus `needsReverify` and `overflow`) and write the audit report. One pass; no "let me double-check" loop unless a finding is genuinely ambiguous.
+4. **Synthesize** — **gate on `status` FIRST.** `INCOMPLETE` means a premium verifier DIED or returned no substance; read `verify_unresolved` (`.dropped` = the agent died, re-dispatch into an unspent cap slot; `.vacuous` = it returned an empty verdict, escalate or hand-adjudicate) and resolve those before writing the report. `status` is keyed on dropped/vacuous/holes ONLY — `needsReverify` and `overflow` are by-design routine buckets here, so a healthy rationed run is COMPLETE. Then read `survivors` (plus `needsReverify` and `overflow`) and write the report. One pass; no "let me double-check" loop unless a finding is genuinely ambiguous.
 
 ## Setting the budget (the whole point)
 
 `cap` = the number of premium verifiers = the hard spend bound for the audit.
 
 - Divide the window across your audits: N projects → `cap ≈ window / N`, kept small (a handful, e.g. 4–6).
-- `cap: 0` is a **free dry run** — the Sonnet scout phase alone reports how many findings would need the premium tier, so you can size the real run before committing premium tokens.
+- `cap: 0` is a **premium-free dry run — not a free one.** It dispatches NO premium verifiers, but the cheap scout phase still runs one agent per candidate and still costs; it reports how many findings would reach the premium tier, so you can size the real run before committing premium tokens.
 - Prefer several small capped audits over one uncapped fan-out. Enumeration is cheap; premium verification is the scarce thing.
 
 ## Security caveat
@@ -51,5 +51,5 @@ Never route a security-focused `verifyTask` to a model with cyber-classifier ref
 | "Conserve the premium model" → keep it idle, route all to a cheaper tier | That wastes the window. Ration the premium tier via `cap`, don't avoid it. |
 | Reinvent a review fleet | Route through the bundled `scripts/scout-then-verify.workflow.js`; it's tested. |
 | No hard cap ("I'll be careful") | Set `cap` explicitly — it is the only real bound on premium spend. |
-| One giant audit | Size `cap` so all N audits fit the window; dry-run with `cap: 0` first. |
+| One giant audit | Size `cap` so all N audits fit the window; dry-run with `cap: 0` first (scout-only: cheap, not free). |
 | Security lens on a refusal-prone model | Pin it to a model without cyber-classifier refusal exposure. |

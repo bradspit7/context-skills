@@ -34,10 +34,23 @@ decisions, debugged gotchas, repeated manual sequences, friction hit more than o
 files written. If `update-context` already computed shipped / learned / decided / deferred, reuse it
 — do not recompute.
 
-**Scope note — this signal is REACTIVE by construction.** It is what the session *hit*. A capability
-this project ought to have but has never been bitten for lacking will not appear in it, and
+**Scope note — this signal is REACTIVE by construction.** It is what the session *hit* — and
+"hit" is **two** kinds of evidence, not one. A **failure** the session ran into is the obvious kind.
+The other is **work the session REPEATED**: a manual sequence run twice or more, the same fix applied
+by hand across several sites, a check re-derived because nothing invokes it. A repeat is *measured*
+evidence — the artifacts are in this session's own diff and transcript — so a project-local skill,
+command, check or workflow proposed to absorb it **needs no failure incident**; the repeat count IS
+the evidence Step 3 demands, and Step 3's load-bearing test still gates it. Say the count out loud in
+the candidate's evidence field ("ran this 3x by hand this session"), because that number is the whole
+justification.
+
+What stays OUT is the **generative** question: a capability this project ought to have but has
+neither been bitten for lacking **nor exercised here** will not appear in this signal, and
 originating one is not this skill's job — that belongs to a generative vision-layer scan (see
-Related). Do not stretch Step 2 to invent one; do not route one back here.
+Related). Do not run a project-wide discovery scan from here, do not stretch Step 2 to invent a
+capability the session never touched, and do not route a generative direction back here. The
+reactive/generative boundary is the point; this moves only the line *within* the reactive side, from
+"a failure occurred" to "this session produced the evidence".
 
 ## Step 2 — Scan against the upgrade surface
 
@@ -79,14 +92,38 @@ never open a write-only backlog.
 
 Every candidate must pass three filters:
 1. **Load-bearing test** — *would a future session act differently if this tool existed?* No -> drop
-   it. Do not invent work to look productive.
+   it. Do not invent work to look productive. **"Acts differently" is necessary, never sufficient** —
+   reading one more rule, checking one more doc, or commissioning one more review all qualify, and
+   none of them is an improvement. Before accepting, name all five: **current behaviour** (what
+   happens today), **implementation target** (the artifact that actually changes), **expected
+   improvement** (a step removed, a failure detected, a capability gained), **recurring cost**
+   (context bytes, hook latency, maintenance surface — a rule loaded into every session in every
+   project is the most expensive shape on this list), and a **concrete acceptance check** (what you
+   would run to see it working). A candidate that cannot fill all five is an *observation*: report it,
+   do not file it. **Prefer a concrete implementation, or a strengthening of an existing check, over
+   another reminder** — a proposed global instruction must say why the narrower remedy (a guard, a
+   lint, a fix to the tool that failed) is insufficient.
 2. **De-dup — against the corpus this candidate's ROUTE points at, not only the central one.** A
-   *generalizable* candidate: your central upgrades repo's docket and your catalog (if you keep one).
-   A *project-specific* candidate (Step 4's other branch): **that project's own docket / handoff** —
-   checking only the central corpus de-dups it against a corpus that structurally cannot contain its
-   duplicate, so the same project-local candidate can be re-filed session after session with nothing
-   noticing. A *dual-surface* candidate checks **both**. Already queued -> do not re-propose; point at
-   the existing entry instead.
+   *generalizable* candidate: your central upgrades repo's docket **and any PENDING filings not yet
+   ingested into it** — a docket only gains a row at *ingest*, so an unfiled duplicate sits in the
+   intake queue, which is exactly where a de-dup that checks only the docket cannot see it (measured:
+   three projects filed the same two defects three times each, every filer having checked the docket
+   alone) — plus your catalog, if you keep one. **Do this as a CONCEPT GREP, never by opening the
+   files:** 2-3 terms naming the *failure mechanism*, grepped case-insensitively across the docket and
+   the pending filings. It costs milliseconds; *reading* an accumulated intake queue can cost six
+   figures of tokens and is not a per-reflection price anyone should pay. A *project-specific*
+   candidate (Step 4's other branch): **that project's own docket / handoff** — checking only the
+   central corpus de-dups it against a corpus that structurally cannot contain its duplicate, so the
+   same project-local candidate can be re-filed session after session with nothing noticing. A
+   *dual-surface* candidate checks **both**. Already queued -> do not re-propose; **record the
+   occurrence against the existing entry** — a different date, project, example or wording does not
+   make a new upgrade. **Where that record goes depends on the route:** a central match is recorded
+   from any project through the outcome ledger (`record --status dedup-existing --candidate
+   "<ref>@central"`, the ref being the docket id for a filed row or the filename for a pending one) —
+   **never by editing the central docket or another session's pending filing from here**, which is the
+   uncommitted-edit-to-a-live-central-doc class the filing step forbids and would also race the filer.
+   A project-local match is recorded in that project's own docket, where you already hold write
+   access.
 3. **Target-project-alive** — if the candidate's remediation *target* is a specific project, confirm
    that project is still active before filing (if you track project lifecycle status). A candidate
    targeting a discontinued or abandoned project is **dead work — do not file it**. (A dead project's
@@ -99,6 +136,15 @@ Apply the routing rule:
 - **Generalizable** (helps many projects, or is about your tooling itself) -> file to your **central
   upgrades repo or catalog** — a docket / "next candidates" item, or a catalog stub.
 - **Project-specific** (only helps the current project) -> the current project's own docket / memory.
+
+**Route by the OWNERSHIP of the proposed REMEDY, not by what the incident happened to touch.**
+The discriminator is *which artifact does the fix actually change?* Having merely **used** a shared
+skill while hitting the problem does not make the remedy shared: a fix confined to this project's own
+code, checks, skills, workflows or instructions stays **here**, even when a lifecycle skill was in the
+room when it bit. A fix that genuinely edits a named shared artifact goes **central**, even when only
+one project has felt it so far. Split into two candidates only when a shared change **and** an
+independently necessary project-local change both exist; otherwise file ONE candidate and link the
+incident evidence to it.
 
 **Dual-surface candidates — split, don't bury.** When a candidate touches *named shared machinery* —
 a lifecycle or process skill (`update-context`, `analyze-context`, `orchestrate`, ...), a global

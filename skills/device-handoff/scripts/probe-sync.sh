@@ -211,6 +211,21 @@ else
   if [ -n "$SUBSTR_LIST" ]; then
     echo "bucket-match-lowconf (substring only -- confirm with the user before treating as branch 4; never silently execute, never silently ignore):"
     printf '%s' "$SUBSTR_LIST" | sed '/^$/d;s/^/  candidate: /'
+    # Name the PERMANENT fix at the moment of need, not just the one-time decision.
+    # Measured on a sibling project: a folder-name mismatch (repo `X - Final Solution
+    # type v2` vs bucket `X-AUTOMATION`) made this lowconf every time, and NINE
+    # consecutive handoffs each paused to re-adjudicate a settled fact -- the recorded
+    # answer lived in the recipe's prose, which no detector reads. The loop closed only
+    # when someone finally added the machine-readable line below.
+    #
+    # Deliberately NOT auto-promoting on a prose absolute path found in the recipe: a
+    # path can be mentioned in passing, and promoting to `declared` SKIPS the user
+    # confirmation this branch exists to require. Failing toward "ask" is correct here;
+    # failing toward "silently execute a bucket recipe" is not. So the fix is to make
+    # the declaration cheap to record, not to guess at it.
+    echo "  -> to settle this permanently, add a machine-readable line to the recipe file above:"
+    echo "     sync-bucket: <bucket folder name>        (or: sync-bucket-aliases: <name> <name>)"
+    echo "     Without it this stays lowconf and EVERY future handoff re-asks the same question."
   fi
 fi
 

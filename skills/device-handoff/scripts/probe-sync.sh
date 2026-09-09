@@ -113,6 +113,23 @@ if [ "$TRACKED_MEM" -gt 0 ]; then
 else
   echo "no (no git-tracked in-repo memory; the push carries no memory)"
 fi
+# TWO FACTS, TWO LINES. A project can have BOTH an in-repo tracked memory dir AND an
+# out-of-repo live dir, and they are carried by different mechanisms -- folding them
+# into one verdict is the borrowed-symbol shape (one line, two facts, and anything
+# downstream needing to tell them apart is dead). Measured on a sibling project whose
+# out-of-repo MEMORY.md carries a deliberate "these two are NOT a mirror -- never point
+# a sync tool at the pair" warning: read at handoff time beside a single fused verdict,
+# that correct warning made the false negative MORE convincing, not less.
+if [ -d "$LIVE_MEM" ]; then
+  LIVE_N=$(ls "$LIVE_MEM"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${LIVE_N:-0}" -gt 0 ]; then
+    if [ "$TRACKED_MEM" -gt 0 ]; then
+      echo "out-of-repo live memory dir: $LIVE_N md file(s) at $LIVE_MEM -- NOT carried by the push; a separate fact from repo-is-transport, and in scope only if this project's convention mirrors it"
+    else
+      echo "out-of-repo live memory dir: $LIVE_N md file(s) at $LIVE_MEM -- NOT carried by the push, and no tracked in-repo memory either; if these files matter across machines, nothing is carrying them"
+    fi
+  fi
+fi
 
 echo
 echo "== OUT-OF-BAND SYNC ROOT (hint only -- recipe file is authoritative) =="

@@ -82,11 +82,37 @@ if [ -n "$BS" ]; then printf '%s\n' "$BS" | sed 's/^/  /'; else echo "none at re
 
 echo
 echo "== IN-REPO MEMORY MIRROR =="
-MIR=""
+# TRACKED count, not just files-on-disk. The transport question is "does memory travel
+# on the push?", and only `git ls-files` answers it -- an untracked (or ignored) memory
+# dir is a local directory that looks identical on disk to one that syncs.
+MIR=""; TRACKED_MEM=0
 for d in claude-infra/memory continuation/memory; do
-  if [ -d "$d" ]; then MIR="yes"; echo "  $d ($(ls "$d"/*.md 2>/dev/null | wc -l | tr -d ' ') md files)"; fi
+  if [ -d "$d" ]; then
+    MIR="yes"
+    N_DISK=$(ls "$d"/*.md 2>/dev/null | wc -l | tr -d ' ')
+    N_TRK=$(git ls-files -- "$d" 2>/dev/null | wc -l | tr -d ' ')
+    TRACKED_MEM=$(( TRACKED_MEM + N_TRK ))
+    echo "  $d ($N_DISK md files on disk, $N_TRK git-tracked)"
+  fi
 done
 [ -z "$MIR" ] && echo "none (no claude-infra/memory or continuation/memory in repo)"
+# A capability must be probed by its EFFECT, never by an implementation marker. The
+# branch list used to require a BOOTSTRAP SCRIPT to credit an in-repo mirror -- but a
+# bootstrap script is one project's implementation of a live->mirror COPY step, i.e.
+# evidence a copy is NEEDED, never evidence a transport EXISTS. That inverted the test:
+# a project whose memory is simply git-tracked, with nothing to copy, is the cleanest
+# arrangement and was classified as having NO transport at all. Measured on a sibling
+# project with 58 tracked memory files carried between two machines for its whole life;
+# the probe said "none", the session repeated it, and the owner corrected it in one line.
+# The failure is loud and wrong in the ALARMING direction, which is worse than silent:
+# it invites a session to BUILD a transport, and the obvious build is a sync bucket --
+# the mechanism this estate already superseded by moving memory into git.
+echo -n "repo-is-transport: "
+if [ "$TRACKED_MEM" -gt 0 ]; then
+  echo "yes ($TRACKED_MEM tracked memory file(s) travel on the push; a live->mirror copy step may still be needed -- see BOOTSTRAP SCRIPT)"
+else
+  echo "no (no git-tracked in-repo memory; the push carries no memory)"
+fi
 
 echo
 echo "== OUT-OF-BAND SYNC ROOT (hint only -- recipe file is authoritative) =="
@@ -207,7 +233,10 @@ echo "  2 in-repo mirror + bootstrap script => bootstrap / mirror copy-back hand
 echo "  3 junction-to-out-of-band => OS auto-syncs"
 echo "  4 POSITIVE bucket-match (exact/declared/alias) => out-of-band bucket transport; open the recipe file."
 echo "    bucket-match-lowconf (substring) is NOT branch 4 -- surface candidates + confirm with the user."
-echo "  5 none of the above => no cross-device memory transport"
+echo "  4b repo-is-transport: yes => the git-tracked memory dir IS the transport; it travels on the"
+echo "     push the handoff already performs. A no-op FOR A STATED REASON, not an absent transport."
+echo "  5 none of the above AND repo-is-transport: no => genuinely no cross-device memory transport."
+echo "     Branch 5 means work WILL be stranded -- it is the only branch worth alarming about."
 echo "A sync root EXISTING is not branch 4 -- only a positive bucket-match is. DIRECTION is the"
 echo "calling skill's job: device-sync pulls bucket->local (arrival); device-handoff pushes local->bucket (departure)."
 exit 0

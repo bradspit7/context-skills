@@ -145,7 +145,7 @@ _rotation_hold() {
 # Requires CANDIDATES to be resolved (the MEMORY HEALTH pass), so call it no earlier.
 #
 # A `*docket*` SUBSTRING glob is not a docket test, and both directions were measured live:
-# it MISSES `docs/DOCKET-ACTIVE.md` (CRELIO's real docket -- ALL-CAPS, and in a `docs/` home
+# it MISSES `docs/DOCKET-ACTIVE.md` (a real project docket -- ALL-CAPS, and in a `docs/` home
 # neither glob reached, so that project's session-start cost was reported as its MEMORY.md
 # alone), and it ADMITS things that are not the docket and are not read at session start --
 # a transient `DOCKET-INBOX-*.md` cross-repo filing, and an on-demand memory TOPIC file whose
@@ -156,7 +156,7 @@ _rotation_hold() {
 #
 # $2 = "strict" for a MEMORY DIR, where the PREFIX form is not admitted. A memory dir's other
 # contents are on-demand TOPIC files by definition, and the two shapes are indistinguishable by
-# name: `docs/DOCKET-ACTIVE.md` (CRELIO's real docket) and `continuation/memory/
+# name: `docs/DOCKET-ACTIVE.md` (a real project docket) and `continuation/memory/
 # docket_rederivation_2026-08-19.md` (a 25KB one-off note) are both `docket<sep>*.md`. Location
 # is the honest discriminator -- a project-level docket lives at a project home, so the prefix
 # form is admitted there and not inside a memory dir. The SUFFIX forms (`* docket.md`,
@@ -252,7 +252,7 @@ fi
 echo
 echo "== ROTATION SIGNALS =="
 # A project's pickup-point HEADER SHAPE and inline KEEP CEILING are both declarable.
-# A running log that uses its own header format (RRWEBSITE writes '**Last Updated:**' /
+# A running log that uses its own header format (one project writes '**Last Updated:**' /
 # '**Prior:**') counts 0 against the literal 'PICKUP POINT' forever, so the rotation
 # THRESHOLD can never fire and the miss reports as a clean zero. Declaring the ceiling
 # matters too: a project that legitimately keeps ~24 entries inline would otherwise trade
@@ -443,9 +443,28 @@ else
   # multiplies the two lines only if the second one exists. So derive the complement -- tracked
   # docket-shaped files NOT in the start set (archive/, docs/, drafts/) -- and print UNKNOWN
   # rather than 0 when it cannot be derived, because 0 is the one value meaning "nothing skipped".
+  # BYTES, not just a count. A count is the one shape of complement that a structural split
+  # can hide behind: moving 450KB of docket bodies into a sibling file moves ONE file into
+  # this line and drops its bytes from the sum, so the ceiling reports a large improvement
+  # that is pure relocation. That is the G#385 attractive nuisance aimed at this very check --
+  # the cheapest way to silence the READPATH THRESHOLD must never be "move bytes somewhere the
+  # sum does not look". Naming the bytes is what makes a relocation visible as a relocation.
+  # Also a real set difference (by realpath, against the same RP_SEEN keys the sum used) rather
+  # than `total - |start set|`: RP_FILES legitimately contains files git does not track (the
+  # out-of-repo memory-dir MEMORY.md), so the subtraction under-reported whenever it mattered.
   if git rev-parse --git-dir >/dev/null 2>&1; then
-    RP_ALL=$(git ls-files -- '*roadmap*.md' '*docket*.md' '*DOCKET*.md' 'MEMORY.md' '*/MEMORY.md' 2>/dev/null | sort -u | wc -l | tr -d ' ')
-    echo "  not in the start set: $(( RP_ALL > ${#RP_FILES[@]} ? RP_ALL - ${#RP_FILES[@]} : 0 )) other tracked docket/index-shaped file(s) (archive, docs, drafts) — visibility only, not a finding"
+    CP_N=0; CP_BYTES=0; CP_NAMES=""
+    while IFS= read -r f; do
+      [ -n "$f" ] && [ -f "$f" ] || continue
+      cprp=$(realpath "$f" 2>/dev/null || printf '%s' "$f")
+      cpkey=$(printf '%s' "$cprp" | tr ' ' '\001')
+      case " $RP_SEEN " in *" $cpkey "*) continue ;; esac
+      CP_N=$(( CP_N + 1 ))
+      CP_BYTES=$(( CP_BYTES + $(wc -c < "$f" 2>/dev/null || echo 0) ))
+      [ "$CP_N" -le 6 ] && CP_NAMES="$CP_NAMES $f"
+    done < <(git ls-files -- '*roadmap*.md' '*docket*.md' '*DOCKET*.md' 'MEMORY.md' '*/MEMORY.md' 2>/dev/null | sort -u)
+    echo "  not in the start set: $CP_N other tracked docket/index-shaped file(s), $(( CP_BYTES / 1024 ))KB (${CP_BYTES}B) — archive, docs, drafts, on-demand candidate bodies. Visibility only, not a finding; a LARGE figure here beside a small read path means bytes were relocated, not retired"
+    [ -n "$CP_NAMES" ] && echo "   ${CP_NAMES# }$( [ "$CP_N" -gt 6 ] && printf ' (+%d more)' $(( CP_N - 6 )) )"
   else
     echo "  not in the start set: UNKNOWN (no git; the complement cannot be derived here)"
   fi

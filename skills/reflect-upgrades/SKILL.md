@@ -103,6 +103,42 @@ Every candidate must pass three filters:
    do not file it. **Prefer a concrete implementation, or a strengthening of an existing check, over
    another reminder** — a proposed global instruction must say why the narrower remedy (a guard, a
    lint, a fix to the tool that failed) is insufficient.
+
+   **THE GLOBAL-RULEBOOK BAR. A candidate may name the always-loaded global instruction file as its
+   Target only if it clears ONE of two gates, named explicitly in the row:**
+   **(1) SECOND BITE** — the same *mechanism* has now been measured in **≥2 different projects**;
+   name both, with the incident in each. **(2) STRUCTURALLY UNSCOPEABLE** — the mechanism is a
+   property of the platform, toolchain or harness that no project can own (a shell trap, a git
+   behaviour, a model/API limit), so no project docket is a correct home; say which layer owns it.
+   **Everything else — including a kernel whose mechanism you are confident generalises — is filed
+   to the ORIGINATING PROJECT's docket or memory, or built as a skill, and carries a
+   `promote-on: second bite` note so a recurrence PROMOTES it instead of re-deriving it.**
+
+   **Why this is enforcement, not new policy.** This skill's own memory-promotion row already reads
+   *"a rule that has now bitten 2+ projects belongs in a skill or global instructions"*, and the wrap
+   skill carries the same sentence. **The bar was written twice and applied at the MEMORY step, never
+   at the FILING step** — so it never governed a Target. Measured on one estate the day it was
+   ruled: **401 open rows named the global instruction file, and every one had been measured in
+   EXACTLY ONE project** (top source 36.9%), projecting to hundreds of KB of additional
+   always-loaded text.
+
+   **What the bar is NOT.** It is not a claim that a once-measured kernel is wrong or
+   ungeneralisable — most are real. It is a claim about WHERE a claim with one data point should
+   live while it still has one data point. **Confidence that a mechanism generalises is exactly what
+   a second project is evidence FOR**; asserting it from a single incident is a conclusion drawn from
+   a cohort of one, applied to rule promotion. A filer who scopes their own confidence — *"measured
+   once, in one project; watch for a second instance rather than asserting this broadly"* — has
+   already applied this bar, and that wording is the model.
+
+   **Why the alternatives were rejected, since the next reader will re-ask.** **Tiered loading** (a
+   small always-loaded core plus domain packs pulled on demand) is usually available — skills work
+   that way — and is still WRONG for this content: *you cannot search for a trap you do not know
+   exists*, and these rules exist precisely because the reader does not know the trap is there.
+   **Accepting an unbounded file** pays its token cost in every session of every project, forever.
+   **Restructuring the dense bullets** yields a bounded, measured amount of slack and is not a
+   mechanism. Only the bar acts on the TRAJECTORY, which is the finding rather than the current
+   number. A declared size ceiling STANDS as the hard stop; it does its job by forcing this
+   decision.
 2. **De-dup — against the corpus this candidate's ROUTE points at, not only the central one.** A
    *generalizable* candidate: your central upgrades repo's docket **and any PENDING filings not yet
    ingested into it** — a docket only gains a row at *ingest*, so an unfiled duplicate sits in the

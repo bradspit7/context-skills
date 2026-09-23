@@ -790,13 +790,13 @@ def selftest() -> int:
         ok(re.search(r"MISSING\s+b\.html", out) is not None, "b.html (added after c1) is MISSING")
         ok(("PRODUCTION TREE: %s" % c1) in out, "the one production TREE is named: c1")
         ok("(2 file(s))" in out, "the pending-deploy list is derived from that tree: 2 files")
-        ok("1 host-config file(s) (_headers)" in out and "1 excluded path(s) (sandbox/)" in out,
+        ok("NOT EXAMINED: 1 host-config file(s) (_headers)" in out and "; 1 excluded path(s) (sandbox/)" in out,
            "excluded classes are COUNTED and named NOT EXAMINED, never silently dropped")
         ok("UNKNOWN, not zero" in out, "untracked served files are declared UNKNOWN")
         rc, out = go(brief=True)
         ok(rc == 1 and out.count("\n") == 1 and out.startswith("production is NOT at HEAD"),
            "--brief prints exactly ONE line and it says NOT at HEAD")
-        ok(("production tree = %s" % c1) in out and "2 file(s) pending deploy" in out,
+        ok(("production tree = %s" % c1) in out and "; 2 file(s) pending deploy" in out,
            "the brief line carries the production tree and the pending count")
 
         deploy(c3)
@@ -805,7 +805,7 @@ def selftest() -> int:
            "after deploying HEAD: exit 0 and one MATCHES line")
         (repo_dir / "site" / "a.html").write_bytes(b"<p>dirty</p>\n")
         rc, out = go()
-        ok("1 uncommitted site/ change(s) NOT included" in out,
+        ok("; 1 uncommitted site/ change(s) NOT included" in out,
            "a dirty tree is reported as NOT INCLUDED, never certified")
         git("checkout", "--", "site/a.html")
 
@@ -817,7 +817,7 @@ def selftest() -> int:
 
         deploy(c3, crlf_rel="index.html")
         rc, out = go(brief=True)
-        ok(rc == 0 and "1 only after normalisation" in out, "a CRLF-only file is a warned NORMALISED match (exit 0)")
+        ok(rc == 0 and "(1 only after normalisation)" in out, "a CRLF-only file is a warned NORMALISED match (exit 0)")
         rc, out = go(strict=True)
         ok(rc == 1, "--strict makes a NORMALISED match fatal")
         cfg_no_crlf = dict(cfg, _norm=ident, normalise=[])

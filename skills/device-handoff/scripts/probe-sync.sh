@@ -1,16 +1,47 @@
 #!/usr/bin/env bash
 # probe-sync.sh -- cross-device sync probe for the device-sync skill.
 # Read-only. Dumps the raw transport facts the skill reasons over (probe-before-
-# parse: never assume a transport). Always exits 0; any section that cannot be
-# determined prints "unknown" rather than failing.
+# parse: never assume a transport). Exits 0 on every probe; any section that cannot
+# be determined prints "unknown" rather than failing. The one exception is a usage
+# error (an unknown argument), which exits 2 before probing anything.
+#
+# The same file is bundled with device-sync (arrival) and device-handoff (departure),
+# byte-identical. The direction decides what "ahead of upstream" means, so it is
+# derived from the skill directory this copy lives in (device-handoff = departure,
+# anything else = arrival) and can be forced with --arrival / --departure.
 
 set -u
+
+usage() {
+  echo "usage: probe-sync.sh [--arrival | --departure]" >&2
+  echo "  --arrival    read ahead-of-upstream as a prior departure that did not push (device-sync)" >&2
+  echo "  --departure  read ahead-of-upstream as this handoff's pending push (device-handoff)" >&2
+  echo "  default: departure when this copy lives in a device-handoff skill dir, else arrival" >&2
+}
+
+SKILL_DIR_NAME=$(basename "$(cd "$(dirname "$0")/.." 2>/dev/null && pwd)")
+case "$SKILL_DIR_NAME" in
+  device-handoff) DIRECTION=departure; DIRECTION_WHY="default for the device-handoff copy" ;;
+  *)              DIRECTION=arrival;   DIRECTION_WHY="default for the $SKILL_DIR_NAME copy" ;;
+esac
+for arg in "$@"; do
+  case "$arg" in
+    --arrival)   DIRECTION=arrival;   DIRECTION_WHY="forced by --arrival" ;;
+    --departure) DIRECTION=departure; DIRECTION_WHY="forced by --departure" ;;
+    -h|--help)   usage; exit 0 ;;
+    *) echo "probe-sync.sh: unknown argument '$arg'" >&2; usage; exit 2 ;;
+  esac
+done
+
+# How many unpushed commits the arrival listing shows before it prints a remainder.
+UNPUSHED_CAP=20
 
 echo "== MACHINE =="
 hostname
 
 echo
 echo "== GIT =="
+echo "probe-direction: $DIRECTION ($DIRECTION_WHY)"
 if git rev-parse --git-dir >/dev/null 2>&1; then
   echo "is-git: yes"
   CUR_WT=$(git rev-parse --show-toplevel 2>/dev/null)
@@ -18,7 +49,30 @@ if git rev-parse --git-dir >/dev/null 2>&1; then
   if git rev-parse '@{upstream}' >/dev/null 2>&1; then
     BEHIND=$(git rev-list --count HEAD..@{upstream} 2>/dev/null || echo '?')
     AHEAD=$(git rev-list --count @{upstream}..HEAD 2>/dev/null || echo '?')
-    echo "behind-upstream: $BEHIND   ahead-upstream: $AHEAD"
+    # This probe runs no `git fetch`, so both counts are relative to the remote-tracking
+    # ref as it stood at the last fetch. behind is the stale one: the other machine may
+    # have pushed since. ahead counts commits made here that never left this machine.
+    echo "behind-upstream: $BEHIND   ahead-upstream: $AHEAD   (as of last fetch; this probe does not fetch)"
+    case "$AHEAD" in
+      ''|*[!0-9]*) AHEAD_N=0 ;;
+      *) AHEAD_N=$AHEAD ;;
+    esac
+    if [ "$AHEAD_N" -gt 0 ]; then
+      if [ "$DIRECTION" = arrival ]; then
+        # Measured (a sibling project, 2026-09-10): behind 4 / ahead 1 printed as two bare
+        # counts. The unpushed commit recorded an acceptance as DONE; the remote's four
+        # later commits were written without it and re-asserted the older state, and the
+        # divergence read as a plain merge job. Name the condition and show the facts the
+        # remote never saw, BEFORE the pull merges them.
+        echo "unpushed-local: $AHEAD_N -- a prior departure did not push; the remote's later wrap may be stale on the facts these commits record:"
+        git log --format='  %h %ad %s' --date=short -n "$UNPUSHED_CAP" '@{upstream}..HEAD' 2>/dev/null
+        if [ "$AHEAD_N" -gt "$UNPUSHED_CAP" ]; then
+          echo "  ... and $((AHEAD_N - UNPUSHED_CAP)) more (git log --oneline @{upstream}..HEAD)"
+        fi
+      else
+        echo "unpushed-local: $AHEAD_N -- departure: expected; this handoff's push sends them"
+      fi
+    fi
   else
     echo "upstream: none configured"
   fi

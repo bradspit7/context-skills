@@ -1,318 +1,251 @@
 ---
 name: reflect-upgrades
-description: Use after substantial work or a real finding to reflect on whether the session warrants a new or upgraded tool, hook, subagent, skill, slash command, MCP, catalog entry, or rule. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", or proactively when a work session produced durable learnings. Routes generalizable upgrades to a central upgrades repo or catalog and project-specific ones to the current project. Surfaces and files candidates; it does not build them.
+description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per wrap. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-07-24.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-09-23.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
-# Reflect-upgrades — turn session learnings into tooling upgrades
+# Reflect-upgrades — put each lesson where it can act
 
-The reflection worth running every session: *did we learn anything that would help build or upgrade
-our tools, subagents, hooks, skills, commands, or rules?* This skill is its single canonical home. It
-is invoked three ways — manually (trigger phrases above), by `update-context` at every wrap (Layer 1),
-and by the `upgrade-reflection-nudge` hook once per session after substantial work (Layer 2).
+The question worth asking by hand every session: *did we learn anything that should change our
+tools?* This skill answers it **by changing them**, not by writing a row about them. It runs three
+ways: `update-context` invokes it at every wrap (the only automatic path, and the only one that
+builds), the bundled `upgrade-reflection-nudge` hook suggests it mid-session after substantial work
+(see *Companion hook*), and the user can invoke it by name.
 
-This is a judgment-and-filing pass: it **surfaces and files candidates** — to the sanctioned
-filing targets in Step 4 (docket lines, handoff entries, the catalog, the self-audit log) — it
-does not build them. Building a surfaced upgrade is separate, approved work.
+**Every surviving lesson ends in exactly one outcome:** `reused` (an existing tool already does it),
+`built` (this wrap's one build), `queued` (this project's `UPGRADE-QUEUE.md`), `filed-central` (a
+committed inbox lesson, routes a-d below), `noted` (a project memory note — owner rulings and
+preferences), `strengthened-existing` / `dedup-existing` (it is already somewhere), or `zero`.
+"Surfaced in chat" is not an outcome: chat scrolls away.
 
 ## When to fire / not fire
 
-Fire when a session produced substantive work — edits, commits, a captured learning, a debugged
-gotcha, a manual step done more than once, friction hit more than once — and you are reflecting on
-whether tooling should change.
-
-Do NOT fire on pure Q&A or trivial sessions with no durable signal. Return the empty verdict
-(Step 5) rather than manufacturing candidates.
+Fire when the session produced substantive work — edits, commits, a debugged gotcha, a manual step
+done more than once, friction hit more than once. Do NOT fire on pure Q&A or trivial sessions; return
+the empty verdict rather than manufacturing lessons.
 
 ## Step 1 — Gather the session signal
 
-From the conversation plus git state, list what this session actually produced: shipped artifacts,
-decisions, debugged gotchas, repeated manual sequences, friction hit more than once, and any memory
-files written. If `update-context` already computed shipped / learned / decided / deferred, reuse it
-— do not recompute.
+List what the session actually produced: shipped artifacts, decisions, debugged gotchas, repeated
+manual sequences, friction hit more than once, memory files written. If `update-context` already
+computed shipped / learned / decided / deferred, reuse it.
 
-**Scope note — this signal is REACTIVE by construction.** It is what the session *hit* — and
-"hit" is **two** kinds of evidence, not one. A **failure** the session ran into is the obvious kind.
-The other is **work the session REPEATED**: a manual sequence run twice or more, the same fix applied
-by hand across several sites, a check re-derived because nothing invokes it. A repeat is *measured*
-evidence — the artifacts are in this session's own diff and transcript — so a project-local skill,
-command, check or workflow proposed to absorb it **needs no failure incident**; the repeat count IS
-the evidence Step 3 demands, and Step 3's load-bearing test still gates it. Say the count out loud in
-the candidate's evidence field ("ran this 3x by hand this session"), because that number is the whole
-justification.
+The signal is **reactive**: what the session *hit*. That is two kinds of evidence — a **failure** it
+ran into, and **work it repeated** (a sequence run twice by hand, the same fix applied across sites, a
+check re-derived because nothing invokes it). A repeat needs no failure incident: say the count out
+loud ("ran this 3x by hand this session"), because that number is the justification. A capability the
+project ought to have but never needed here is the generative question — `/opportunity-scan`'s job,
+not this one.
 
-What stays OUT is the **generative** question: a capability this project ought to have but has
-neither been bitten for lacking **nor exercised here** will not appear in this signal, and
-originating one is not this skill's job — that belongs to a generative vision-layer scan (see
-Related). Do not run a project-wide discovery scan from here, do not stretch Step 2 to invent a
-capability the session never touched, and do not route a generative direction back here. The
-reactive/generative boundary is the point; this moves only the line *within* the reactive side, from
-"a failure occurred" to "this session produced the evidence".
+**Reasoning misses** (a blind spot, a wrong reading you corrected, an assumption that bit) are their
+own stream: append one dated, transcript-verifiable line to the self-audit log in your central
+upgrades repo (`SELF-AUDIT.md` at its root; create it on first use) with its two tags — `incident:`
+(was this occurrence corrected?) and `system:` (`unmitigated` / `candidate-filed(<ref>)` /
+`guard-deployed` / `recurrence-seen(<prior-date>; <ref>)`). Run the Step 2 search on the miss's
+mechanism **before** appending: a hit on an entry already at `guard-deployed` means the guard failed —
+the new entry ends `system: recurrence-seen(...)` and the recurrence is recorded (Step 6); a hit at
+`candidate-filed` or `unmitigated` makes the new entry a recurrence of that one, strengthening it. The
+log is append-only; never edit a prior entry.
 
-## Step 2 — Scan against the upgrade surface
+## Step 2 — Look it up first: reuse, then de-dup
 
-For each signal item, ask whether it warrants a new or upgraded:
+One pass per lesson, **before** designing anything:
 
-| Surface | A candidate looks like |
-|---|---|
-| **skill** | a multi-step judgment procedure done by hand that would repeat across sessions |
-| **hook** | a deterministic check / guard / nudge that should fire automatically on an event |
-| **subagent / agent** | a self-contained delegated task done inline a specialized agent would do better |
-| **slash command** | a fixed prompt or recipe typed more than once |
-| **MCP / connector** | a manual external-service interaction a tool could automate |
-| **catalog entry** | a tool / plugin / skill discovered or used that is worth recording for reuse |
-| **CLAUDE.md rule** | a correction or convention that should bind future sessions (project or global) |
-| **memory promotion** | a rule that has now bitten 2+ projects belongs in a skill or global CLAUDE.md |
+```bash
+python ~/.claude/skills/reflect-upgrades/scripts/capability-index.py query "<what the fix would do>"
+python ~/.claude/skills/analyze-context/scripts/docket_corpus.py search -i '<term1>|<term2>' --scope all
+```
 
-**Self-audit feeder (own-miss stream, paired reader built in):** separately from the tool-gap
-scan above, ask — did this session contain a *reasoning miss* no existing tool would have caught
-(a blind spot, a wrong reading you corrected, an assumption that bit)? That is a different signal
-class from a tool-gap candidate: it needs a captured lesson, not a new tool. Append it as one
-dated line to the **self-audit log** in the central upgrades repo (`SELF-AUDIT.md` at its root;
-create it on first use) — a transcript-verifiable one-liner naming the miss and its mechanism,
-carrying the **two-state model**: `incident:` (was the specific occurrence corrected?) AND `system:`
-(is the systemic *lesson* encoded? — `unmitigated` / `candidate-filed(<id>)` / `guard-deployed` /
-`recurrence-seen`). The two axes are independent: an incident is routinely corrected in-session while
-its systemic lesson stays unencoded ("standing lesson, not yet a rule").
-
-The reader is this same skill: **whenever it fires, first re-read the self-audit log — every entry
-whose `system:` state is not yet `guard-deployed`**, not just the incident-open ones. A re-read
-scoped to "still-open incidents" drops exactly the corrected-incident/unmitigated-lesson entries this
-model exists to catch. Any still-unmitigated or now-fixable miss becomes a Step-2 tooling candidate on
-this pass — advance its `system:` state when it does (`candidate-filed(<id>)` when routed,
-`guard-deployed` once the mechanism lands + propagates). A **recurrence after deployment** — the same
-miss biting again after its guard shipped — **reopens the linked candidate and marks the prior
-mechanism ineffective** (`system: recurrence-seen`). That closed loop is what earns the capture;
-never open a write-only backlog.
+- **Capability first, by what it does — never by filename.** The same capability has been built twice
+  under two names by projects that did not know about each other; a same-name check found neither. A
+  live hit that already does the job → **rung 0: adopt or port it** (outcome `reused`). A hit that is
+  a sibling copy of the tool you are about to fix → the fix goes to its shared owner, once.
+- **Then the corpus, by 2-3 terms naming the failure mechanism.** The helper searches every project's
+  real docket files (including split-out row-body files, archives, pending `DOCKET-INBOX-*.md` filings
+  and the self-audit log) and prints its denominator. A hit → `strengthened-existing` or
+  `dedup-existing`: record the occurrence against the existing entry (a new date, project or wording
+  does not make a new upgrade). A central hit is recorded from any project through the outcome record
+  (Step 6), **never by editing the central docket or another session's pending inbox file** — that is
+  the uncommitted-edit-to-a-live-central-doc class. A project hit is recorded in that project's own
+  docket.
 
 ## Step 3 — Filter (the anti-noise gate)
 
-Every candidate must pass three filters:
-1. **Load-bearing test** — *would a future session act differently if this tool existed?* No -> drop
-   it. Do not invent work to look productive. **"Acts differently" is necessary, never sufficient** —
-   reading one more rule, checking one more doc, or commissioning one more review all qualify, and
-   none of them is an improvement. Before accepting, name all five: **current behaviour** (what
-   happens today), **implementation target** (the artifact that actually changes), **expected
-   improvement** (a step removed, a failure detected, a capability gained), **recurring cost**
-   (context bytes, hook latency, maintenance surface — a rule loaded into every session in every
-   project is the most expensive shape on this list), and a **concrete acceptance check** (what you
-   would run to see it working). A candidate that cannot fill all five is an *observation*: report it,
-   do not file it. **Prefer a concrete implementation, or a strengthening of an existing check, over
-   another reminder** — a proposed global instruction must say why the narrower remedy (a guard, a
-   lint, a fix to the tool that failed) is insufficient.
+1. **Load-bearing test — name all five, or it is an observation, not a lesson:** **current behaviour**
+   (what happens today), **implementation target** (the file that changes), **expected improvement**
+   (a step removed, a failure detected, a capability gained), **recurring cost** (context bytes, hook
+   latency, maintenance — text loaded into every session of every project is the most expensive shape
+   there is), and a **concrete acceptance check** (what you would run to see it work). *"A future
+   session would act differently"* is necessary, never sufficient: reading one more rule qualifies and
+   improves nothing. **The five fields are the build spec** — target = the file, acceptance check = the
+   RED condition, current behaviour = the incident command and output.
+2. **Target project alive** — a lesson whose remedy targets a discontinued project is dead work (check
+   wherever you track project lifecycle status, if you do). Its platform kernel, if any, still routes
+   (a).
 
-   **THE GLOBAL-RULEBOOK BAR. A candidate may name the always-loaded global instruction file as its
-   Target only if it clears ONE of two gates, named explicitly in the row:**
-   **(1) SECOND BITE** — the same *mechanism* has now been measured in **≥2 different projects**;
-   name both, with the incident in each. **(2) STRUCTURALLY UNSCOPEABLE** — the mechanism is a
-   property of the platform, toolchain or harness that no project can own (a shell trap, a git
-   behaviour, a model/API limit), so no project docket is a correct home; say which layer owns it.
-   **Everything else — including a kernel whose mechanism you are confident generalises — is filed
-   to the ORIGINATING PROJECT's docket or memory, or built as a skill, and carries a
-   `promote-on: second bite` note so a recurrence PROMOTES it instead of re-deriving it.**
+## Step 4 — Pick the rung, then the route
 
-   **Why this is enforcement, not new policy.** This skill's own memory-promotion row already reads
-   *"a rule that has now bitten 2+ projects belongs in a skill or global instructions"*, and the wrap
-   skill carries the same sentence. **The bar was written twice and applied at the MEMORY step, never
-   at the FILING step** — so it never governed a Target. Measured on one estate the day it was
-   ruled: **401 open rows named the global instruction file, and every one had been measured in
-   EXACTLY ONE project** (top source 36.9%), projecting to hundreds of KB of additional
-   always-loaded text.
+**The ladder — first match wins:**
 
-   **What the bar is NOT.** It is not a claim that a once-measured kernel is wrong or
-   ungeneralisable — most are real. It is a claim about WHERE a claim with one data point should
-   live while it still has one data point. **Confidence that a mechanism generalises is exactly what
-   a second project is evidence FOR**; asserting it from a single incident is a conclusion drawn from
-   a cohort of one, applied to rule promotion. A filer who scopes their own confidence — *"measured
-   once, in one project; watch for a second instance rather than asserting this broadly"* — has
-   already applied this bar, and that wording is the model.
+| Rung | Home | Use when |
+|---|---|---|
+| 0 | **Reuse** | Step 2 found something that already does it: a project's own script or test, a sibling's copy, the catalog, an installed skill |
+| 1 | **Fix the code** | the defect lives in code this project owns |
+| 2 | **A check the project already runs** | its tests / pre-commit / ship-check — enrolled so it actually executes (a network check cannot be a pre-commit gate; hook it to an `analyze-context`/`update-context` step keyed on project state instead) |
+| 3 | **A shared guard hook** | an OS / shell / git / harness trap any project can hit |
+| 4 | **A path rule** | `.claude/rules/*.md` with `paths:` — a file-type authoring rule that should load only when a matching file is read |
+| 5 | **A step in a skill that measurably fires** | only `update-context`, `analyze-context`, `receiving-code-review`; or code/constants inside a Workflow runnable (never prose in `orchestrate`) |
+| 6 | **A project memory note** | owner rulings and preferences; a technical lesson only as a holding pen that names its queued build item |
+| 7 | **One line in the always-loaded core** | only behaviour that must fire everywhere with no trigger, and only through the bar below |
+| 8 | **Reference** | searchable, never auto-loaded: incidents and worked examples |
 
-   **Why the alternatives were rejected, since the next reader will re-ask.** **Tiered loading** (a
-   small always-loaded core plus domain packs pulled on demand) is usually available — skills work
-   that way — and is still WRONG for this content: *you cannot search for a trap you do not know
-   exists*, and these rules exist precisely because the reader does not know the trap is there.
-   **Accepting an unbounded file** pays its token cost in every session of every project, forever.
-   **Restructuring the dense bullets** yields a bounded, measured amount of slack and is not a
-   mechanism. Only the bar acts on the TRAJECTORY, which is the finding rather than the current
-   number. A declared size ceiling STANDS as the hard stop; it does its job by forcing this
-   decision.
-2. **De-dup — against the corpus this candidate's ROUTE points at, not only the central one.** A
-   *generalizable* candidate: your central upgrades repo's docket **and any PENDING filings not yet
-   ingested into it** — a docket only gains a row at *ingest*, so an unfiled duplicate sits in the
-   intake queue, which is exactly where a de-dup that checks only the docket cannot see it (measured:
-   three projects filed the same two defects three times each, every filer having checked the docket
-   alone) — plus your catalog, if you keep one. **Do this as a CONCEPT GREP, never by opening the
-   files:** 2-3 terms naming the *failure mechanism*, grepped case-insensitively across the docket and
-   the pending filings. It costs milliseconds; *reading* an accumulated intake queue can cost six
-   figures of tokens and is not a per-reflection price anyone should pay. A *project-specific*
-   candidate (Step 4's other branch): **that project's own docket / handoff** — checking only the
-   central corpus de-dups it against a corpus that structurally cannot contain its duplicate, so the
-   same project-local candidate can be re-filed session after session with nothing noticing. A
-   *dual-surface* candidate checks **both**. Already queued -> do not re-propose; **record the
-   occurrence against the existing entry** — a different date, project, example or wording does not
-   make a new upgrade. **Where that record goes depends on the route:** a central match is recorded
-   from any project through the outcome ledger (`record --status dedup-existing --candidate
-   "<ref>@central"`, the ref being the docket id for a filed row or the filename for a pending one) —
-   **never by editing the central docket or another session's pending filing from here**, which is the
-   uncommitted-edit-to-a-live-central-doc class the filing step forbids and would also race the filer.
-   A project-local match is recorded in that project's own docket, where you already hold write
-   access.
-3. **Target-project-alive** — if the candidate's remediation *target* is a specific project, confirm
-   that project is still active before filing (if you track project lifecycle status). A candidate
-   targeting a discontinued or abandoned project is **dead work — do not file it**. (A dead project's
-   *machine-level* kernels — shell/tooling traps that bite anywhere — stay valid and generalize as
-   usual; only project-*targeted* work dies with it.)
+**The route — a lesson stays in its project unless:** (a) it is a **platform / OS / harness trap**;
+(b) a **second project** has the same mechanism — a **verified** row, checked with
+`docket_corpus.py state <project> <id>` (it must not return `absent`), never a self-declared claim;
+(c) the fix **edits a shared artifact** — a shared skill, hook, runnable, catalog entry or shared-toolkit
+script; or (d) it is **catastrophic-if-wrong** (live external writes, regulated personal data such as
+health records, credentials, pushes/deploys, data destruction) → shared on the **first** bite, written
+at mechanism level only, with no incident detail.
 
-## Step 4 — Route and file
+**Route by the ownership of the remedy, not by what the incident touched.** Having *used* a shared skill
+while hitting a problem does not make the remedy shared; a fix confined to this project's own code,
+checks or instructions stays here. A fix that genuinely edits a shared artifact is route (c) even when
+one project has felt it. Split into two lessons only when an independent project-local change also
+exists.
 
-Apply the routing rule:
-- **Generalizable** (helps many projects, or is about your tooling itself) -> file to your **central
-  upgrades repo or catalog** — a docket / "next candidates" item, or a catalog stub.
-- **Project-specific** (only helps the current project) -> the current project's own docket / memory.
+**The global-rulebook bar.** Rung 7 — or any lesson whose target is the global `CLAUDE.md` /
+`AGENTS.md` — needs one of two gates, named in the lesson: **second bite** (route b, verified) or
+**structurally unscopeable** (a platform/toolchain/harness property no project can own; name the
+layer). A once-measured kernel is not wrong — it belongs where one data point lives, with a
+`promote-on: second bite` note. Enforce the bar mechanically where you can — at filing and again at
+ingest — rather than by re-reading this paragraph.
 
-**Route by the OWNERSHIP of the proposed REMEDY, not by what the incident happened to touch.**
-The discriminator is *which artifact does the fix actually change?* Having merely **used** a shared
-skill while hitting the problem does not make the remedy shared: a fix confined to this project's own
-code, checks, skills, workflows or instructions stays **here**, even when a lifecycle skill was in the
-room when it bit. A fix that genuinely edits a named shared artifact goes **central**, even when only
-one project has felt it so far. Split into two candidates only when a shared change **and** an
-independently necessary project-local change both exist; otherwise file ONE candidate and link the
-incident evidence to it.
+**Central lessons (routes a-d) are filed as a new committed inbox file** at your central upgrades
+repo's root (`DOCKET-INBOX-<date>-<project>.md`), never an uncommitted edit to a live central doc.
+If the central repo is ever open in more than one session at a time, file through an **atomic
+filer**: build the commit in a *temporary* index rather than the shared one (`git read-tree` →
+`git update-index --add` the single file → `git write-tree` → `git commit-tree` → a compare-and-swap
+`git update-ref`). That is sweep-immune in both directions, lands on the branch you name regardless
+of what is checked out, and retries a concurrent tip move instead of losing it; plain `git add` plus
+a pathspec `git commit -- <file>` of the one file is the fallback. The filer should refuse a lesson
+without valid front matter:
 
-**Dual-surface candidates — split, don't bury.** When a candidate touches *named shared machinery* —
-a lifecycle or process skill (`update-context`, `analyze-context`, `orchestrate`, ...), a global
-instruction file (e.g. `CLAUDE.md`), your catalog, a global hook, or the upgrade pipeline itself — it
-has a generalizable kernel even when its concrete instance is project-local. File the kernel
-**centrally** (and the project-local instance, if any, in the project). The project-local surface
-must not keep the kernel trapped in the project docket — that is exactly how a real
-`update-context`-rotation kernel once got stranded as a single project's roadmap item. Anti-over-filing
-gate: it must touch the *named* shared machinery above, not merely "feel like it could generalize" —
-Step 3's load-bearing test still applies.
+```markdown
+---
+origin_project: <this project>
+route: <a|b|c|d>
+second_bite: <other project>:<row id>
+mechanism: <one line naming the failure mechanism>
+target: <the file or tool that would change>
+---
+<the lesson: the five fields from Step 3; for route d, mechanism only>
+```
 
-**Filing from another project's session — durable + receipt-bearing.** Your central upgrades repo is
-reachable by its local path even when the session is rooted elsewhere. File as a **new committed inbox
-file**, never an uncommitted edit to a live central doc: write `DOCKET-INBOX-<date>-<project>.md` at
-the central repo root (rows in docket style, unnumbered — ids are allocated at ingest, which also
-removes counter contention between concurrent filers), **commit it immediately** — and prefer an
-**atomic filer** over `git add && git commit` if your central repo is ever open in more than one
-session at a time. Build the commit in a *temporary* index rather than the shared one (`git read-tree`
-→ `git update-index --add` the single file → `git write-tree` → `git commit-tree` → a compare-and-swap
-`git update-ref`). That is sweep-immune in both directions — a concurrent session's staged work cannot
-land in your filing and yours cannot be swept into theirs — it lands on the branch you name regardless
-of what is checked out, and it retries a concurrent tip move instead of losing it. Plain
-`git add && git commit` of the one file is the fallback, not the default. Then **show the user
-the receipt (path + short sha) in this session's report** — "filed" means a quotable commit, never
-"it's in a working tree." A new file bundles no unrelated work and cannot be clobbered by a concurrent
-session or a snapshot rewrite of the doc it would otherwise have edited. Your next central session
-ingests the inbox: allocate ids, merge into the docket, delete the file (content survives in the
-creating commit).
+`second_bite` is required for route b and omitted otherwise.
 
-File the surviving candidates to the right home — do not merely mention them. Filing means a docket
-line, a handoff entry, or a catalog stub. It does not mean implementing.
+Show the receipt (path + short sha): "filed" means a quotable commit. The next central session
+processes the inbox under these same rules — builds it, queues it, or hands it back.
 
-**Filing is unconditional — a duty, never an offer.** A surviving candidate has exactly three valid
-terminal states: filed, strengthened into an existing row, or deduped against one. "Surfaced in
-chat" is not a state — chat scrolls away; the docket doesn't. Never ask permission to file, and
-never park a candidate behind "say the word next session and I'll fold it in" — that converts the
-duty into an offer whose survival depends on the user remembering chat. Named non-reasons (each
-licensed a real near-drop at a live project wrap — the candidate became a docket row only because
-the user challenged the deferral):
-- **"The docket/roadmap is on rotation-hold / doc-freeze"** — a hold blocks *structural rotation
-  and archiving* (update-context scopes it to exactly that), never a one-line docket add.
-- **"Keep the wrap diff small / avoid another commit"** — diff economy is never a reason to drop a
-  learning; the docket line IS the wrap's product.
-- **"Context is high / wrap fast"** — filing is one line; it is never the thing to cut.
-Catching an unfiled surviving candidate in your own report means going back and filing it before
-finishing — the user should never have to say "file it."
+**Project lessons that do not fit this wrap's build go to the project's `UPGRADE-QUEUE.md`** at its
+root: one `## YYYY-MM-DD · <title>` heading per item (oldest first), then `- **Lesson:**`,
+`- **Target:**`, `- **RED:**`, `- **Source:**` bullets. **Cap 5.** A full queue shows as one briefing
+line; it is never a question for the owner.
 
-## Step 5 — Report
+## Step 5 — Build one (wrap layer only)
 
-Emit an **Upgrade candidates** block, one row each:
-`<surface> | <one-line what> | <evidence from this session> | <honesty-label> | routes-to <central|project> | ~<effort>`
+`update-context` runs this step at every wrap; nudge and manual firings stop at Step 4 (queue or file)
+and the next wrap builds. **Exactly one build per wrap:** the best new lesson on rungs 1-5 that fits
+one wrap, else the **oldest** queued item, else nothing.
 
-**Honesty labels are mandatory**: `proven-need` (this session concretely hit the gap),
-`solid-extension` (real value, no forcing incident), `speculative` (plausible, unproven).
-**Cap:** a session realistically yields 0-2 candidates; at most ONE may be `speculative`, and 3+ rows
-means the load-bearing filter failed — re-run Step 3 instead of emitting the list. A candidates list
-that just accumulates across sessions has failed: if a new candidate shares the spirit of an open
-docket row, strengthen that row instead of filing a sibling.
+1. **Look again before building** — if the build edits a hook or script, query the capability index
+   for other copies of it. Shared logic lives once; project differences live in per-project config;
+   a fix to a shared tool goes to its shared owner.
+2. **Write the spec on the main thread:** the incident command and output, the target file, the RED
+   condition (Step 3's five fields).
+3. **Hand it to a fresh small-context helper** (the Agent tool with worktree isolation, an agent type
+   that has a shell) that builds the check in its own worktree **outside the project root** and returns
+   the diff plus RED and GREEN evidence. The wrap's own context is too large to build in.
+4. **Apply it on the main thread, run the test once, and commit** with a trailer:
+   `git add <paths>` then `git commit -m "<subject>" -m "Upgrade: <one plain sentence>" -- <paths>`.
+   The trailer is the record: a ledger can derive *built* from it, in the repo where it landed.
+5. **Too big for one wrap** → queue it (cap 5).
+6. **Projects with live external writes or regulated personal data:** the build may only add tests
+   that import no write client, and must not touch the project's sensitive-data/secret guard, its git
+   hooks, its harness settings, its config/override files or its live runners (the project's own
+   `CLAUDE.md` names them). The RED proof uses an in-memory mutant or a synthetic fixture with the live
+   gate forced off. The full suite must be green and the project's own reviewer must pass before the
+   commit.
+7. **Central lessons** are built by the next central session's wrap, oldest first, on a branch in a
+   central worktree; `main` is fast-forwarded only when the shared checkout is clean and no other
+   central session is live.
 
-If nothing survives the filters, say so in one line: "No tooling upgrades warranted this session."
-That is a valid and common result.
+**Done means adopted, not built.** An upgrade moves **filed → built → adopted → observed**. *Built*:
+the artifact exists with a RED/GREEN proof. *Adopted*: the project reaches it through its normal work
+path — a hook, the runner, a lifecycle step — and it has run that way at least once. *Observed*: a later
+session recorded it catching, removing or preventing something. **The owner-facing test:** start from
+an ordinary request; if anyone has to name the upgrade or remember its command for the benefit to
+appear, it is not adopted. The wrap records adoption in the handoff, not just the build.
 
-**Log the verdict (required — record every outcome; the response side of the fires->outcome
-ledger):** whatever the outcome — filed, strengthened, deduped, or zero — record it durably. The
-*record* is required; *where* and *how* you keep it is yours — a log line, a docket entry, an issue,
-your own tracking tool. Capture these fields:
+## Step 6 — Report and record
+
+One row per lesson:
+`rung <0-8> | route <local|a|b|c|d> | <one-line what> | <evidence from this session> | <honesty-label> | <outcome>`
+
+**Honesty labels are mandatory:** `proven-need` (this session hit it), `solid-extension` (real value,
+no forcing incident), `speculative` (plausible, unproven). A session realistically yields 0-2 lessons;
+at most one `speculative`, and 3+ rows means the load-bearing filter failed — re-run Step 3. Nothing
+survives → one line: "No tooling upgrades warranted this session." That is a common, valid result.
+
+**Record the verdict, whatever it is.** The *record* is required; *where* you keep it is yours — a log
+line, a docket entry, your own tracking tool. Capture these fields:
 
 ```text
 layer:     nudge | wrap | manual
-status:    filed-central | filed-project | filed-catalog | strengthened-existing | dedup-existing | zero | other
-candidate: <ref>[@central|@project|@catalog][,...]   (- when none; a bare ref reads as untyped)
+status:    built | queued | reused | noted | filed-central | filed-project | filed-catalog |
+           strengthened-existing | dedup-existing | zero | other
+candidate: <ref>@<central|project|catalog>[,...]   (- when none)
 reason:    <short>            (required when status is zero or other)
 session:   <uuid>            (when the session id is visible)
 ```
 
-**Tag every ref with its SCOPE.** `status` records only ONE strongest outcome per reflection, so a
-reflection that filed centrally *and* project-locally records the central one and **loses the project
-leg entirely** — two real filings collapsed into one status, which makes any central-vs-project ratio
-drawn from `status` invalid. Put the scope on each ref instead (`<ref>@central`, `<ref>@project`,
-`<ref>@catalog`); a bare ref stays legal and reads as untyped. The scope is also what tells a later
-reader *which repo holds that ref's receipt* — a central ref filed from inside a project session lives
-in the central repo, not in the directory the reflection ran in.
+`status` is the strongest outcome; list every ref, each tagged with where it **actually** landed
+(`-` when none); `reason` is required for `zero`/`other`. `layer` is `wrap` from update-context,
+`nudge` when prompted by `[upgrade-reflection]`, `manual` otherwise. If you keep the companion
+`upgrade-ledger` machinery, that is `upgrade-ledger.py record --layer ... --status ... --candidate
+"..." --reason "..." [--session <uuid>]`. A later **catch** or **recurrence** is an event, with a
+repo-qualified id and an explicit owner (`upgrade-ledger.py event --candidate <project>:<id> --owner
+<project> --event <confirmed|observed> --evidence-ref <where> --note "<what ran and what it caught>"`).
+If you cannot record it in the moment, say so in the report — never silently skip.
 
-**Tag each ref with where it ACTUALLY landed — never copy the scope from `status`.** The status is one
-strongest outcome for the whole ROW; it names neither which ref earned it nor, on its own, where that
-ref went. (Measured: a `filed-project` row whose single ref's own `reason` says the kernel was *filed
-to the central docket*. One counterexample is enough — a row-level status cannot be safely attributed
-to an individual candidate, even when the row names exactly one.) On a `filed-*` status the write path
-warns — non-blocking, the row still records — when a ref carries no tag, when a tag contradicts the
-status, **and when no ref is supplied at all**, since that filing then appears nowhere in the per-ref
-scope distribution. The warning deliberately never tells you which scope to use: prescribing one would
-persist a guess, and a *stored* tag (unlike a report-time label) decides which repo that ref's receipt
-is looked up in.
-
-Use the **strongest applicable** `status` (`filed-central` > `filed-project`/`filed-catalog` >
-`strengthened-existing`/`dedup-existing` > `zero`); **list every ref** in `candidate` (`-` when none);
-`reason` is required for `zero`/`other`. `layer` is `nudge` when this reflection was prompted by the
-`[upgrade-reflection]` nudge, `wrap` when by update-context, `manual` otherwise; add `session` when the
-session id is visible (the UUID in the scratchpad path). If you can't record it anywhere in the moment, say so in your report — never
-silently skip: a fire with no recorded response reads as a dismissal. For a SURVIVING candidate the
-only valid outcomes are `filed-*`, `strengthened-existing`, or `dedup-existing` — "surfaced-but-not-filed"
-is deliberately not a status, and `other` is not a parking lot for skipped filing; a record without one
-of those outcomes means go back, file, then record.
+**Never drop a surviving lesson.** Each named non-reason licensed a real near-drop: *"the docket is on
+rotation-hold"* (a hold blocks structural rotation, never a queue line or an inbox filing); *"keep the
+wrap diff small"*; *"context is high, wrap fast"*. Catching an unrecorded lesson in your own report
+means going back and recording it before finishing — the user should never have to say "file it".
 
 ## Do NOT
-- Build the upgrades — surface and file only (a trivial single-edit the user approves on the spot is
-  the only exception).
-- Manufacture candidates to seem productive — the load-bearing test is the gate.
-- Emit an unlabeled candidate — every row carries `proven-need` / `solid-extension` / `speculative`.
-- Re-propose something already on the docket or in the catalog.
-- Defer filing to a future session or convert it into an offer ("say the word and I'll file it") —
-  file first, then report. Project holds (rotation-hold / doc-freeze) block rotation, never filing.
+- Build more than one upgrade per wrap, build on the main thread, or build from a nudge or manual firing.
+- Edit a live-write project's forbidden files (Step 5 item 6).
+- Manufacture lessons to seem productive — Step 3 is the gate.
+- Emit an unlabeled row, or re-propose something Step 2 found.
+- Convert a lesson into an offer ("say the word and I'll queue it") — record it, then report.
 
 ## Companion hook
 
-`hooks/upgrade-reflection-nudge.py` is a `UserPromptSubmit` hook that fires this reflection
-automatically: once per session, after a substantial-work signal (>= N file edits, a memory-file
+`hooks/upgrade-reflection-nudge.py` is a `UserPromptSubmit` hook that suggests this reflection
+mid-session: once per session, after a substantial-work signal (>= N file edits, a memory-file
 write, or a `git commit`), it injects a one-line non-blocking nudge to run this skill. Wire it in
 `~/.claude/settings.json` under `UserPromptSubmit` (env tunables: `UPGRADE_NUDGE_EDIT_THRESHOLD`
 default 3; `UPGRADE_NUDGE_DISABLE=1` to silence). Pure stdlib, ASCII-only, fails open.
 
 ## Related
-- `SELF-AUDIT.md` (central upgrades repo root) — the self-audit log the Step-2 feeder writes and
-  this skill re-reads on every firing (every entry whose `system:` state is not `guard-deployed`, per
-  the two-state model above); the own-miss stream, paired with its reader.
-- `update-context` — invokes this at every wrap (Layer 1); its shipped / learned / decided signal
+- `update-context` — invokes this at every wrap and runs Step 5; its shipped / learned / decided signal
   feeds Step 1.
-- `hooks/upgrade-reflection-nudge.py` — the once-per-session `UserPromptSubmit` nudge (Layer 2).
-- `/opportunity-scan` (ships in this repo's `project-scans/`) — the GENERATIVE counterpart. **The
-  boundary is reactive vs generative, not product vs tooling.** This skill is session-bound (Step 1),
-  so it surfaces tooling whose absence already bit; a project-native capability the project's own
-  shape implies — a project-specific skill, workflow, subagent, hook, command, or rule it should have
-  but has never been hurt for lacking — belongs to that scan's project-native-tooling lens. Neither
-  pass hands its own class to the other: a durable learning *this session generated* is this skill's,
-  and there is no step here that could receive a generative direction.
+- `hooks/upgrade-reflection-nudge.py` — the once-per-session `UserPromptSubmit` nudge (above).
+- `analyze-context` — prints each project's pending inbox filings, upgrade queue and recent `Upgrade:`
+  trailers in every briefing, so nothing here waits on anyone remembering it.
+- `SELF-AUDIT.md` (central upgrades repo root) — the own-miss stream (Step 1).
+- `/opportunity-scan` (ships in this repo's `project-scans/`) — the generative counterpart:
+  capabilities a project should have but has never been hurt for lacking.

@@ -33,14 +33,43 @@ set -u
 #     rule: a CLOSING fence carries NO info string, so ```lang is content, not a close), a
 #     blockquote, an indented code block (>=4 spaces or a tab -- the writer emits markers at the
 #     top level, never indented), or is wrapped whole in inline-code backticks.
+#
+# $4 = 1 turns on full inline-code-span tokenizing (CommonMark: a run of N backticks opens a span
+# that the next run of exactly N closes; an unmatched run is literal), so a comment anywhere INSIDE
+# a span is quoted, not only one wrapped whole. Only the paired-region scan passes it. The hold and
+# threshold scans keep the permissive default: for them a missed real marker is data loss, while
+# for the region scan a false THRESHOLD on a quoted pair is the cost (a docket row quoting
+# `<!-- X --> ... <!-- /X -->` in one span raised "restore it" when the row was archived).
 _active_marker_values() {
-  awk -v pat="$2" -v strip="$3" '
+  awk -v pat="$2" -v strip="$3" -v cs="${4:-0}" '
+    # Index just past the backtick run that closes the span opened at t, or -N (N = the opener
+    # length) when no run of exactly N follows on the line: an unmatched opener is literal text.
+    function span_end(str, t,   n, p, q, r, L) {
+      L = length(str)
+      n = 0; while (substr(str, t + n, 1) == "`") n++
+      p = t + n
+      while (p <= L) {
+        q = index(substr(str, p), "`")
+        if (q == 0) break
+        p = p + q - 1
+        r = 0; while (substr(str, p + r, 1) == "`") r++
+        if (r == n) return p + r
+        p += r
+      }
+      return -n
+    }
     # Collect the head "until" date of each ACTIVE marker on a line: print it directly when
     # buffer==0 (outside any fence), or hold it in buf[] when buffer==1 (inside a fence that has
     # not yet closed) so it can be dropped on a real close or flushed if the fence never closes.
-    function scan(line, buffer,   rest, s, after, e, cmt, before, aft, d) {
+    function scan(line, buffer,   rest, s, after, e, cmt, before, aft, d, t, k) {
       rest = line
       while ((s = index(rest, "<!--")) > 0) {
+        if (cs && (t = index(rest, "`")) > 0 && t < s) {   # a code span may open before this comment
+          k = span_end(rest, t)
+          if (k > 0) rest = substr(rest, k)                 # skip the whole span, and any comment in it
+          else rest = substr(rest, t - k)                   # unmatched opener: skip its backticks only
+          continue
+        }
         after = substr(rest, s + 4)
         e = index(after, "-->")
         if (e == 0) break                         # no closing --> : not a complete comment
@@ -194,6 +223,48 @@ _docket_files() {
   [ "$had_ncg" = 1 ] || shopt -u nocaseglob
 }
 
+# Paired-marker names in a file, one token per line: `NAME` for <!-- NAME -->, `/NAME` for
+# <!-- /NAME -->. Routed through _active_marker_values so a pair QUOTED in a fenced block,
+# blockquote, indented code or ANY inline code span is documentation, not a region (G#352: one
+# scanner, not a second copy). Colon markers (`next-goal-id: N`, `rotation-hold: ...`) never
+# match: they are single markers that a wrap rewrites or removes on purpose.
+_marker_pair_names() {
+  _active_marker_values "$1" '^[ \t]*/?[A-Za-z][A-Za-z0-9_.-]*[ \t]*$' '^[ \t]+' 1 | tr -d ' \t\r'
+}
+
+# Inbox 2026-09-23: a wrap's HANDOFF rewrite dropped the <!-- HIGH-ROWS --> pair a test reads,
+# and nothing AFTER the final write compared the regions HEAD carried with the working copy (the
+# quick tier had run before the rewrite; the suite then stayed red for three commits). For one
+# TRACKED path: every <!-- NAME --> ... <!-- /NAME --> pair in the HEAD copy must still have both
+# markers in the working copy, else one THRESHOLD naming the file, the region and what is missing.
+# MARKDOWN files only: the fence/code-span rules that tell a region from a quoted example are
+# markdown rules, and marker text in a .py/.sh source is a fixture or a comment, not a region.
+_lost_marker_regions() {
+  local f="$1" tmp headn wtn n miss
+  case "$f" in
+    *.[mM][dD]|*.[mM][aA][rR][kK][dD][oO][wW][nN]) ;;
+    *) return 0 ;;
+  esac
+  tmp=$(mktemp 2>/dev/null) || return 0
+  if ! MSYS_NO_PATHCONV=1 git show "HEAD:$f" > "$tmp" 2>/dev/null || ! grep -q -- '<!--' "$tmp" 2>/dev/null; then
+    rm -f "$tmp"; return 0
+  fi
+  headn=$(_marker_pair_names "$tmp" | sort -u)
+  rm -f "$tmp"
+  [ -n "$headn" ] || return 0
+  wtn=$(_marker_pair_names "$f" | sort -u)
+  printf '%s\n' "$headn" | while IFS= read -r n; do
+    case "$n" in ""|/*) continue ;; esac
+    printf '%s\n' "$headn" | grep -qxF -- "/$n" || continue      # HEAD must carry the PAIR
+    miss=""
+    printf '%s\n' "$wtn" | grep -qxF -- "$n" || miss="opener"
+    if ! printf '%s\n' "$wtn" | grep -qxF -- "/$n"; then
+      if [ -n "$miss" ]; then miss="both"; else miss="closer"; fi
+    fi
+    [ -n "$miss" ] && echo "THRESHOLD $f lost the <!-- $n --> ... <!-- /$n --> marker region HEAD carries (missing: $miss) — a machine-read region the rewrite dropped; restore it before committing, or state in the audit that the removal is deliberate"
+  done
+}
+
 echo "== MACHINE =="
 hostname
 
@@ -228,7 +299,7 @@ else
   fi
 
   echo
-  echo "== HYGIENE (conflict markers + frontmatter trailing whitespace in the about-to-commit set) =="
+  echo "== HYGIENE (conflict markers + frontmatter trailing whitespace + dropped marker regions in markdown, in the about-to-commit set) =="
   # Change set this wrap will commit = tracked-modified UNION untracked. `git diff --check` alone
   # misses untracked NEW files (the exact class that shipped a `metadata:`-trailing-space memory file
   # uncaught), so we union both. Trailing-whitespace is scoped to YAML frontmatter (between the leading
@@ -245,8 +316,9 @@ else
       L=$(awk 'NR==1{infm=1;next} infm&&$0=="---"{exit} infm&&/[ \t]$/{printf "%s ",NR}' "$f" 2>/dev/null)
       [ -n "$L" ] && echo "THRESHOLD $f frontmatter trailing whitespace (line(s): $L) — strip it; fails git diff --check (the 'metadata: ' class)"
     fi
+    _lost_marker_regions "$f"
   done )
-  if [ -n "$HYG_OUT" ]; then printf '%s\n' "$HYG_OUT"; else echo "(clean — no conflict markers or frontmatter trailing whitespace in the change set)"; fi
+  if [ -n "$HYG_OUT" ]; then printf '%s\n' "$HYG_OUT"; else echo "(clean — no conflict markers, frontmatter trailing whitespace or dropped marker regions in the change set)"; fi
 fi
 
 echo
@@ -482,7 +554,13 @@ if [ "${READPATH_KB:-0}" -gt "$READPATH_KB_LIMIT" ]; then
     # ignored trains the wrap to ignore THRESHOLDs (the reasoning this file already applies to
     # MAXLINE_LIMIT). G#227: the env ceiling is the escape valve for a legitimately-large docket,
     # and it appeared in no operator-facing text until now.
-    echo "THRESHOLD session-start read-path ${READPATH_KB}KB (>${READPATH_KB_LIMIT}KB: index + docket/roadmap, loaded every session start) — EITHER rotate this run (archive closed/resolved docket rows, extract durable reference to docs/; Step 5 structural rotation, not just trimming), OR, if what remains after rotating everything closed is still over the ceiling, declare a real one: READPATH_KB_LIMIT in .claude/settings.json -> env. On-demand topic files are NOT the cause and rotating them will not move this number"
+    # NAME the weight and the destination (inbox 2026-09-16b): a closed ledger that merely
+    # carried a docket FILENAME was summed with the live docket, the text never said which file
+    # was heavy, so a project rotated live rows INTO that ledger -- bytes moved between two
+    # counted files, the number could not move, and the ceiling was raised three times instead.
+    RP_BIG=$(for f in ${RP_FILES[@]+"${RP_FILES[@]}"}; do printf '%s\t%s\n' "$(wc -c < "$f" 2>/dev/null | tr -d ' ')" "$f"; done \
+      | sort -t "$(printf '\t')" -k1,1nr | head -2 | awk -F '\t' '{ printf "%s%s %sB", (NR > 1 ? ", " : ""), $2, $1 }')
+    echo "THRESHOLD session-start read-path ${READPATH_KB}KB (>${READPATH_KB_LIMIT}KB: index + docket/roadmap, loaded every session start; largest counted: ${RP_BIG:-UNKNOWN}) — EITHER rotate this run (archive closed/resolved docket rows to a home OUTSIDE the counted set, e.g. an archive/ subdirectory -- a docket-named file in the project root, context/, continuation/, docs/ or a memory dir is counted again, so moving rows into one only moves bytes between two counted files; extract durable reference to docs/; Step 5 structural rotation, not just trimming), OR, if what remains after rotating everything closed is still over the ceiling, declare a real one: READPATH_KB_LIMIT in .claude/settings.json -> env. On-demand topic files are NOT the cause and rotating them will not move this number"
   fi
 fi
 
@@ -903,6 +981,21 @@ for pf in ${PLAN_FILES[@]+"${PLAN_FILES[@]}"}; do
 done
 [ -n "$PLAN_FINDINGS" ] && printf '%s\n' "$PLAN_FINDINGS"
 
+# RULING LOSS: a status rewrite of a docket row (NEW -> BUILT) can delete the owner's
+# do-not-re-propose block along with the speculation it replaces; the row still reads complete
+# and nothing else compares before and after. One THRESHOLD per ruling that the HEAD copy of a
+# changed docket/HANDOFF/memory-index file carries, or that a commit since the last wrap removed,
+# and that the working tree holds NOWHERE in the project (a moved ruling is kept). Same helper as
+# the briefing's RULED OUT section; a git project with the helper missing is told so, never skipped.
+RLL="$(dirname "${BASH_SOURCE[0]}")/../../analyze-context/scripts/rulings-line.sh"
+if [ -f "$RLL" ]; then
+  bash "$RLL" --lost
+elif git rev-parse --git-dir >/dev/null 2>&1; then
+  echo
+  echo "== RULING LOSS (owner rulings in HEAD or in commits since the last wrap, gone from the working tree) =="
+  echo "RULING LOSS: could not check -- analyze-context/scripts/rulings-line.sh is not installed"
+fi
+
 # Production parity (projects declaring deploy-parity.json): the ONLY source for a production
 # sentence in the handoff. The helper lives with analyze-context so both skills read production
 # one way; a declaring project with a missing helper is told so, never skipped.
@@ -913,6 +1006,29 @@ elif [ -f "$(git rev-parse --show-toplevel 2>/dev/null)/deploy-parity.json" ]; t
   echo
   echo "== DEPLOY PARITY =="
   echo "production: could not check -- analyze-context/scripts/deploy-parity-line.sh is not installed"
+fi
+
+# CI verdict (projects declaring .github/workflows) and the UPGRADES state lines (pending
+# DOCKET-INBOX filings, UPGRADE-QUEUE.md, Upgrade: lines landed in 30 days). Same helpers the
+# briefing runs, so the wrap reads both the same way; a non-success CI line is an open item to
+# carry into the handoff verbatim. Missing helpers are LOUD, never a silent skip.
+CVL="$(dirname "${BASH_SOURCE[0]}")/../../analyze-context/scripts/ci-verdict-line.sh"
+CI_TOP=$(git rev-parse --show-toplevel 2>/dev/null)
+if [ -f "$CVL" ]; then
+  bash "$CVL"
+elif [ -n "$CI_TOP" ] && { compgen -G "$CI_TOP/.github/workflows/*.yml" >/dev/null \
+                         || compgen -G "$CI_TOP/.github/workflows/*.yaml" >/dev/null; }; then
+  echo
+  echo "== CI =="
+  echo "CI: could not check - analyze-context/scripts/ci-verdict-line.sh is not installed"
+fi
+USL="$(dirname "${BASH_SOURCE[0]}")/../../analyze-context/scripts/upgrade-status-line.sh"
+if [ -f "$USL" ]; then
+  bash "$USL"
+else
+  echo
+  echo "== UPGRADES =="
+  echo "could not check: analyze-context/scripts/upgrade-status-line.sh is not installed"
 fi
 
 echo

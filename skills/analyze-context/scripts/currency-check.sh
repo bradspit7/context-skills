@@ -21,6 +21,78 @@ for m in HANDOFF.md context/HANDOFF.md CONTEXT.md CLAUDE.md continuation context
 done
 for pd in HANDOFF-*.md; do [ -e "$pd" ] && echo "present: $pd (multi-dev marker)"; done
 
+# ---------- slim-path docket bound, MEASURED (inbox 2026-09-22, kernel A; amends G#566) ----------
+# The static bound ("stop at the first Resolved/Archived/Closed heading") bounds nothing on a
+# docket that marks status PER ROW -- closed rows interleaved with open ones, no closing heading
+# ever written -- so the "open-item region" was the whole file (measured on one repo: 738,454 of
+# 743,218 B, on a path budgeted at ~5K tokens). So measure each docket file the pickup doc names
+# and print a CONCRETE read: the whole file at or under ~40KB; the open region when a closing
+# heading ends it within ~40KB; otherwise the first ~40KB PLUS the rows the pickup doc names by
+# id -- the id grep is what still reaches a newest row appended at the BOTTOM, the reason a bare
+# leading slice was rejected before (G#253). No row parser: six row grammars are in use.
+_is_docket_basename() {   # roadmap.md, docket.md, *-docket.md, *_docket.md, docket-*.md, docket_*.md
+  local b rc=1 had
+  b=${1##*/}
+  shopt -q nocasematch && had=1 || had=0
+  shopt -s nocasematch
+  case "$b" in
+    docket-inbox-*) rc=1 ;;                      # a transient cross-repo filing, not the docket
+    roadmap.md|docket.md|*[-_]docket.md|docket[-_]*.md) rc=0 ;;
+  esac
+  [ "$had" = 1 ] || shopt -u nocasematch
+  return $rc
+}
+emit_docket_bound() {   # $1 = the pickup doc
+  local doc="$1" p seen=" " n=0
+  [ -f "$doc" ] || return 0
+  while IFS= read -r p; do
+    p=${p#./}
+    case "$seen" in *" $p "*) continue ;; esac
+    seen="$seen$p "
+    [ -f "$p" ] && _is_docket_basename "$p" || continue
+    n=$((n + 1)); [ "$n" -le 3 ] || break
+    # BINMODE=3: count CR bytes too (Windows gawk strips them on input otherwise).
+    #
+    # A closing heading ENDS the open region only when it starts the closed TAIL: no later heading
+    # of the same or a higher level (fewer #) is open again. One project keeps a "Recently resolved"
+    # section on line 44, ABOVE ~265KB of open sections; stopping at the FIRST closing heading told
+    # the reader to read the 43-line preamble and zero open rows. So track a candidate closing
+    # heading and drop it when an open section of its level or higher follows; a deeper sub-heading
+    # inside a closed section stays part of it. The heading branch also prints the id grep: a
+    # word-matched heading can be wrong ("## Closed-loop ideas"), the id grep does not depend on it.
+    LC_ALL=C awk -v BINMODE=3 -v f="$p" -v doc="$doc" -v lim=40960 '
+      { b = length($0) + 1; tot += b
+        if (NR > 1 && $0 ~ /^#+[ \t]/) {
+          match($0, /^#+/); lv = RLENGTH
+          h = tolower($0)
+          if (h ~ /(^|[^a-z])(resolved|archived|closed)([^a-z]|$)/) {
+            if (!cand) { cand = NR; clev = lv; coff = tot - b; ct = $0; sub(/\r$/, "", ct) }
+            else if (lv < clev) clev = lv
+          } else if (cand && lv <= clev) {
+            if (!eml) { eml = cand; emt = ct }
+            cand = 0
+          }
+        }
+        if (tot <= lim) { ll = NR; lb = tot }
+      }
+      END {
+        if (tot <= lim) { printf "   MEASURED: %s is %d B -- at or under ~40KB: read it fully.\n", f, tot; exit }
+        if (cand && coff <= lim) {
+          printf "   MEASURED: %s is %d B -> read ONLY lines 1-%d (%d B), stopping at the \047%s\047 heading on line %d\n", f, tot, cand - 1, coff, ct, cand
+          printf "      (no open section follows it), PLUS every row %s names by id (grep %s for each id);\n", doc, f
+          printf "      REPORT the unread remainder as a number: %d B of %s not read.\n", tot - coff, f
+          exit
+        }
+        printf "   MEASURED: %s is %d B with no Resolved/Archived/Closed heading ending its open region within ~40KB\n", f, tot
+        if (eml) printf "      (the \047%s\047 heading on line %d does not end it: an open section follows it)\n", emt, eml
+        if (ll >= 1) printf "      -> read ONLY lines 1-%d (%d B) PLUS every row %s names by id (grep %s for each id), never the rest;\n", ll, lb, doc, f
+        else { lb = lim; printf "      -> read ONLY its first %d B (its first line alone is longer) PLUS every row %s names by id (grep %s for each id);\n", lim, doc, f }
+        printf "      REPORT the unread remainder as a number: %d B of %s not read.\n", tot - lb, f
+        printf "      (a docket that appends at the BOTTOM keeps its newest rows past this slice -- the id grep is what reaches them)\n"
+      }' "$p"
+  done < <(LC_ALL=C.UTF-8 grep -oiE '[A-Za-z0-9_./-]*(roadmap|docket)[A-Za-z0-9_.-]*[.]md' "$doc" 2>/dev/null)
+}
+
 # ---------- RESUME CLASS emitter — called by BOTH the git and no-git paths ----------
 # G#359: this block used to live inside the git path only, so on a no-git project the
 # section the skill's routing contract keys on was ABSENT ENTIRELY — and an absent class
@@ -89,12 +161,51 @@ emit_resume_class() {
     echo "   $RC_DOC's own next-tasks/open-items section -- or the separate docket file it points to, if any."
     echo "   BOUND that docket file: wc -c first; at or under ~40KB read it fully, above that"
     echo "   read only its open-item region"
-    echo "   (header + open/next-tasks, stopping at the first Resolved/Archived/Closed heading)"
+    echo "   (header + open/next-tasks, stopping at the Resolved/Archived/Closed heading"
+    echo "   that starts the closed tail -- no open section after it; a Resolved section ABOVE open sections ends nothing;"
+    echo "   where no such heading ends it within ~40KB -- a docket that marks status per row --"
+    echo "   only its first ~40KB PLUS the rows $RC_DOC names by id)"
     echo "   and REPORT the unread remainder as a number. This line is the copy the reader"
     echo "   actually sees on the load-bearing downgrade path, so the bound has to live here too."
+    emit_docket_bound "$RC_DOC"
     echo "   Then offer the full briefing on request. Skip the deep content reads (memory/specs/archive)."
   else
     echo "FULL BRIEFING — reason(s): ${RC_REASONS#; }"
+  fi
+}
+
+# ---------- UPGRADES state lines — called by BOTH the git and no-git paths ----------
+# Pending DOCKET-INBOX filings at this project's root, its UPGRADE-QUEUE.md, and the
+# `Upgrade:` lines landed in the last 30 days. The helper prints nothing when there is
+# nothing to report. Called from both paths for the same reason as emit_resume_class
+# (G#359): a hub project with no git would otherwise never see a handback left at its root.
+# Every project can have these, so a missing helper is LOUD everywhere, never a silent skip.
+emit_upgrade_status() {
+  local usl
+  usl="$(dirname "${BASH_SOURCE[0]}")/upgrade-status-line.sh"
+  if [ -f "$usl" ]; then
+    bash "$usl"
+  else
+    echo
+    echo "== UPGRADES =="
+    echo "could not check: upgrade-status-line.sh is missing beside currency-check.sh"
+  fi
+}
+
+# ---------- RULED OUT: the owner's standing rulings — called by BOTH the git and no-git paths ----------
+# Killed options and do-not-re-propose blocks in this project's docket, HANDOFF and memory index,
+# plus any a recent commit removed and nothing holds now. A briefing built from current state
+# cannot otherwise show a decision whose whole content is that something will NOT happen.
+# The helper prints nothing when there is no ruling; a missing helper is LOUD everywhere.
+emit_rulings() {
+  local rl
+  rl="$(dirname "${BASH_SOURCE[0]}")/rulings-line.sh"
+  if [ -f "$rl" ]; then
+    bash "$rl"
+  else
+    echo
+    echo "== RULED OUT (owner rulings - do not re-propose) =="
+    echo "RULED OUT: could not check -- rulings-line.sh is missing beside currency-check.sh"
   fi
 }
 
@@ -137,6 +248,8 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
       "$NG_DOC last modified ${NG_AGE_H:-?}h ago (mtime — no git)" \
       " Basis: mtime + machine stamp only; no commits-behind check exists without git."
   fi
+  emit_upgrade_status
+  emit_rulings
   echo
   echo "== VERDICT =="
   echo "No git history to verify currency against. Any NOTE above => flag staleness in the briefing header; in-content dates are the staleness evidence."
@@ -348,6 +461,22 @@ elif [ -f "$CUR_WT/deploy-parity.json" ]; then
   echo "== DEPLOY PARITY =="
   echo "production: could not check -- deploy-parity-line.sh is missing beside currency-check.sh"
 fi
+
+# CI verdict for a project that declares GitHub Actions workflows; prints nothing otherwise.
+# Same contract as the parity line: a state, never a FINDING; a missing helper is LOUD for a
+# declaring project.
+CVL="$(dirname "${BASH_SOURCE[0]}")/ci-verdict-line.sh"
+if [ -f "$CVL" ]; then
+  bash "$CVL"
+elif compgen -G "$CUR_WT/.github/workflows/*.yml" >/dev/null \
+     || compgen -G "$CUR_WT/.github/workflows/*.yaml" >/dev/null; then
+  echo
+  echo "== CI =="
+  echo "CI: could not check - ci-verdict-line.sh is missing beside currency-check.sh"
+fi
+
+emit_upgrade_status
+emit_rulings
 }
 
 REPORT=$(emit_report)

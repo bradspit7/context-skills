@@ -757,8 +757,16 @@ def selftest() -> int:
                 out.write_bytes(data)
 
         class Quiet(http.server.SimpleHTTPRequestHandler):
+            fail_paths: set = set()
+
             def log_message(self, *a):
                 pass
+
+            def do_GET(self):
+                if urllib.parse.urlsplit(self.path).path in Quiet.fail_paths:
+                    self.send_error(503)
+                    return
+                super().do_GET()
         httpd = http.server.ThreadingHTTPServer(
             ("127.0.0.1", 0), functools.partial(Quiet, directory=str(serve)))
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -800,6 +808,12 @@ def selftest() -> int:
         ok("1 uncommitted site/ change(s) NOT included" in out,
            "a dirty tree is reported as NOT INCLUDED, never certified")
         git("checkout", "--", "site/a.html")
+
+        Quiet.fail_paths = {"/css/s.css"}
+        rc, out = go()
+        ok(rc == 2 and "fetch(es) failed" in out and "HTTP 503" in out,
+           "a mid-sweep fetch failure (HTTP 503) -> could not check, exit 2, never a verdict")
+        Quiet.fail_paths = set()
 
         deploy(c3, crlf_rel="index.html")
         rc, out = go(brief=True)

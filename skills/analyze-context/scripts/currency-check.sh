@@ -337,6 +337,17 @@ if [ -d "$HOME/.claude/projects/$SLUG/memory" ]; then
 else
   echo "exists: no"
 fi
+
+# Production parity for a project that declares a deploy target (deploy-parity.json); prints
+# nothing otherwise. A missing helper must be LOUD for a declaring project, never silent.
+DPL="$(dirname "${BASH_SOURCE[0]}")/deploy-parity-line.sh"
+if [ -f "$DPL" ]; then
+  bash "$DPL"
+elif [ -f "$CUR_WT/deploy-parity.json" ]; then
+  echo
+  echo "== DEPLOY PARITY =="
+  echo "production: could not check -- deploy-parity-line.sh is missing beside currency-check.sh"
+fi
 }
 
 REPORT=$(emit_report)

@@ -903,6 +903,18 @@ for pf in ${PLAN_FILES[@]+"${PLAN_FILES[@]}"}; do
 done
 [ -n "$PLAN_FINDINGS" ] && printf '%s\n' "$PLAN_FINDINGS"
 
+# Production parity (projects declaring deploy-parity.json): the ONLY source for a production
+# sentence in the handoff. The helper lives with analyze-context so both skills read production
+# one way; a declaring project with a missing helper is told so, never skipped.
+DPL="$(dirname "${BASH_SOURCE[0]}")/../../analyze-context/scripts/deploy-parity-line.sh"
+if [ -f "$DPL" ]; then
+  bash "$DPL"
+elif [ -f "$(git rev-parse --show-toplevel 2>/dev/null)/deploy-parity.json" ]; then
+  echo
+  echo "== DEPLOY PARITY =="
+  echo "production: could not check -- analyze-context/scripts/deploy-parity-line.sh is not installed"
+fi
+
 echo
 echo "== VERDICT =="
 echo "Every TRIAGE line needs a class (commit/delete/leave-untracked). Every THRESHOLD line triggers"

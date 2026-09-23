@@ -30,6 +30,22 @@ For a git repo, **`git pull` always happens** — the `SESSION-START HINT` and `
 - **Git repo** → run `git pull` first. Then, if the probe reported a `BOOTSTRAP SCRIPT` or a genuine session-start heading, open the project CLAUDE.md, find its documented session-start sequence, and run the rest verbatim (sibling-repo pulls, `bootstrap-laptop.sh`, etc.). The `SESSION-START HINT` is advisory, not authoritative — if it turns out to be incidental wording with no real commands, the `git pull` you already ran is the whole of Step 1. Never skip the pull because a heading did or didn't match. Then `git pull` each sibling repo the project CLAUDE.md repo map documents — the same set device-handoff pushes on departure — reporting each result (no upstream → report, don't fail); sibling pulls key off the repo map, not the session-start heading.
 - **Non-git** → skip; note "no git pull (not a git repo)".
 
+### Step 1a — The pull cannot fast-forward: merge it, do not stop to ask
+
+Each machine commits locally and pushes on departure, so one missed push guarantees a divergence on the next arrival. A plain two-sided divergence is **expected work, not an ambiguous state**, and stopping to ask permission to merge is the defect. This applies to every repo Step 1 pulls, siblings included.
+
+1. **Protect uncommitted work first.** If git refuses because local uncommitted changes would be overwritten, commit exactly those files with a pathspec (`git commit -m "WIP: uncommitted changes found at device-sync arrival (<host>)" -- <those files>`), then pull again. Never stash, reset or discard. Leave other dirty files alone; the merge does not touch them.
+2. **Merge, never rebase:** `git pull --no-rebase --no-edit`. With no conflicts, git makes the merge commit itself; go to step 4.
+3. **Resolve each conflicted file by what it is:**
+   - **Code, including tests:** take whole functions and classes from each parent, never spliced line ranges. A conflict boundary can fall inside a function, and a line splice can leave a test that still passes while asserting nothing. Read the parents with `git show HEAD:<path>` and `git show MERGE_HEAD:<path>`. Staging a path destroys its `:2:`/`:3:` index stages, so do not rely on those.
+   - **Append-only records** (HANDOFF, docket, logs, changelog, memory index): keep both sides' entries. If both sides allocated the same id, the entry that was pushed or is already cited keeps the number; renumber the other and say why in the row.
+   - **Generated files:** re-run the generator the project documents; never line-merge generated output.
+   - **The same logic changed two ways:** keep the side the project's tests support. If nothing in the code, tests or docs decides it, that is the one conflict to stop on (step 6).
+4. **Check the merge before trusting it:** `python ~/.claude/skills/device-sync/scripts/merge-check.py`. It reports lost or shrunken tests, duplicated functions, duplicated registry ids and leftover conflict markers, and it runs on a clean merge too (duplicate ids arrive without any conflict). Fix every finding and re-run until it exits 0. If a lost or shrunken test is a deliberate drop that one side made on purpose (its own commit says so), pass `--accept <path>::<test>` and name the test and the reason in the merge commit message. Never accept a finding just to get a clean exit. Then commit the merge with `git commit --no-edit`. A merge commit cannot take a pathspec, so where a repo's guard blocks bare commits, use the guard's sanctioned override and say so.
+5. **Run the project's own verify loop** (its CLAUDE.md names it). A failure that also fails on a parent is pre-existing: note it and continue. To check, run just that suite in a throwaway worktree (`git worktree add --detach <tmp> HEAD^1`, then remove it). A failure only the merge has is the merge's: fix it.
+6. **Stop only when** a conflict needs a judgment that neither the code, the tests nor the docs can settle; the merge breaks the verify loop and you cannot fix it; or the direction is genuinely ambiguous (the remote branch was rewritten or force-pushed). If you stop mid-merge, run `git merge --abort` first so both machines' work stays intact, then say in one or two lines what blocked it.
+7. **Report one line in the briefing:** "merged N local + M remote commits; K conflicts resolved (<files>); merge-check clean; verify green (or: pre-existing failures X)".
+
 ## Step 2 — Memory transport (evaluate IN ORDER; take the FIRST branch that matches)
 
 The order matters — several signals can be true at once (a shared sync root holds *other* projects' buckets; a transport-note file can sit next to git-mirrored memory). Take the first match top-down:
@@ -55,7 +71,8 @@ Invoke the `analyze-context` skill (Skill tool) for the currency gate + full bri
 - **Sync in the wrong direction.** Always remote/bucket → local. Local → bucket (the overwrite/purge direction) is `device-handoff`'s departure step and is never device-sync's action.
 - **Push anything.** device-sync is arrival (pull) only; the departure half (memory-out + multi-repo push) is `device-handoff`, which wraps `update-context`.
 - **Re-implement a transport.** Execute what the project documents. If no recipe is documented and the family is ambiguous, say so rather than guessing a command.
-- **Infer sync direction from conflicting timestamps.** Direction comes from the operation (sync = arrival/pull, handoff = departure/push), never from a guess about which copy is newer. On conflicting state, surface the evidence and stop.
+- **Infer sync direction from conflicting timestamps.** Direction comes from the operation (sync = arrival/pull, handoff = departure/push), never from a guess about which copy is newer. When the direction is genuinely ambiguous, surface the evidence and stop. An ordinary two-sided git divergence is not ambiguous: merge it (Step 1a).
+- **Ask permission to merge a divergence.** The merge is part of the command the user already gave.
 
 ## Related
 

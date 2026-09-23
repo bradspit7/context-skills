@@ -39,7 +39,9 @@ Claude Code exposes them as `/opportunity-scan` and `/ultracode-scan`.
   Install the process suite (see the top-level README) so the recipe references resolve.
 - **`brainstorm`, `reflect-upgrades`** (also in `skills/`) — the scans reference these to stay in
   their lane: `/opportunity-scan` is *not* `brainstorm` (which designs a feature you've already
-  named) and *not* `reflect-upgrades` (which routes tooling learnings, not product directions).
+  named) and *not* `reflect-upgrades`. The boundary is **reactive vs generative**, not product vs
+  tooling: `reflect-upgrades` handles what THIS session hit or repeated, while `/opportunity-scan`
+  owns generative directions, including project-native tooling nothing has forced yet.
   Nothing breaks if they're absent — the references simply describe boundaries.
 
 ## Generalized from a private original

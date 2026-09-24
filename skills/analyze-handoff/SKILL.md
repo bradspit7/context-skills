@@ -1,13 +1,13 @@
 ---
 name: analyze-handoff
-description: Slim same-day session resumption — reads ONLY the project's HANDOFF.md (or top pickup point of CONTEXT.md / continuation/context.md if HANDOFF absent) and produces a 3-line summary (last completed / next intended / blocker) plus the docket (open items by ID, with status markers). Skips memory dir, archive, and wiki body. Costs ~5K tokens vs analyze-context's 50K+. Fires on explicit `/analyze-handoff`, `/handoff`, "quick resume", "where was I", or "what's next" — but ONLY when same-day continuation is clear. Do NOT fire when the user asks for a full briefing ("catch me up", "brief me", "what's the state"), when more than ~24h have passed, when the user just switched machines, or when no HANDOFF/CONTEXT file is present — route to `analyze-context` for those cases instead.
+description: Slim same-day session resumption — reads ONLY the project's HANDOFF.md (or top pickup point of CONTEXT.md / continuation/context.md if HANDOFF absent) and produces a 3-line summary (last completed / next intended / blocker) plus the docket (open items by ID, with status markers). Skips memory dir, archive, and wiki body. Costs ~5K tokens vs analyze-context's 50K+. Fires on explicit `/analyze-handoff`, `/handoff`, "quick resume", "where was I", or "what's next" — but ONLY when same-day continuation is clear. Do NOT fire when the user asks for a full briefing ("catch me up", "brief me", "what's the state"), when more than ~24h have passed, or when no HANDOFF/CONTEXT file is present — route to `analyze-context` for those cases instead. When the user just switched machines, route to `device-sync`, which ends with analyze-context's short arrival briefing.
 ---
 
 # Analyze Handoff
 
 Slim session resumption for same-day continuation. The cheap sibling to `analyze-context`. Reads one file, produces a 3-line summary, stops.
 
-**Why this exists:** large projects accrete heavy context layers — it's not unusual for a mature project's HANDOFF + memory + context.md to sum to 100K+ tokens. Paying that cold-start cost on same-day continuation is wasteful — the user almost always just needs "where am I, what's next." This skill does that for ~5K tokens. Use `analyze-context` when you actually need the full briefing (multi-day gaps, new machines, first session in a project).
+**Why this exists:** large projects accrete heavy context layers — it's not unusual for a mature project's HANDOFF + memory + context.md to sum to 100K+ tokens. Paying that cold-start cost on same-day continuation is wasteful — the user almost always just needs "where am I, what's next." This skill does that for ~5K tokens. Use `analyze-context` when you actually need the full briefing (multi-day gaps, first session in a project, or an explicit request); a machine switch goes through `device-sync`, which ends with analyze-context's short arrival briefing.
 
 ## When to fire
 
@@ -27,7 +27,7 @@ Slim session resumption for same-day continuation. The cheap sibling to `analyze
 **Do NOT fire when:**
 - User asks for a full briefing ("catch me up", "brief me on this project", "what's the state", "give me the picture", "what were we working on") — those are full-briefing phrases, route to `analyze-context`
 - More than ~24 hours since the last activity in this project — full briefing is safer when state may have shifted
-- User just switched machines — route to `device-sync` (arrival pull: repo + memory transport), which hands off to `analyze-context` for the full briefing + currency gate; cross-machine handoff needs the full memory + rules set AND the branch survey to catch wrong-branch staleness on branches this machine never checked out
+- User just switched machines — route to `device-sync` (arrival pull: repo + memory transport), which hands off to `analyze-context` for its currency gate + the short arrival briefing; a cross-machine handoff needs the gate's branch survey to catch wrong-branch staleness on branches this machine never checked out, and any FINDING there forces the full briefing
 - No `HANDOFF.md` / `CONTEXT.md` / `continuation/context.md` present at all → tell user "no handoff present; want full /analyze-context?" and stop
 - User signaled a concrete first task — they don't want a briefing at all, just go
 
@@ -108,7 +108,7 @@ Wait for user direction. Do NOT drift into reading memory, archive, or specs on 
 
 - **HANDOFF stale (>~24h / >3 commits behind HEAD)** → flag and ask before summarizing. Slim summary on stale state misleads.
 - **HANDOFF references commits not in this worktree's git log** → strong signal of worktree mismatch. Stop, ask user which worktree is authoritative. Same rule as `analyze-context`'s currency gate; the slim version doesn't exempt you.
-- **Wrong-branch silent staleness (cross-machine indicator)** → if the HANDOFF header's machine stamp (`**Machine:**` per update-context's header; legacy docs may say `**Last write from:**`; either label's value may be backtick-wrapped) names a different machine than the current `hostname`, the previous session ran on the other machine and may have continued work on a feature branch this machine has never checked out. The slim skill deliberately does NOT run `analyze-context`'s full branch-recency survey (the currency-check script's branch survey) — that's the cost line the slim skill exists to avoid. So it cannot resolve this case safely. Escalate instead: *"HANDOFF's machine stamp is `<other-machine>`. Cross-machine handoff means recent work may live on a branch this machine doesn't have. Recommend `/device-sync` (arrival pull + memory sync, then the full `/analyze-context` survey) before trusting the slim summary."* Then stop. Same goes for any other signal of branch-per-feature drift (e.g., a recent `git pull` output the user shares showed `[new branch]` lines).
+- **Wrong-branch silent staleness (cross-machine indicator)** → if the HANDOFF header's machine stamp (`**Machine:**` per update-context's header; legacy docs may say `**Last write from:**`; either label's value may be backtick-wrapped) names a different machine than the current `hostname`, the previous session ran on the other machine and may have continued work on a feature branch this machine has never checked out. The slim skill deliberately does NOT run `analyze-context`'s full branch-recency survey (the currency-check script's branch survey) — that's the cost line the slim skill exists to avoid. So it cannot resolve this case safely. Escalate instead: *"HANDOFF's machine stamp is `<other-machine>`. Cross-machine handoff means recent work may live on a branch this machine doesn't have. Recommend `/device-sync` (arrival pull + memory sync, then `/analyze-context`'s branch survey and arrival briefing) before trusting the slim summary."* Then stop. Same goes for any other signal of branch-per-feature drift (e.g., a recent `git pull` output the user shares showed `[new branch]` lines).
 - **Multi-day gap detected** (per JSONL transcript timestamps or git activity gap) → don't produce a slim summary. Recommend `/analyze-context` instead.
 - **Project has no HANDOFF.md but has `continuation/context.md`** → fall through to top-pickup-only read. Still slim. Note the missing HANDOFF in the summary so user knows to run `/update-context` later.
 - **User invoked `/analyze-handoff` after a >1-week gap** → flag explicitly: *"Long gap since last activity — full briefing recommended."* Don't produce slim summary on stale state.
@@ -118,7 +118,7 @@ Wait for user direction. Do NOT drift into reading memory, archive, or specs on 
 
 ## Alternatives / related skills
 
-- **`analyze-context`** (full sibling) — full briefing for multi-day gaps, new machines, or first session in a project. Use when you need the structured 6-section output (recently shipped / in-flight / locked decisions / open docket / known issues / behavioral rules / next-step suggestion). Costs significantly more depending on project size.
+- **`analyze-context`** (full sibling) — full briefing for multi-day gaps, first session in a project, or an explicit request; after a machine switch, `device-sync` runs it in its short arrival mode. Use when you need the structured 6-section output (recently shipped / in-flight / locked decisions / open docket / known issues / behavioral rules / next-step suggestion). Costs significantly more depending on project size.
 - **`update-context`** — session-end persistence. Keeps HANDOFF.md current so this skill stays useful. The slimmer your HANDOFF, the cheaper this skill is.
 
 ## Do NOT

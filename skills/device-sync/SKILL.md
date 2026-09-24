@@ -53,7 +53,10 @@ The order matters — several signals can be true at once (a shared sync root ho
 1. **live memory dir is a junction/symlink INTO the repo** (probe `live-dir-junction: yes` with an in-repo target) → git-in-repo; the `git pull` in Step 1 already synced it. No-op.
 2. **in-repo memory mirror + a bootstrap script** (probe `IN-REPO MEMORY MIRROR` present **and** a `BOOTSTRAP SCRIPT`) → the bootstrap in Step 1 already copied mirror→live. If the pull output shows **deleted or renamed** mirror files, run the clean re-sync guard so stale live files do not linger: delete from live exactly the files the pull reported deleted/renamed (`rm <live-memory-dir>/<each-named-file>`), then `cp <mirror-dir>/*.md <live-memory-dir>/`. Never `rm <live>/*.md` wholesale — live-only files (transport notes, un-mirrored session memory) are not the mirror's to delete. No further sync.
 3. **live memory dir is a junction/symlink to an out-of-band location** (target outside the repo) → OS auto-syncs. No-op.
-4. **a sync-root bucket belongs to THIS project** (probe reports a **positive** `bucket-match:` line — `exact`/`declared`/`alias` provenance) → out-of-band transport. Open the RECIPE FILE the probe named and execute its documented recipe **in the arrival direction (bucket → local)**, honoring its stated guard (`/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge). The recipe file is authoritative for the exact command and bucket path.
+4. **a sync-root bucket belongs to THIS project** (probe reports a **positive** `bucket-match:` line — `exact`/`declared`/`alias` provenance) → out-of-band transport. Execute the recipe the probe named **in the arrival direction (bucket → local)**, honoring its stated guard (`/XD` backup-dir exclusion for a `robocopy /MIR`; `MEMORY.md` superset-merge that preserves every lane for a snapshot-merge). The recipe file is authoritative for the exact command and bucket path. A recipe note can carry a long dated log after the recipe; the probe prints its ranges under the `recipe:` line. Read the `body:` line range (Read with offset/limit) — it is short and it states the guard. **Never read the whole `history-log:` range.**
+   - **The command:** the `sync-arrival:` line if the probe printed one; else the body; else the one `newest-arrival-entry:` the probe names; else grep the file for it (e.g. `grep -n robocopy <recipe>`). If that is still ambiguous, say so rather than guess a command.
+   - **Check it before running it, wherever it came from:** the source is the bucket and the destination is the live memory dir; if it deletes at the destination (`/MIR`, `/PURGE`, `--delete`), the body says to; and the body's guard still happens (a `MEMORY.md` superset-merge that a copy command cannot do is still done). An entry can mention both directions, so check the command, not the entry's label. A command that fails a check is not run — say so.
+   - If the probe printed the `-> add a line` hint, say once in the briefing that one `sync-arrival:` line in the recipe saves the next arrival the search.
 5. **the in-repo memory dir is git-TRACKED** (probe `repo-is-transport: yes`) → **the repo IS the transport**; the `git pull` in Step 1 already brought the memory across. A **no-op for a stated reason** — say that, not "none". A bootstrap script is one project's implementation of a live→mirror **copy** step, i.e. evidence a copy is *needed*, never evidence a transport *exists*, so its absence is not a defect. (Branch 2 still owns the case where a copy step exists and must run.)
 6. **none of the above** — and `repo-is-transport: no` → state "no cross-device memory sync configured for this project" and proceed. **This is the branch that means memory genuinely does not travel**, so it is the only one worth flagging; do not treat it as interchangeable with branch 5's stated no-op.
 
@@ -63,7 +66,7 @@ The order matters — several signals can be true at once (a shared sync root ho
 
 ## Step 3 — Brief
 
-Invoke the `analyze-context` skill (Skill tool) for the currency gate + full briefing. A device switch always warrants the full read, never the slim `analyze-handoff`. analyze-context re-runs its own currency gate, re-verifying the post-pull state.
+Invoke the `analyze-context` skill (Skill tool) with args `arrival`. It re-runs its own currency gate on the post-pull state and, when the gate is clean, gives the short arrival briefing: where and when the handoff was written, the state lines, last done / next / blocked, the bounded docket. Put your one-line Step 1 summary (pulls, bootstrap, restart needed or not) in its header. The full briefing happens only when the user asks for it ("catch me up", "brief me", "full briefing") or when the gate itself forces it (a FINDING, a multi-dev project; the class line says why).
 
 ## Do NOT
 
@@ -73,6 +76,9 @@ Invoke the `analyze-context` skill (Skill tool) for the currency gate + full bri
 - **Re-implement a transport.** Execute what the project documents. If no recipe is documented and the family is ambiguous, say so rather than guessing a command.
 - **Infer sync direction from conflicting timestamps.** Direction comes from the operation (sync = arrival/pull, handoff = departure/push), never from a guess about which copy is newer. When the direction is genuinely ambiguous, surface the evidence and stop. An ordinary two-sided git divergence is not ambiguous: merge it (Step 1a).
 - **Ask permission to merge a divergence.** The merge is part of the command the user already gave.
+- **Launch helper agents or subagents on arrival.** The pull, bootstrap, memory sync and the arrival briefing all run in the main thread.
+- **Run test suites or the verify loop on arrival,** except the ones Step 1a's merge path requires (its step 5).
+- **Re-verify the pull or bootstrap beyond their own output.** Their output is the evidence, and analyze-context's gate already re-checks the post-pull state.
 
 ## Related
 

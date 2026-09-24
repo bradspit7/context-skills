@@ -300,13 +300,139 @@ else
   fi
 fi
 
+# recipe_shape <file> -- where a recipe note's RECIPE ends and its dated history log
+# begins, so the calling skill reads the recipe and not the log. Read-only.
+# Measured (a sibling project, 2026-09-23): a 44 KB recipe note whose recipe was its
+# first 24 lines (5 KB); the rest was 41 dated "**UPDATE <date> (...):**" entries, not
+# in date order, and an arrival read all of it to get one copy command.
+#   body        = every line before the first dated entry (a line starting
+#                 "**UPDATE <YYYY-MM-DD>") or a heading naming History/Log/Updates/
+#                 Changelog. No such line = the whole file is the body.
+#   entries     = "**UPDATE <date>" lines, dated headings and date-led bullets, from
+#                 the log start on. Fenced code blocks are skipped for every rule here,
+#                 so a "# ... log" shell comment in a fence is not a heading.
+#   newest-*    = the entry with the latest YYYY-MM-DD (ties: the later line) whose
+#                 FIRST direction marker is an arrival ("arrival", or "pulled ... down")
+#                 or a departure ("departure", or "pushed ... up"). A departure entry
+#                 that mentions "the next arrival" is still a departure. The calling
+#                 skill checks the command's direction anyway.
+#   sync-arrival: / sync-departure: = line-start declarations, printed verbatim (the
+#                 same convention as sync-bucket:). One saves the next run the search
+#                 for the command; the body is still read, since it states the guard.
+# LC_ALL=C makes length() count bytes; BINMODE=1 stops Windows gawk dropping the CR
+# of a CRLF line, which would under-count the body by one byte per line.
+recipe_shape() {
+  local rf="$1" size
+  size=$(wc -c < "$rf" 2>/dev/null | tr -d ' ')
+  LC_ALL=C awk -v BINMODE=1 -v size="${size:-0}" -v dir="$DIRECTION" '
+    function datekey(s) {
+      if (match(s, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) return substr(s, RSTART, 10)
+      return ""
+    }
+    function datelabel(s,   t) {
+      if (!match(s, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) return "undated"
+      t = substr(s, RSTART)
+      sub(/[(:*].*$/, "", t)
+      sub(/[ \t]+$/, "", t)
+      return substr(t, 1, 40)
+    }
+    function firstmark(t, word, re,   a, b) {
+      a = index(t, word)
+      b = match(t, re) ? RSTART : 0
+      return (!a || (b && b < a)) ? b : a
+    }
+    function newest(kind,   i, best) {
+      best = 0
+      for (i = 1; i <= n; i++)
+        if (hit[kind, i] && (best == 0 || key[i] >= key[best])) best = i
+      return best
+    }
+    function report(kind,   b, last) {
+      b = newest(kind)
+      if (!b) {
+        printf "    newest-%s-entry: none (no dated entry mentions a %s)\n", kind, kind
+        return
+      }
+      last = (b < n) ? start[b + 1] - 1 : NR
+      printf "    newest-%s-entry: lines %d-%d (%s)\n", kind, start[b], last, lab[b]
+    }
+    {
+      raw = $0; line = raw; sub(/\r$/, "", line)
+      nbytes[NR] = length(raw) + 1
+      if (line ~ /^[ \t]*(```|~~~)/) { fence = !fence; next }
+      if (fence) next
+      low = tolower(line)
+      # A declaration counts only in the BODY. Once the dated log has started, a line-start
+      # sync-arrival:/sync-departure: is a quoted, possibly superseded command: history.
+      if (low ~ /^sync-(arrival|departure):/) {
+        if (logstart) stale++
+        else {
+          decl[++nd] = line
+          declared[(low ~ /^sync-arrival:/) ? "arrival" : "departure"] = 1
+        }
+      }
+      is_update = (line ~ /^\*\*UPDATE [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)
+      is_loghead = (low ~ /^#+[ \t]/ && low ~ /(^|[^a-z])(history|log|updates|changelog)([^a-z]|$)/)
+      if (!logstart && (is_update || is_loghead)) logstart = NR
+      if (!logstart) next
+      if (is_update || line ~ /^#+[ \t].*[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ ||
+          line ~ /^[-*][ \t]+(\*\*)?[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/) {
+        n++; start[n] = NR; key[n] = datekey(line); lab[n] = datelabel(line); text[n] = low
+      } else if (n) {
+        text[n] = text[n] " " low
+      }
+    }
+    END {
+      # An entry takes the direction of its FIRST marker. Real entries mention both
+      # ("DEPARTURE ... the next arrival takes them"), so any mention is not enough.
+      for (i = 1; i <= n; i++) {
+        a = firstmark(text[i], "arrival", "pulled[^a-z].*[^a-z]down([^a-z]|$)")
+        d = firstmark(text[i], "departure", "pushed[^a-z].*[^a-z]up([^a-z]|$)")
+        hit["arrival", i] = (a && (!d || a < d))
+        hit["departure", i] = (d && (!a || d < a))
+      }
+      printf "    size: %d bytes, %d lines\n", size, NR
+      for (i = 1; i <= nd; i++) print "    " decl[i]
+      if (stale)
+        printf "    ignored: %d sync-arrival/sync-departure line(s) inside the dated history log -- history, not a live declaration\n", stale
+      bb = 0
+      if (!logstart) {
+        printf "    body: lines 1-%d (%d bytes) -- the whole file; there is no dated history log\n", NR, size
+      } else if (logstart == 1) {
+        print "    body: none -- the file opens with its dated history log"
+      } else {
+        for (i = 1; i < logstart; i++) bb += nbytes[i]
+        printf "    body: lines 1-%d (%d bytes) -- the recipe; read this range, not the whole file\n", logstart - 1, bb
+      }
+      if (logstart) {
+        printf "    history-log: lines %d-%d (%d bytes, %d dated entries) -- never read it whole\n", logstart, NR, size - bb, n
+        report("arrival")
+        report("departure")
+      }
+      if (!declared[dir])
+        printf "    -> add a line  sync-%s: <command>  to this file so the next %s takes the command from it instead of searching the note\n", dir, dir
+    }
+  ' "$rf" 2>/dev/null || echo "    shape: unknown (could not read the recipe file; read it with care)"
+}
+
 echo
 echo "== RECIPE FILE (out-of-band transport recipe only) =="
 # Deliberately narrow: only out-of-band/OneDrive sync recipes, NOT generic
 # cross-machine/git-mirror transfer notes (those are not runnable bucket recipes).
+# Each "  recipe: <path>" line is unchanged; its shape lines follow it, indented.
 if [ -d "$LIVE_MEM" ]; then
   RF=$(find "$LIVE_MEM" -maxdepth 1 -type f \( -iname '*memory_sync*' -o -iname '*memory-sync*' -o -iname '*onedrive*' \) 2>/dev/null)
-  if [ -n "$RF" ]; then printf '%s\n' "$RF" | sed 's/^/  recipe: /'; else echo "  none (no memory-sync/onedrive recipe file in live memory dir)"; fi
+  if [ -n "$RF" ]; then
+    while IFS= read -r rf; do
+      [ -n "$rf" ] || continue
+      printf '  recipe: %s\n' "$rf"
+      recipe_shape "$rf"
+    done <<RSEOF
+$RF
+RSEOF
+  else
+    echo "  none (no memory-sync/onedrive recipe file in live memory dir)"
+  fi
 else
   echo "  (live memory dir does not exist -- cannot search for a recipe file)"
 fi
@@ -317,7 +443,7 @@ echo "Identify the transport branch IN ORDER; take the FIRST that matches:"
 echo "  1 junction-into-repo => no-op (git already syncs it)"
 echo "  2 in-repo mirror + bootstrap script => bootstrap / mirror copy-back handles it"
 echo "  3 junction-to-out-of-band => OS auto-syncs"
-echo "  4 POSITIVE bucket-match (exact/declared/alias) => out-of-band bucket transport; open the recipe file."
+echo "  4 POSITIVE bucket-match (exact/declared/alias) => out-of-band bucket transport; use the recipe's declared command or read only its body range (RECIPE FILE above)."
 echo "    bucket-match-lowconf (substring) is NOT branch 4 -- surface candidates + confirm with the user."
 echo "  4b repo-is-transport: yes => the git-tracked memory dir IS the transport; it travels on the"
 echo "     push the handoff already performs. A no-op FOR A STATED REASON, not an absent transport."

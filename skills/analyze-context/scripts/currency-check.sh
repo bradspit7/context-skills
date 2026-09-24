@@ -3,12 +3,16 @@
 # Read-only except `git fetch`. Prints a structured report; any line starting with
 # FINDING or THRESHOLD requires action before synthesis. Always exits 0.
 #
-# Usage: bash currency-check.sh [primary-doc ...]
+# Usage: bash currency-check.sh [--arrival] [primary-doc ...]
 #   primary-doc defaults to: HANDOFF.md context/HANDOFF.md CONTEXT.md continuation/context.md
 #   (first that exists is treated as "the doc" for drift comparison)
+#   --arrival (first argument only): device-sync's arrival mode. A clean gate prints the short
+#   ARRIVAL BRIEFING class instead of the slim SAME-DAY one; see emit_resume_class.
 
 set -u
 
+ARRIVAL=""
+if [ "${1:-}" = "--arrival" ]; then ARRIVAL=1; shift; fi
 if [ $# -gt 0 ]; then DOCS=("$@"); else DOCS=(HANDOFF.md context/HANDOFF.md CONTEXT.md continuation/context.md); fi
 
 echo "== MACHINE =="
@@ -93,6 +97,55 @@ emit_docket_bound() {   # $1 = the pickup doc
   done < <(LC_ALL=C.UTF-8 grep -oiE '[A-Za-z0-9_./-]*(roadmap|docket)[A-Za-z0-9_.-]*[.]md' "$doc" 2>/dev/null)
 }
 
+# The docket half of the short-read contract. The SAME-DAY and ARRIVAL paths both print it from
+# this one copy, so the bound cannot drift between them (two copies kept in step by a comment is
+# the drift this script could not detect in itself -- the same reason emit_resume_class is one).
+emit_docket_contract() {   # $1 = the pickup doc
+  local doc="$1"
+  echo "   PLUS the docket (open items by ID, one line each, preserving each row's status marker) from"
+  echo "   $doc's own next-tasks/open-items section -- or the separate docket file it points to, if any."
+  echo "   BOUND that docket file: wc -c first; at or under ~40KB read it fully, above that"
+  echo "   read only its open-item region"
+  echo "   (header + open/next-tasks, stopping at the Resolved/Archived/Closed heading"
+  echo "   that starts the closed tail -- no open section after it; a Resolved section ABOVE open sections ends nothing;"
+  echo "   where no such heading ends it within ~40KB -- a docket that marks status per row --"
+  echo "   only its first ~40KB PLUS the rows $doc names by id)"
+  echo "   and REPORT the unread remainder as a number. This line is the copy the reader"
+  echo "   actually sees on the load-bearing downgrade path, so the bound has to live here too."
+  emit_docket_bound "$doc"
+}
+
+# ---------- arrival-path read bound for the PRIMARY doc, MEASURED ----------
+# The arrival briefing reads the handoff whole at or under ~40KB. Above that it reads only the
+# current-state portion: a handoff keeps current state at the top and rotated history below, so
+# stop at the first History/Archive/Closed heading when one starts within ~40KB, else at the last
+# whole line inside ~40KB. Either way the unread remainder is printed as a number.
+emit_doc_bound() {   # $1 = the pickup doc
+  local doc="$1"
+  [ -f "$doc" ] || return 0
+  # BINMODE=3: count CR bytes too (Windows gawk strips them on input otherwise).
+  LC_ALL=C awk -v BINMODE=3 -v f="$doc" -v lim=40960 '
+    { b = length($0) + 1; tot += b
+      if (!hl && NR > 1 && $0 ~ /^#+[ \t]/) {
+        h = tolower($0)
+        if (h ~ /(^|[^a-z])(history|archive|archived|closed)([^a-z]|$)/) { hl = NR; hoff = tot - b; ht = $0; sub(/\r$/, "", ht) }
+      }
+      if (tot <= lim) { sl = NR; sb = tot }
+    }
+    END {
+      if (tot <= lim) { printf "   MEASURED: %s is %d B -- at or under ~40KB: read it whole.\n", f, tot; exit }
+      if (hl && hoff <= lim) {
+        printf "   MEASURED: %s is %d B -> read ONLY its current-state portion, lines 1-%d (%d B), stopping at the \047%s\047 heading on line %d;\n", f, tot, hl - 1, hoff, ht, hl
+        printf "      REPORT the unread remainder as a number: %d B of %s not read.\n", tot - hoff, f
+        exit
+      }
+      printf "   MEASURED: %s is %d B with no History/Archive/Closed heading starting within ~40KB\n", f, tot
+      if (sl >= 1) printf "      -> read ONLY lines 1-%d (%d B), its current-state top;\n", sl, sb
+      else { sb = lim; printf "      -> read ONLY its first %d B (its first line alone is longer);\n", lim }
+      printf "      REPORT the unread remainder as a number: %d B of %s not read.\n", tot - sb, f
+    }' "$doc"
+}
+
 # ---------- RESUME CLASS emitter — called by BOTH the git and no-git paths ----------
 # G#359: this block used to live inside the git path only, so on a no-git project the
 # section the skill's routing contract keys on was ABSENT ENTIRELY — and an absent class
@@ -109,7 +162,11 @@ emit_docket_bound() {   # $1 = the pickup doc
 emit_resume_class() {
   RC_DOC="$1"; RC_AGE_H="$2"; RC_REASONS="$3"; RC_PROV="$4"; RC_BASIS="$5"
   echo
-  echo "== RESUME CLASS (routing signal: full briefing vs the slim analyze-handoff path) =="
+  if [ -n "$ARRIVAL" ]; then
+    echo "== RESUME CLASS (routing signal: full briefing vs the short arrival briefing) =="
+  else
+    echo "== RESUME CLASS (routing signal: full briefing vs the slim analyze-handoff path) =="
+  fi
   # Mechanizes the analyze-context <-> analyze-handoff routing that invocation-time judgment
   # measurably never performs (2026-07-04 audit: 0 slim-path uses in 204 sessions; 20+
   # same-day resumes each paid the full briefing). The slim path requires ALL of: zero
@@ -133,6 +190,23 @@ emit_resume_class() {
   RC_MULTIDEV=""
   for pd in HANDOFF-*.md; do [ -e "$pd" ] && RC_MULTIDEV=1 && break; done
   [ "${FINDINGS_N:-0}" -gt 0 ] && RC_REASONS="$RC_REASONS; ${FINDINGS_N} FINDING line(s) in the report (resolve source-of-truth first)"
+  # ARRIVAL MODE (--arrival; device-sync passes it through analyze-context). Every machine switch
+  # produces two of the reasons below: the doc is a day or more old, and its stamp names the other
+  # machine (or there is none). On arrival they say nothing new, yet they forced the full briefing
+  # (depth reads, helper agents, a claim-check pass) onto every switch, long after the pull and
+  # bootstrap had finished. So under --arrival those two are FACTS on the ARRIVAL line, never
+  # reasons. Everything else
+  # still forces FULL: FINDINGs, the multi-dev pattern, and the reasons the caller passed in (the
+  # git path's never-committed doc). Commits after the wrap are listed on the ARRIVAL path instead
+  # (see the git-path call site).
+  #
+  # Ruling: an UNDATEABLE doc still forces FULL under --arrival. Its age stops mattering on
+  # arrival, but "cannot date" is not an age. On the git path it means the doc was never
+  # committed, so the pull cannot have carried it and it is not the departing machine's record;
+  # on the no-git path there is no dating evidence at all. The arrival briefing trusts the doc as
+  # what the other machine left, and neither case supports that, so the guarantee below (no
+  # downgraded class without a known age) holds in both modes.
+  #
   # An UNDATEABLE doc can never yield SLIM. If the caller already explained why (the git
   # path says "never committed", which is more useful than a generic message) the reason
   # list is non-empty and FULL is already forced, so adding a second one would only be
@@ -141,33 +215,61 @@ emit_resume_class() {
   # rather than dependent on every caller remembering to supply a reason.
   if [ -z "$RC_AGE_H" ]; then
     [ -z "$RC_REASONS" ] && RC_REASONS="$RC_REASONS; cannot date $RC_DOC"
-  else
+  elif [ -z "$ARRIVAL" ]; then
     [ "$RC_AGE_H" -ge 24 ] && RC_REASONS="$RC_REASONS; $RC_DOC last written ${RC_AGE_H}h ago (>=24h)"
   fi
   [ -n "$RC_MULTIDEV" ] && RC_REASONS="$RC_REASONS; multi-dev pattern (per-dev files + feed need the full read)"
-  if [ -z "$RC_STAMP" ]; then
+  if [ -n "$ARRIVAL" ]; then
+    :   # arrival: the stamp is reported on the ARRIVAL line below, never a reason
+  elif [ -z "$RC_STAMP" ]; then
     RC_REASONS="$RC_REASONS; no machine stamp in $RC_DOC (cannot confirm same machine)"
   elif [ -n "$RC_HOST" ] && [ "$(printf '%s' "$RC_STAMP" | tr '[:upper:]' '[:lower:]')" != "$(printf '%s' "$RC_HOST" | tr '[:upper:]' '[:lower:]')" ]; then
     # G#55 -- a comparison reports STATE, not CAUSE. This branch fires on a genuine machine
     # switch AND on an abbreviated/aliased stamp for THIS host (one project stamps `PC` while
     # the hostname is `<longer-name>_PC`), so it must not assert a switch it cannot distinguish.
-    RC_REASONS="$RC_REASONS; machine stamp '$RC_STAMP' != host '$RC_HOST' -- the writing machine is UNCONFIRMED (a real switch, or an abbreviated/aliased stamp); if you did switch machines, device-sync first, then the full briefing"
+    RC_REASONS="$RC_REASONS; machine stamp '$RC_STAMP' != host '$RC_HOST' -- the writing machine is UNCONFIRMED (a real switch, or an abbreviated/aliased stamp); if you did switch machines, run device-sync instead: it pulls, syncs memory and then gives the short arrival briefing"
   fi
-  if [ -z "$RC_REASONS" ]; then
+  if [ -z "$RC_REASONS" ] && [ -n "$ARRIVAL" ]; then
+    if [ -z "$RC_STAMP" ]; then
+      RC_WHERE="no machine stamp in $RC_DOC, so the writing machine is not recorded"
+    elif [ "$(printf '%s' "$RC_STAMP" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$RC_HOST" | tr '[:upper:]' '[:lower:]')" ]; then
+      RC_WHERE="written on this machine ('$RC_STAMP')"
+    else
+      RC_WHERE="written on '$RC_STAMP' (this machine: '$RC_HOST')"
+    fi
+    echo "ARRIVAL BRIEFING — gate clean (0 FINDINGs); ${RC_PROV}; ${RC_WHERE}; single-doc pattern.${RC_BASIS}"
+    echo "=> UNLESS the user asked for a full briefing: take the ARRIVAL PATH (the short briefing device-sync ends with):"
+    echo "   read $RC_DOC whole if it is at or under ~40KB; above that read ONLY its current-state portion"
+    echo "   (up to its first History/Archive/Closed heading) and REPORT the unread remainder as a number."
+    emit_doc_bound "$RC_DOC"
+    echo "   Deliver last completed / next intended / blocker"
+    if [ -n "${ARRIVAL_SINCE:-}" ]; then
+      RC_SINCE_N=$(git rev-list --count "$ARRIVAL_SINCE"..HEAD 2>/dev/null)
+      echo "   ${RC_SINCE_N} commit(s) landed after $RC_DOC was last written; the handoff does not describe them,"
+      echo "   so name them in the briefing (newest first, first 10 shown):"
+      git log -n 10 --format='     %h %s' "$ARRIVAL_SINCE"..HEAD 2>/dev/null
+      [ "${RC_SINCE_N:-0}" -gt 10 ] && echo "     ... and $((RC_SINCE_N - 10)) more (git log --oneline ${ARRIVAL_SINCE:0:7}..HEAD)"
+    fi
+    emit_docket_contract "$RC_DOC"
+    echo "   Carry the UPGRADES, CI, RULED OUT and DEPLOY PARITY sections this report printed, verbatim (whichever"
+    echo "   were printed; on the no-git path they come after this block)."
+    echo "   NO memory topic files, specs, archive or other deep reads; NO helper agents or subagents;"
+    echo "   NO claim-check pass; NO test or verify runs."
+    # The one Step 4.5 row the arrival path keeps. A question about THIS machine's own past action
+    # is the one open item an arrival on this machine can answer that the departing one could not:
+    # its logs and transcripts are local by design. The row was filed from a device-sync arrival
+    # that relayed such a question to the owner instead, so skipping it here would skip it on the
+    # only run it was built for. It is a few greps in the main thread, not a deep read.
+    echo "   ONE lookup still runs (analyze-context Step 4.5's this-machine row): an open item or blocker that"
+    echo "   names a past action of THIS machine ('${RC_HOST:-unknown}'), or says a thing lives only on it, is checked"
+    echo "   against this machine's runtime logs and that day's session transcripts first; ask the owner"
+    echo "   only what they do not answer."
+    echo "   Then offer the full briefing on request (\"brief me\")."
+  elif [ -z "$RC_REASONS" ]; then
     echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); ${RC_PROV}; machine stamp matches; single-doc pattern.${RC_BASIS}"
     echo "=> UNLESS the user asked for a full briefing: take the SLIM PATH (analyze-handoff contract):"
     echo "   read $RC_DOC fully, deliver the 3-line summary (last completed / next intended / blocker)"
-    echo "   PLUS the docket (open items by ID, one line each, preserving each row's status marker) from"
-    echo "   $RC_DOC's own next-tasks/open-items section -- or the separate docket file it points to, if any."
-    echo "   BOUND that docket file: wc -c first; at or under ~40KB read it fully, above that"
-    echo "   read only its open-item region"
-    echo "   (header + open/next-tasks, stopping at the Resolved/Archived/Closed heading"
-    echo "   that starts the closed tail -- no open section after it; a Resolved section ABOVE open sections ends nothing;"
-    echo "   where no such heading ends it within ~40KB -- a docket that marks status per row --"
-    echo "   only its first ~40KB PLUS the rows $RC_DOC names by id)"
-    echo "   and REPORT the unread remainder as a number. This line is the copy the reader"
-    echo "   actually sees on the load-bearing downgrade path, so the bound has to live here too."
-    emit_docket_bound "$RC_DOC"
+    emit_docket_contract "$RC_DOC"
     echo "   Then offer the full briefing on request. Skip the deep content reads (memory/specs/archive)."
   else
     echo "FULL BRIEFING — reason(s): ${RC_REASONS#; }"
@@ -497,7 +599,14 @@ if [ -n "$DOC" ]; then
   else
     AGE_H=$(( ($(date +%s) - DOC_EPOCH) / 3600 ))
   fi
-  [ "${BEHIND_N:-0}" -gt 3 ] && GIT_REASONS="$GIT_REASONS; $DOC is ${BEHIND_N} commits behind HEAD (work landed after the last wrap)"
+  # Under --arrival, commits after the wrap are listed on the ARRIVAL path instead of forcing FULL.
+  # On arrival they are usually other sessions' inbox filings or device-sync's own merge, and the
+  # full briefing would read the same handoff; their subjects are the information it lacks.
+  if [ -n "$ARRIVAL" ]; then
+    [ "${BEHIND_N:-0}" -gt 0 ] && ARRIVAL_SINCE="$LAST_DOC_SHA"
+  else
+    [ "${BEHIND_N:-0}" -gt 3 ] && GIT_REASONS="$GIT_REASONS; $DOC is ${BEHIND_N} commits behind HEAD (work landed after the last wrap)"
+  fi
   emit_resume_class "$DOC" "$AGE_H" "$GIT_REASONS" \
     "last $DOC commit ${AGE_H:-?}h ago; ${BEHIND_N:-0} commit(s) since" ""
 fi
@@ -505,4 +614,8 @@ fi
 echo
 echo "== VERDICT =="
 echo "Any FINDING line above => STOP: resolve source-of-truth with the user BEFORE reading content files."
-echo "No FINDING lines => proceed to content reads (RESUME CLASS above says full vs slim). Re-run this script after any git switch/pull/reset."
+if [ -n "$ARRIVAL" ]; then
+  echo "No FINDING lines => follow the RESUME CLASS above (ARRIVAL BRIEFING: only the short read it lists; FULL BRIEFING: the full content reads). Re-run this script after any git switch/pull/reset."
+else
+  echo "No FINDING lines => proceed to content reads (RESUME CLASS above says full vs slim). Re-run this script after any git switch/pull/reset."
+fi

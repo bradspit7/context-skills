@@ -1348,7 +1348,7 @@ def selftest():
                   "still open.\n")
         expect(p["skipped"]["reopened"] == ["#60"], "review M4: a reopened body keeps the row live")
         phrases = ["Decision (owner, 2026-09-01): exports stay CSV-only.",
-                   "Braden decided 2026-09-01: keep the legacy URL scheme.",
+                   "Alex decided 2026-09-01: keep the legacy URL scheme.",
                    "Per the owner: never auto-merge on Fridays.",
                    "NEVER re-enable the nightly purge job.",
                    "RULE: the gate stays at 8/8.", "LOCKED 2026-09-01: CSV only.",

@@ -41,6 +41,14 @@ API (stable; load by path -- the file is not on sys.path once installed):
         'untracked'; tracked is True only when committed, and False outside a git work tree.
         age_days comes from the date in the file name, else from the file's mtime. Raises
         LookupError when root is not a directory.
+    parse_bytes(raw, root=None, kind='docket', rel='') -> (rows, row_of, lines, config_error)
+        The parse state() and search() run, applied to one file's BYTES, so a caller can
+        parse a rewrite before it reaches disk. rows are the row dicts (id, state, grammar,
+        line, head, stub, ...); row_of[i] is the row that owns line i (0-based) or None, so a
+        row's exact span is every line that names it; lines are the decoded lines with a
+        trailing CR dropped (same count and order as raw split on LF). `root` applies that
+        project's docket-corpus.json status map; a broken config comes back as config_error,
+        never raised. update-context's rotate-docket.py moves rows by these spans.
 
 SCOPES
     'all' (default), 'here' (the current project), 'project:<dirname>' (case-insensitive),
@@ -901,6 +909,15 @@ def _central_ids(path):
     """Central-style row ids (ints) parsed from one file, in file order (test hook)."""
     rows, _, _, _ = _parse(path, "docket", os.path.basename(path), {})
     return [int(r["id"][2:]) for r in rows if r["grammar"] == "central-g"]
+
+
+def parse_bytes(raw, root=None, kind="docket", rel=""):
+    """(rows, row_of, lines, config_error) for one file's bytes -- see the module docstring."""
+    cfg, err = _load_config(root) if root is not None else ({}, None)
+    smap = _status_map(cfg)
+    rows, row_of, lines, _grammar = _parse_cached(rel or "<bytes>", kind, rel,
+                                                  tuple(sorted(smap.items())), raw)
+    return rows, row_of, lines, err
 
 
 def _index(p):

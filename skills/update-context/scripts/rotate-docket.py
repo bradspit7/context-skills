@@ -907,7 +907,8 @@ def apply(dc, pl, *, docket_path, archive_path, root, docket_rel, archive_rel):
 def git_root(start):
     try:
         out = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=str(start),
-                             capture_output=True, text=True, timeout=20)
+                             capture_output=True, text=True, encoding="utf-8",
+                             errors="replace", timeout=20)
         if out.returncode == 0 and out.stdout.strip():
             return Path(out.stdout.strip())
     except (OSError, subprocess.SubprocessError):
@@ -1138,8 +1139,8 @@ def selftest():
             "- **#7** ✅ **DONE 2026-08-01 " + DASH + " already archived.**" + filler + "\n"
             "- **#8** ✅ **DONE " + DASH + " shipped.** " + ELLIPSIS + " **[full row " + ARROW
             + " `archive/roadmap-closed-2026-08.md`](archive/roadmap-closed-2026-08.md)**\n"
-            "- **#10** ✅ **DONE 2026-09-05 " + DASH + " the page wave stops at 7.** OWNER RATIFIED"
-            " (c) 2026-09-26: new effort goes to the hubs, and the thin pages stay thin." + filler + "\n"
+            "- **#10** ✅ **DONE 2026-09-05 " + DASH + " the page wave stops at 7.** New effort goes"
+            " to the hubs; the owner chose that on 2026-09-26." + filler + "\n"
             "- **#11** ✅ **DONE 2026-09-06 (machine, owner-delegated): shipped the gate.**"
             + filler + "\n"
             "- **#9** ✅ **DONE 2026-09-04 " + DASH + " a row whose body markdown ends.**"
@@ -1170,9 +1171,15 @@ def selftest():
         expect(ids == ["#2", "#3", "#11"],
                "A: moves exactly the eligible closed rows (#2, #3, #11): %s" % ids)
         sk = pl["skipped"]
+        # #10 must stay a decision the ruling GRAMMAR does not read, or the decision arm below
+        # tests the grammar instead of the net. It did go stale once: #10 used to read OWNER
+        # RATIFIED, which the rulings rebuild taught the grammar, so the net was never reached.
+        row10 = next(ln for ln in docket_a.split("\n") if ln.startswith("- **#10**"))
+        expect(not rl.rulings_in_text("roadmap.md", row10),
+               "A premise: the ruling grammar does not read #10's owner decision")
         expect(sk["ruling"] == ["#4"], "A: a row carrying a standing ruling stays live")
         expect(sk["decision"] == ["#10"],
-               "A: a row carrying an owner ratification the ruling grammar does not read stays live")
+               "A: a row carrying an owner decision the ruling grammar does not read stays live")
         expect("#11" in ids, "A: ... but 'owner-delegated' alone is not a decision, so #11 moves")
         expect(sk["small"] == ["#5"], "A: a row under --min-bytes stays")
         pl0 = plan(dc, rl, docket_raw=(a / "roadmap.md").read_bytes(), docket_rel="roadmap.md",

@@ -57,6 +57,7 @@ If none found: tell the user *"No HANDOFF/CONTEXT file present. Want me to run /
 - HANDOFF.md present → read it fully. (It's supposed to be slim per `update-context` discipline. If it's grown to 1000+ lines, surface that as a hint that an `update-context` cleanup is overdue.) If the pickup doc is ITSELF the docket and is over ~40KB, the same bound below applies to it.
 - CONTEXT.md / context.md only → read top section only, stopping at the first `---` divider (= the current pickup point). Do NOT chunk-read the whole file. That's `analyze-context`'s territory.
 - Do NOT read memory dir, archive, plans, or specs. **The docket IS in scope** (Step 4): surface the open items the handoff already carries. Only if the docket lives in a *separate* file the handoff points to as the home of open items, read that one file too — nothing else. **Bound the docket read (G#566).** `wc -c` it first. At or under ~40KB read it fully; above that read only its OPEN-ITEM REGION -- the header plus the open/next-tasks section, stopping at the first Resolved/Archived/Closed heading -- and state the remainder as a number in the summary (`docket: read 38KB of 419KB (open-rows region); 381KB of closed history not read`). Never silently omit; if the remainder cannot be derived, say `UNKNOWN` rather than nothing. Bound to the SECTION, never to a leading byte slice: a docket whose newest rows sit at the bottom would lose exactly the rows the resume needs. This is `analyze-context` Step 3's size valve, which the slim path skips Steps 2-4 to reach and therefore never inherited -- measured, a slim resume was authorized to read an 83,590 B handoff plus a 427,410 B docket while this skill's own description claims ~5K tokens.
+- **Standing rulings, one read-only call.** When this skill runs on its own (not as `analyze-context`'s slim path, whose gate already printed them), run `bash ~/.claude/skills/analyze-context/scripts/rulings-line.sh` from the project root and keep its `RULED OUT` lines for Step 4. A next-morning resume on the same machine is exactly when a killed option gets proposed back, and this skill is that resume. A missing helper prints `could not check`: carry that line, never drop it.
 - Do NOT run `git pull` / `git fetch` unless the user asked.
 
 ### Step 3 — Stale-check
@@ -81,6 +82,7 @@ Then wait for direction. **Don't produce the slim summary on stale data** — th
 **Last completed:** <one line — most recent shipped work>
 **Next intended:** <one line — the top ACTIONABLE item; if none is actionable now, say so ("no actionable pickup — see docket")>
 **Blocker:** <one line if any open blocker / pending decision; otherwise "none">
+**Ruled out:** <the RULED OUT lines, verbatim: each a dated claim with its source, re-checked before it is relied on; "none -- read N source(s)" when it says so>
 
 **Docket:**
 - <marker> <ID> — <one line per row>

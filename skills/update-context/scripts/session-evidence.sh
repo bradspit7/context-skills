@@ -984,15 +984,17 @@ done
 # RULING LOSS: a status rewrite of a docket row (NEW -> BUILT) can delete the owner's
 # do-not-re-propose block along with the speculation it replaces; the row still reads complete
 # and nothing else compares before and after. One THRESHOLD per ruling that the HEAD copy of a
-# changed docket/HANDOFF/memory-index file carries, or that a commit since the last wrap removed,
-# and that the working tree holds NOWHERE in the project (a moved ruling is kept). Same helper as
-# the briefing's RULED OUT section; a git project with the helper missing is told so, never skipped.
+# changed standing file carries, or that a recent commit (the briefing's own window) removed, and
+# that no standing source holds AS A RULING now (text surviving only in an archive, or under a
+# retitled heading, is not kept). Update-context Step 7 re-runs it after the wrap's own writes.
+# Same helper as the briefing's RULED OUT section; a git project with the helper missing is told
+# so, never skipped.
 RLL="$(dirname "${BASH_SOURCE[0]}")/../../analyze-context/scripts/rulings-line.sh"
 if [ -f "$RLL" ]; then
   bash "$RLL" --lost
 elif git rev-parse --git-dir >/dev/null 2>&1; then
   echo
-  echo "== RULING LOSS (owner rulings in HEAD or in commits since the last wrap, gone from the working tree) =="
+  echo "== RULING LOSS (owner rulings in HEAD or in recent commits, gone from the briefing's sources) =="
   echo "RULING LOSS: could not check -- analyze-context/scripts/rulings-line.sh is not installed"
 fi
 

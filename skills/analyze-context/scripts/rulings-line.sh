@@ -8,13 +8,14 @@
 # is that something will NOT happen. A docket row rewritten from NEW to BUILT dropped the block
 # holding two killed options, and the next session proposed both back to the owner.
 #
-# Prints NOTHING when the project has no ruling (and, for --lost, outside git). Every failure is
-# a 'could not check' line under the section header -- never silence, which would read as
-# "there are no rulings". These are STATE lines, never FINDINGs (currency-check.sh counts
-# '^FINDING' lines to block synthesis).
+# A project with a docket, handoff or memory index always gets the section: its rulings, or one
+# 'none -- read N source(s)' line naming what was read. It prints nothing only for a directory
+# with no context layer (and, for --lost, outside git). Every failure is a 'could not check' line
+# under the section header -- never silence, which would read as "there are no rulings". These
+# are STATE lines, never FINDINGs (currency-check.sh counts '^FINDING' lines to block synthesis).
 set -u
 if [ "${1:-}" = "--lost" ]; then
-  HDR="== RULING LOSS (owner rulings in HEAD or in commits since the last wrap, gone from the working tree) =="
+  HDR="== RULING LOSS (owner rulings in HEAD or in recent commits, gone from the briefing's sources) =="
   TAG="RULING LOSS"
 else
   HDR="== RULED OUT (owner rulings - do not re-propose) =="

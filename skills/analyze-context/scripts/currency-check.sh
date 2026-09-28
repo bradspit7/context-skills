@@ -100,6 +100,14 @@ emit_docket_bound() {   # $1 = the pickup doc
 # The docket half of the short-read contract. The SAME-DAY and ARRIVAL paths both print it from
 # this one copy, so the bound cannot drift between them (two copies kept in step by a comment is
 # the drift this script could not detect in itself -- the same reason emit_resume_class is one).
+# The state sections BOTH short paths carry, from this one copy. The same-day path used to have no
+# carry line at all, so the RULED OUT section printed and then fell out of the one briefing a
+# next-morning resume on the same machine gets -- the exact case the rulings exist for.
+emit_carry_line() {
+  echo "   Carry the UPGRADES, CI, RULED OUT and DEPLOY PARITY sections this report printed, verbatim (whichever"
+  echo "   were printed; on the no-git path they come after this block)."
+}
+
 emit_docket_contract() {   # $1 = the pickup doc
   local doc="$1"
   echo "   PLUS the docket (open items by ID, one line each, preserving each row's status marker) from"
@@ -251,8 +259,7 @@ emit_resume_class() {
       [ "${RC_SINCE_N:-0}" -gt 10 ] && echo "     ... and $((RC_SINCE_N - 10)) more (git log --oneline ${ARRIVAL_SINCE:0:7}..HEAD)"
     fi
     emit_docket_contract "$RC_DOC"
-    echo "   Carry the UPGRADES, CI, RULED OUT and DEPLOY PARITY sections this report printed, verbatim (whichever"
-    echo "   were printed; on the no-git path they come after this block)."
+    emit_carry_line
     echo "   NO memory topic files, specs, archive or other deep reads; NO helper agents or subagents;"
     echo "   NO claim-check pass; NO test or verify runs."
     # The one Step 4.5 row the arrival path keeps. A question about THIS machine's own past action
@@ -270,6 +277,7 @@ emit_resume_class() {
     echo "=> UNLESS the user asked for a full briefing: take the SLIM PATH (analyze-handoff contract):"
     echo "   read $RC_DOC fully, deliver the 3-line summary (last completed / next intended / blocker)"
     emit_docket_contract "$RC_DOC"
+    emit_carry_line
     echo "   Then offer the full briefing on request. Skip the deep content reads (memory/specs/archive)."
   else
     echo "FULL BRIEFING — reason(s): ${RC_REASONS#; }"

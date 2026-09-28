@@ -981,6 +981,19 @@ for pf in ${PLAN_FILES[@]+"${PLAN_FILES[@]}"}; do
 done
 [ -n "$PLAN_FINDINGS" ] && printf '%s\n' "$PLAN_FINDINGS"
 
+# IDENTITY: a throwaway git identity (tmp-proof <tmp@proof.invalid>, set by a proof script inside a
+# linked worktree, which shares the main repo's config) authors every commit this wrap makes. Same
+# helper as the briefing's; it prints nothing unless the identity looks throwaway, and its line is a
+# NOTE for the handoff's Known issues. A git project with the helper missing is told so, never skipped.
+IDN="$(dirname "${BASH_SOURCE[0]}")/../../analyze-context/scripts/identity-note.sh"
+if [ -f "$IDN" ]; then
+  bash "$IDN"
+elif git rev-parse --git-dir >/dev/null 2>&1; then
+  echo
+  echo "== IDENTITY =="
+  echo "IDENTITY: could not check -- analyze-context/scripts/identity-note.sh is not installed"
+fi
+
 # RULING LOSS: a status rewrite of a docket row (NEW -> BUILT) can delete the owner's
 # do-not-re-propose block along with the speculation it replaces; the row still reads complete
 # and nothing else compares before and after. One THRESHOLD per ruling that the HEAD copy of a

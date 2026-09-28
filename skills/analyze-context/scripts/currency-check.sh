@@ -18,6 +18,22 @@ if [ $# -gt 0 ]; then DOCS=("$@"); else DOCS=(HANDOFF.md context/HANDOFF.md CONT
 echo "== MACHINE =="
 hostname
 
+# ---------- IDENTITY: a throwaway git identity -- EVERY mode, before the no-git split ----------
+# A `git config user.*` run inside a throwaway LINKED worktree rewrites the main repo's identity (a
+# linked worktree shares its config), and every later commit carries it: one project committed a
+# whole session wrap as tmp-proof <tmp@proof.invalid> while this gate reported clean. The helper
+# prints nothing unless the identity looks throwaway. Its line is a NOTE, never a FINDING (it must
+# not stop the gate, only reach the briefing), so emit_carry_line names the section for the short
+# paths whenever it printed. A git project with the helper missing is told so, never skipped.
+IDN="$(dirname "${BASH_SOURCE[0]}")/identity-note.sh"
+IDENTITY_OUT=""
+if [ -f "$IDN" ]; then
+  IDENTITY_OUT=$(bash "$IDN")
+elif git rev-parse --git-dir >/dev/null 2>&1; then
+  IDENTITY_OUT=$(printf '\n== IDENTITY ==\nIDENTITY: could not check -- analyze-context/scripts/identity-note.sh is not installed')
+fi
+if [ -n "$IDENTITY_OUT" ]; then printf '%s\n' "$IDENTITY_OUT"; fi
+
 echo
 echo "== PATTERN MARKERS =="
 for m in HANDOFF.md context/HANDOFF.md CONTEXT.md CLAUDE.md continuation context coordination docs/decisions; do
@@ -106,6 +122,12 @@ emit_docket_bound() {   # $1 = the pickup doc
 emit_carry_line() {
   echo "   Carry the UPGRADES, CI, RULED OUT and DEPLOY PARITY sections this report printed, verbatim (whichever"
   echo "   were printed; on the no-git path they come after this block)."
+  # Only when the IDENTITY section printed (under MACHINE, above): the short paths skip the reads
+  # where a throwaway identity would otherwise surface, so the one line has to be carried by name.
+  if [ -n "${IDENTITY_OUT:-}" ]; then
+    echo "   Carry the IDENTITY section printed under MACHINE too, verbatim, and fix a throwaway identity in the"
+    echo "   config file it names before the next commit."
+  fi
 }
 
 emit_docket_contract() {   # $1 = the pickup doc

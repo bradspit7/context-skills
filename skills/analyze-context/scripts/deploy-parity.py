@@ -878,8 +878,14 @@ def selftest() -> int:
            "an unreachable site -> 'could not check', exit 2, never a verdict")
         rc, out = go(ref="no-such-ref")
         ok(rc == 2 and out.startswith("production: could not check"), "a bad --ref -> could not check, exit 2")
+        # Either outcome is timing, not a defect: every budgeted fetch can finish before the zero-length wait
+        # (then the run ends in its verdict -- here "NOT AT PARITY", rc 1) or not (rc 2, the budget named).
+        # Measured 2026-09-27: 3 of 4 runs took the first path, which the old `rc in (0, 2)` called a crash.
         rc, out = go(budget=0.000001)
-        ok(rc in (0, 2), "a tiny --budget never crashes (it either finished or reports could-not-check)")
+        last = out.strip().splitlines()[-1] if out.strip() else ""
+        ok((rc in (0, 1) and re.match(r"(NOT AT )?PARITY -- ", last) is not None)
+           or (rc == 2 and "--budget exhausted" in out),
+           "a tiny --budget never crashes: it ends in a verdict, or says the budget ran out (could not check)")
     finally:
         if httpd is not None:
             httpd.shutdown()

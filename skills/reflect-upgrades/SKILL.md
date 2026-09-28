@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per wrap. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-09-23.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-09-28.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -158,19 +158,30 @@ line; it is never a question for the owner.
 
 `update-context` runs this step at every wrap; nudge and manual firings stop at Step 4 (queue or file)
 and the next wrap builds. **Exactly one build per wrap:** the best new lesson on rungs 1-5 that fits
-one wrap, else the **oldest** queued item, else nothing.
+one wrap, else the **oldest** queued item, else nothing. **A departure (`device-handoff`) starts
+none:** it pushes before a build could land, and a build that lands after the push is stranded on
+this machine or built a second time on the other one. Its pick stays queued for the next wrap.
 
 1. **Look again before building** — if the build edits a hook or script, query the capability index
    for other copies of it. Shared logic lives once; project differences live in per-project config;
    a fix to a shared tool goes to its shared owner.
 2. **Write the spec on the main thread:** the incident command and output, the target file, the RED
-   condition (Step 3's five fields).
-3. **Hand it to a fresh small-context helper** (the Agent tool with worktree isolation, an agent type
-   that has a shell) that builds the check in its own worktree **outside the project root** and returns
-   the diff plus RED and GREEN evidence. The wrap's own context is too large to build in.
-4. **Apply it on the main thread, run the test once, and commit** with a trailer:
+   condition (Step 3's five fields). **The lesson must be in `UPGRADE-QUEUE.md` before the helper
+   starts** — a queued item already is; write a new lesson's entry now, even one past the cap. That
+   entry is what carries the lesson if the build never lands.
+3. **Hand it to a fresh small-context helper in the background** (the Agent tool with
+   `run_in_background: true` and worktree isolation, an agent type that has a shell) that builds the
+   check in its own worktree **outside the project root** and returns the diff plus RED and GREEN
+   evidence. The wrap's own context is too large to build in.
+4. **Never wait for it.** The wrap runs its other steps, commits and reports without the build, and
+   the report says it is still running. (Measured: builds took 4 to 18 minutes, 44% of all wrap
+   time once every wrap built one.) When the helper returns — during the wrap or after
+   the report — **apply it on the main thread, run the test once, run the propagation the wrap would
+   run for those files** (for a skill, `update-context`'s Step 7 probe), **and commit** with a
+   trailer, removing its queue entry in the same commit:
    `git add <paths>` then `git commit -m "<subject>" -m "Upgrade: <one plain sentence>" -- <paths>`.
-   The trailer is the record: a ledger can derive *built* from it, in the repo where it landed.
+   The trailer is the record: a ledger can derive *built* from it, in the repo where it landed. If the
+   session ends first, the entry stays queued and the next wrap builds it.
 5. **Too big for one wrap** → queue it (cap 5).
 6. **Projects with live external writes or regulated personal data:** the build may only add tests
    that import no write client, and must not touch the project's sensitive-data/secret guard, its git
@@ -227,6 +238,7 @@ means going back and recording it before finishing — the user should never hav
 
 ## Do NOT
 - Build more than one upgrade per wrap, build on the main thread, or build from a nudge or manual firing.
+- Hold the wrap open waiting for its build, or start a build at a departure.
 - Edit a live-write project's forbidden files (Step 5 item 6).
 - Manufacture lessons to seem productive — Step 3 is the gate.
 - Emit an unlabeled row, or re-propose something Step 2 found.

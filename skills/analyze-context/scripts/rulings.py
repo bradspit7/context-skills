@@ -152,6 +152,7 @@ BY_VALUES = ("owner", "delegated")
 NAMES_SHOWN = 6        # sources named on the zero-state line before '+N more'
 DEFAULT_CAP = 12
 DEFAULT_HISTORY = 30
+PATHSPEC_READS = 4     # git log reads while the window's own configs keep naming paths the pathspec lacks (C10)
 SUMMARY_MAX = 180
 THRESHOLD_SUMMARY_MAX = 160
 MERGE_GAP = 200        # marker matches this close on one line are one ruling, not two
@@ -569,6 +570,107 @@ def _core(fragment):
     return " ".join(w for w in words if w)
 
 
+_NOTE_RE = re.compile(r"\(([^()]{0,80})\)$")
+
+
+def _note(text):
+    """The dates and numbers of the trailing parenthetical note that _core folds away from a normalize()d
+    fragment or clause: '(reconfirmed)' is markup, '(2026-09-14)' is a fact (review 3, C14)."""
+    m = _NOTE_RE.search(re.sub(r"^\d{1,4}[.)]\s+", "", text.strip()).rstrip(" .;:!?,"))
+    return frozenset(_facts(ruling_tokens(m.group(1)))) if m else frozenset()
+
+
+def _note_text(text):
+    """That trailing note's own text ('' for none): _redated reads its words, which _note keeps no trace of."""
+    m = _NOTE_RE.search(re.sub(r"^\d{1,4}[.)]\s+", "", text.strip()).rstrip(" .;:!?,"))
+    return m.group(1) if m else ""
+
+
+def _conflict(a, b):
+    """Two notes whose facts each lack one of the other's ('(2026-09-14)' against '(2026-09-15)'): two rulings,
+    not one. A date added to, dropped from or kept in a note is no conflict."""
+    return bool(a - b) and bool(b - a)
+
+
+# a date a note sets as a LIMIT, not a stamp: after one of these words (a colon may follow it: 'until: <date>'), or
+# either end of a range. Never 'from' or 'after': 'owner ruling from <date>' and 'reconfirmed after the <date> demo'
+# STAMP a ruling (review 4, N3)
+_LIMIT_RE = re.compile(r"\b(?:until|till|thru|through|by|before|to|due|deadline|expires?|expiring|expiry"
+                       r"|ends?|ending|effective|starting|than)(?:\s*:\s*|\s+)(?:on\s+|the\s+)?(" + _DATE + r")(?!\d)")
+_RANGE_RE = re.compile(r"(?<!\d)(" + _DATE + r")\s*(?:-|to|through|thru|until|till)\s*(" + _DATE + r")(?!\d)")
+
+
+def _limits(note):
+    """The dates a note's text sets as limits: '(through 2026-12-31)' bounds the ruling, '(2026-09-14)' dates it."""
+    out = {m.group(1) for m in _LIMIT_RE.finditer(note)}
+    for m in _RANGE_RE.finditer(note):
+        out |= {m.group(1), m.group(2)}
+    return out
+
+
+def _redated(mine, its, mine_text, its_text):
+    """Whether two conflicting notes (facts `mine`, `its`; their texts) differ only in the dates that STAMP a
+    ruling -- the same ruling re-dated, reconfirmed or corrected (review 4, F1) -- and not in a number, a price, a
+    version, or a date that is a limit: '(max 3 per day)' -> '(max 5 per day)', '($49)' -> '($59)',
+    '(through 2026-12-31)' -> another date change the ruling (review 4, R2)."""
+    diff = mine ^ its
+    if not diff or any(not re.fullmatch(_DATE, w) for w in diff):
+        return False
+    return not diff & (_limits(mine_text) | _limits(its_text))
+
+
+def _stood_beside(c, its, here, old, which="core", key=""):
+    """Whether current ruling `c` (note facts `its`), sharing a removed ruling's core under a CONFLICTING note, is a
+    ruling that already stood beside it -- and so never vouches for it (C14) -- rather than the removed ruling
+    itself, re-dated, reconfirmed or corrected (review 4, F1). `here` is the removed ruling's file (casefolded);
+    `old` the notes its old copy carried each core under (_old_notes, or a callable returning it; None: unknown);
+    `which` and `key` the core the match was made on -- 'core' and the fragment's, or 'clause' and the clause's or
+    segment's: a twin sharing only the clause is seen by that clause (review 4, R1). A ruling in ANOTHER file, or
+    with its old copy unknown, stood beside it: that file's past is not read here, so the strict reading holds,
+    the noisy side. In the same file, it stood beside it when the old copy already carried its note."""
+    if old is None or c.get("path") != here:
+        return True
+    notes = old() if callable(old) else old
+    return any(not _conflict(n, its) for n in notes.get(which, {}).get(key, ()))
+
+
+def _old_notes(rulings):
+    """{'core': {fragment core: [notes]}, 'clause': {clause or segment core: [notes]}}: the notes ONE copy's rulings
+    carry each core under, for _stood_beside."""
+    out = {"core": {}, "clause": {}}
+    for x in rulings:
+        out["core"].setdefault(_core(x["fragment"]), []).append(_note(x["fragment"]))
+        for cl in (x.get("clause"), x.get("segment")):
+            if cl:
+                out["clause"].setdefault(_core(cl), []).append(_note(cl))
+    return out
+
+
+def _ident(r):
+    """What makes two rulings of one run the SAME ruling (its removals are de-duplicated on it): its core and the
+    facts of the note its core folds away -- '(2026-09-14)' and '(2026-09-15)' are two rulings (review 3, C14)."""
+    return _core(r["fragment"]), _note(r["fragment"])
+
+
+def _copy_ident(r):
+    """_ident plus, for a list, every item's words: what a whole compare of ONE commit's two copies keys on -- a
+    long list's core stops at the window, so a dropped tail item leaves it unchanged (review 3, C11). Never the
+    run's de-duplication key: every older copy of a list whose items were later reworded would then be judged
+    on its own (measured: four false removals on one real project at --history 200)."""
+    return _ident(r) + (frozenset(frozenset(it["tokens"]) for it in r.get("items") or ()),)
+
+
+def _list_item(x):
+    """One item of a list-shaped ruling: {text, tokens (every distinctive word, its note's too: main's item check),
+    own (the words outside its trailing note), note and note_text (that note's facts and text), alts}. The note is
+    compared as a NOTE (_carried, _redated), never as the item's words, at any length: an item re-dated, even past
+    the window where the fragment's own note compare cannot see it, has not changed (review 4, R6, L4)."""
+    norm = normalize(x)
+    body = re.sub(r"\s*\([^()]{0,80}\)$", "", norm.rstrip(" .;:!?,"))
+    return {"text": _cut(x, 0, 60), "tokens": ruling_tokens(norm), "own": ruling_tokens(body), "note": _note(norm),
+            "note_text": _note_text(norm), "alts": _alternatives(norm)}
+
+
 def _clean(s):
     s = re.sub(r"<!--.*?-->", " ", s)   # a comment is a mention, never ruling text (review 3, F5)
     s = re.sub(r"~~.*?~~", " ", s)      # ...and so is struck-through text (critic C5)
@@ -672,8 +774,7 @@ def rulings_in_text(rel, text, first_line=1, limit=SUMMARY_MAX, only=None):
         # option, so a match that keeps the ruling must keep each item (review FK-HIST#7)
         parts = [_clean(x).strip(" :*_.") for x in LIST_SEP_RE.split(tail)]
         parts = [x for x in parts if x]
-        list_items = ([{"text": _cut(x, 0, 60), "tokens": ruling_tokens(normalize(x))} for x in parts]
-                      if len(parts) >= LIST_MIN_ITEMS else [])
+        list_items = [_list_item(x) for x in parts] if len(parts) >= LIST_MIN_ITEMS else []
         clean = LEAD_RE.sub("", _clean(raw), count=1)
         pos = max(0, pos - (len(_clean(raw)) - len(clean)))
         summary = _cut(_cells(clean), pos, limit)
@@ -778,18 +879,21 @@ def build_index(rulings):
     """The current rulings, ready to compare a removed one with: {'entries': one per ruling (fragment,
     core, tokens, facts, kinds) plus one per ruling SECTION -- its items' words together, vouching for
     every marker kind, because the heading is the marker (a list promoted to a section, review
-    FL-CUR#1) -- 'cores': every ruling's core, 'clauses': every ruling's own clause, as cores}."""
-    entries, cores, clauses, groups = [], set(), set(), {}
+    FL-CUR#1) -- 'cores': every ruling's core, 'clauses': every ruling's own clause, as cores; 'by_core':
+    the entries that carry each core, 'by_clause': (entry, its clause's _note, _note_text) for each clause}."""
+    entries, by_core, by_clause, groups = [], {}, {}, {}
     for r in rulings:
         toks = _toks(r)
         e = {"fragment": r["fragment"], "core": _core(r["fragment"]), "tokens": toks, "facts": _facts(toks),
              "kinds": set(r.get("kinds", ())), "parts": None, "path": (r.get("path") or "").casefold(),
-             "list": bool(r.get("items"))}
+             "list": bool(r.get("items")), "note": _note(r["fragment"]), "note_text": _note_text(r["fragment"]),
+             "items": [{"tokens": frozenset(it.get("own", it["tokens"])), "note": it.get("note", frozenset()),
+                        "note_text": it.get("note_text", "")} for it in r.get("items") or () if it["tokens"]]}
         entries.append(e)
-        cores.add(e["core"])
+        by_core.setdefault(e["core"], []).append(e)
         for cl in (r.get("clause"), r.get("segment")):
             if cl:
-                clauses.add(_core(cl))
+                by_clause.setdefault(_core(cl), []).append((e, _note(cl), _note_text(cl)))
         if r.get("section_key"):
             g = groups.setdefault(r["section_key"], {"fragment": "", "core": "", "tokens": set(), "facts": set(),
                                                      "kinds": set(ALL_KINDS) | {"section", "label"}, "parts": []})
@@ -798,12 +902,98 @@ def build_index(rulings):
             g["parts"].append(r["fragment"])
     for g in groups.values():
         g["fragment"] = " · ".join(g["parts"])
-    cores.discard("")
-    clauses.discard("")
-    return {"entries": entries + list(groups.values()), "cores": cores, "clauses": clauses}
+    by_core.pop("", None)
+    by_clause.pop("", None)
+    return {"entries": entries + list(groups.values()), "cores": set(by_core), "clauses": set(by_clause),
+            "by_core": by_core, "by_clause": by_clause}
 
 
-def kept_as_ruling(r, idx, contrast=None):
+def _near(a, b):
+    """Two distinctive words one typo apart -- a letter inserted, dropped or changed, or two neighbours swapped --
+    both 5+ characters and neither carrying a digit: 'wristbnads' is 'wristbands', a date never another date
+    (review 4, F2)."""
+    if a == b:
+        return True
+    if len(a) < 5 or len(b) < 5 or abs(len(a) - len(b)) > 1 or any(ch.isdigit() for ch in a + b):
+        return False
+    if len(a) == len(b):
+        diff = [i for i in range(len(a)) if a[i] != b[i]]
+        return len(diff) == 1 or (len(diff) == 2 and diff[1] == diff[0] + 1
+                                  and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]])
+    s, t = (a, b) if len(a) < len(b) else (b, a)
+    i = 0
+    while i < len(s) and s[i] == t[i]:
+        i += 1
+    return s[i:] == t[i + 1:]
+
+
+def _lead(item):
+    """A list item's first distinctive word in reading order (its tokens are a set)."""
+    for w in normalize(item["text"]).split():
+        w = w.strip(_TOKEN_STRIP)
+        if w in item["tokens"]:
+            return w
+    return ""
+
+
+_ALT_SEP_RE = re.compile(r",|\s(?:or|and|nor|&)\s")
+
+
+def _alternatives(text):
+    """The options a list item joins, each as its distinctive words -- 'instagram, tiktok and facebook ads' names
+    three -- from the item's normalize()d text OUTSIDE parentheses, split at ',', ' or ', ' and ', ' nor ' and ' & '
+    (a parenthetical is a note: '"next business day" (#230, and ...)' names one). [] for an item naming one."""
+    chunks = [ruling_tokens(x) for x in _ALT_SEP_RE.split(re.sub(r"\([^()]*\)", " ", text))]
+    chunks = [x for x in chunks if x]
+    return chunks if len(chunks) >= 2 else []
+
+
+def _carried(it, c, items, lenient):
+    """Whether current ruling `c` still carries list item `it` of a removed ruling whose items are `items`:
+    ITEM_SHARE of its words anywhere in `c` (review FK-HIST#7) -- main's rule, and the whole rule unless `lenient`.
+    `lenient` is the exact core/clause path, the item check C11 added where main had none. There the share counts
+    only with the item's own note's facts in `c`, and the item is also carried -- in ONE item of `c` that shares one
+    of its own words exactly, whose trailing note is its note unchanged or only re-dated (_redated: never a limit, a
+    number or a price moved, review 4, L4), is not another old item's whole (a word a letter apart names another
+    option: 'a night mode' never vouches for 'a light mode', review 4, R4) and keeps a word of every alternative `it`
+    joins (_alternatives; 'Instagram ads' is not 'Instagram, TikTok and Facebook ads' shortened, review 4, R3) --
+    ITEM_SHARE of them a typo apart (a typo fixed), or a SHORTENING: that item's words all its own (a typo apart)
+    and its lead word or more than half its words among them (review 4, F2). A new item holding a minority of a
+    dropped one's words and not its lead is another option: the drop stands. Off the exact path those branches
+    carried SHORT lists' items that main flags (review 4, L2, L6)."""
+    toks = it["tokens"]
+    share = len(toks & c["tokens"]) >= ITEM_SHARE * len(toks)
+    if not lenient:
+        return share
+    note = it.get("note", frozenset())
+    if share and note <= c["tokens"]:
+        return True
+    toks = it.get("own", toks)          # its own words: its trailing note is compared as a note
+    others = [o.get("own", o["tokens"]) for o in items if o is not it and o["tokens"]]
+    alts = it.get("alts") or ()
+    lead = None
+    for x in c.get("items") or ():
+        s = x["tokens"]
+        if not toks & s:
+            continue                    # not one word in common: nobody's copy of this item
+        if _conflict(note, x["note"]) and not _redated(note, x["note"], it.get("note_text", ""), x["note_text"]):
+            continue                    # its note's number, price or limit moved: another item (L4)
+        if any(s <= o for o in others):
+            continue                    # another old item's words: that item's copy, not this one's (R4)
+        if any(not any(t in s or any(_near(t, u) for u in s) for t in a) for a in alts):
+            continue                    # an alternative it joined is gone: the item narrowed (R3)
+        if sum(1 for t in toks if t in s or any(_near(t, u) for u in s)) >= ITEM_SHARE * len(toks):
+            return True                 # a typo fixed
+        if not all(u in toks or any(_near(u, t) for t in toks) for u in s):
+            continue                    # words of its own: another option
+        if lead is None:
+            lead = _lead(it)
+        if lead in s or 2 * len(s) > len(toks):
+            return True                 # shortened, keeping its lead or most of it
+    return False
+
+
+def kept_as_ruling(r, idx, contrast=None, old_notes=None):
     """(kept, missing items): is ruling `r` -- from a HEAD copy or an old commit -- still a ruling among
     the current ones (`idx`, build_index)? Kept, in this order, when:
       its core (words in order, markup folded away) is a current ruling's core (review FL-CUR#0);
@@ -823,16 +1013,41 @@ def kept_as_ruling(r, idx, contrast=None):
         sibling had all of them) is kept only by its core or clause (review 3, K1) -- and, for a list,
         60% of each item's words (review FK-HIST#7).
     `missing` names the items the closest such match lacks. Two rulings in DIFFERENT files that differ
-    by one subject word still read as one: no similarity threshold tells that from a rewording."""
+    by one subject word still read as one: no similarity threshold tells that from a rewording.
+    The item check binds the core and clause paths too: a long list's core and clause stop at the window
+    (WINDOW_MAX), its items do not, so a dropped tail item leaves both unchanged (review 3, C11) -- an item a
+    typo apart or shortened is still carried (_carried; review 4, F2). And a core or clause folds a trailing
+    note away, so one whose note carries a DIFFERENT date is a different ruling and never vouches (review 3,
+    C14) -- when it already stood beside this one (`old_notes`: the notes its old copy carried each core under,
+    _old_notes; _stood_beside, keyed by the core or clause the match was made on, review 4, R1). The same ruling
+    re-dated, reconfirmed or corrected vouches (review 4, F1) -- when only its note's STAMP dates changed, never a
+    number, a price, a version or a limit date (_redated; review 4, R2)."""
     frag = r["fragment"]
     if not frag:
         return True, []
     core = _core(frag)
-    if core in idx["cores"]:
-        return True, []
+    items = r.get("items") or []
+
+    def lacks(c, lenient):
+        """The items of `r` that current ruling `c` does not carry (_carried; `lenient` on the exact path)."""
+        return [it for it in items if it["tokens"] and not _carried(it, c, items, lenient)]
+    note, ntext = _note(frag), _note_text(frag)
+    exact = [(c, c["note"], c["note_text"], note, ntext, "core", core) for c in idx["by_core"].get(core, ())]
     for cl in (r.get("clause") or "", r.get("segment") or ""):
         if cl and len(_subject(cl)) >= CLAUSE_MIN_TOKENS and _core(cl) in idx["clauses"]:
+            exact += [(c, its, itext, _note(cl), _note_text(cl), "clause", _core(cl))
+                      for c, its, itext in idx["by_clause"][_core(cl)]]
+    best, here = None, (r.get("path") or "").casefold()
+    for c, its, itext, mine, mtext, which, key in exact:
+        if _conflict(mine, its) and (not _redated(mine, its, mtext, itext)
+                                     or _stood_beside(c, its, here, old_notes, which, key)):
+            continue                    # another ruling: its note's number or limit differs, or it stood beside
+                                        # this one dated otherwise -- not this one re-dated (C14; R1, R2)
+        missing = lacks(c, True)
+        if not missing:
             return True, []
+        if best is None or len(missing) < len(best):
+            best = missing
     words = frag.split()
     sample = _grams(words)
     mine = _toks(r)
@@ -840,8 +1055,7 @@ def kept_as_ruling(r, idx, contrast=None):
     body = re.sub(r"^\d{1,4}[.)]\s+", "", frag).strip().rstrip(" .;:!?,")
     in_section, here = "section" in r.get("kinds", ()), (r.get("path") or "").casefold()
     want = set(r.get("kinds", ())) - {"section", "label"}
-    items = r.get("items") or []
-    con, best = None, None
+    con = None
     for c in idx["entries"]:
         if not facts <= c["facts"]:
             continue
@@ -860,8 +1074,7 @@ def kept_as_ruling(r, idx, contrast=None):
         if not con or len(con & c["tokens"]) < TOKEN_SHARE * len(con):
             continue                    # the words that made it THIS ruling are not in that one -- or it
                                         # has none (a sibling had every word): only its core keeps it
-        missing = [it for it in items
-                   if it["tokens"] and len(it["tokens"] & c["tokens"]) < ITEM_SHARE * len(it["tokens"])]
+        missing = lacks(c, False)
         if not missing:
             return True, []
         if best is None or len(missing) < len(best):
@@ -918,10 +1131,13 @@ def text_survives(r, norm, cored=""):
     """True when ruling `r`'s words are still in `norm` (the normalize()d text of a file or the corpus),
     whether or not they still read as a ruling there: its fragment as whole words, its core as a
     whole-word run of `cored` (_core_text of the same text; a string or a callable), its self-contained
-    clause, or half its word 4-grams with a gram through each marker."""
+    clause, or half its word 4-grams with a gram through each marker -- never without the facts of its trailing
+    note: a sibling dated differently is not its text (review 3, C14)."""
     frag = r["fragment"]
     if not frag or _run_in(norm, frag):
         return True
+    if any(f not in norm for f in _note(frag)):
+        return False
     core = _core(frag)
     if core:
         ct = cored() if callable(cored) else cored
@@ -957,6 +1173,18 @@ def _contrast_fn(path, text, cache, key):
     return of
 
 
+def _notes_fn(path, text, cache, key, limit=SUMMARY_MAX):
+    """_contrast_fn's twin for the note: of() -> the notes ONE old copy carried each core under (_old_notes, for
+    _stood_beside; review 4, F1, R1). The copy is scanned only when a conflicting note needs them (once per copy
+    per run)."""
+    def of():
+        k = ("notes", key)
+        if k not in cache:
+            cache[k] = _old_notes(rulings_in_text(path, text, limit=limit))
+        return cache[k]
+    return of
+
+
 # ---------------------------------------------------------------------------------------
 # The project
 # ---------------------------------------------------------------------------------------
@@ -970,9 +1198,9 @@ def _corpus_module():
     return mod
 
 
-def _git(root, args, timeout=60):
+def _git(root, args, timeout=60, stdin=None):
     try:
-        r = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=false"] + list(args),
+        r = subprocess.run(["git", "-C", str(root), "-c", "core.quotepath=false"] + list(args), input=stdin,
                            capture_output=True, encoding="utf-8", errors="replace", timeout=timeout)
     except (OSError, subprocess.SubprocessError) as e:
         return None, str(e)
@@ -1000,11 +1228,17 @@ def _read(path):
 
 
 def _safe_rel(p):
-    """A repo-relative POSIX path, or None when it is empty, absolute or climbs out with '..'."""
+    """A repo-relative POSIX path, or None when it is empty, absolute or climbs out with '..'. Spelled once,
+    where a config path is read: backslashes are slashes and a '.' or empty segment is dropped, so
+    './docs/spec.md' is docs/spec.md -- the file the briefing reads, and the name history and the HEAD
+    compare know it by (review 3, C13)."""
     s = str(p or "").replace("\\", "/").strip()
-    if not s or s.startswith("/") or re.match(r"^[A-Za-z]:", s) or ".." in s.split("/"):
+    if not s or s.startswith("/") or re.match(r"^[A-Za-z]:", s):
         return None
-    return s
+    parts = [x for x in s.split("/") if x not in ("", ".")]
+    if not parts or ".." in parts:
+        return None
+    return "/".join(parts)
 
 
 def parse_rulings_config(text, name=RULINGS_CONFIG):
@@ -1144,6 +1378,13 @@ class Project(object):
         self._corpus = self._current = self._index = self._acks = self._archive = self._cored_corpus = None
         self._norm, self._scanned, self._cored = {}, {}, {}
         self.ack_notes = []     # acknowledgements that withdraw nothing, and why (printed as state lines)
+        # A standing file git IGNORES is read here but has no history: no removal from it can be seen and an
+        # ack in it can never be dated, so it is outside git like a submodule's files (review 3, C12).
+        self.ignored = set()
+        if self.git:
+            rels = [self.rel(p) for p in self.standing if self.in_repo(p)]
+            self.ignored = _ignored(self.root, [r for r in rels if not any(
+                r.casefold() == s or r.casefold().startswith(s + "/") for s in self.submodules)])
 
     def rel(self, path):
         k = str(path)
@@ -1170,10 +1411,13 @@ class Project(object):
             return False
 
     def in_git(self, path):
-        """In THIS repository's history: inside the root and under no submodule (review FK-HIST#10)."""
+        """In THIS repository's history: inside the root, under no submodule (review FK-HIST#10) and not a file
+        git ignores (review 3, C12)."""
         if not (self.git and self.in_repo(path)):
             return False
         rel = self.rel(path).casefold()
+        if rel in self.ignored:
+            return False
         return not any(rel == s or rel.startswith(s + "/") for s in self.submodules)
 
     def normalized(self, path):
@@ -1267,8 +1511,8 @@ class Project(object):
                                                   'nothing this run' % (_cut(a["text"], 0, 60), a["rel"], a["line"]))
         return self._acks
 
-    def verdict(self, r, contrast=None):
-        """What became of a ruling that a HEAD copy or an old commit carried (`contrast`: see
+    def verdict(self, r, contrast=None, old_notes=None):
+        """What became of a ruling that a HEAD copy or an old commit carried (`contrast`, `old_notes`: see
         kept_as_ruling):
         ("kept", "")        still a ruling in a source the briefing reads;
         ("pruned", items)   still a ruling, but list items it killed are in no ruling now;
@@ -1278,7 +1522,7 @@ class Project(object):
                             standing (an archive, a note);
         ("lost", "")        nowhere.
         Acknowledgements are applied afterwards, to the whole run's removals at once (apply_acks)."""
-        kept, missing = kept_as_ruling(r, self.index(), contrast)
+        kept, missing = kept_as_ruling(r, self.index(), contrast, old_notes)
         if kept:
             return "kept", ""
         if missing:
@@ -1303,8 +1547,13 @@ class Project(object):
 
     def outside(self):
         """Standing files outside this repository's history (the home memory index, a submodule's
-        files): their rulings print, but no history here can show one being removed."""
+        files, a file git ignores): their rulings print, but no history here can show one being removed."""
         return [p for p in self.standing if not self.in_git(p)]
+
+    def outside_names(self):
+        """outside(), as printed: an ignored file says so (it IS in the working tree, unlike the others)."""
+        return ", ".join(self.rel(p) + (" [gitignored]" if self.rel(p).casefold() in self.ignored else "")
+                         for p in self.outside())
 
     def source_names(self):
         names = [self.rel(p) for p in self.standing]
@@ -1493,6 +1742,22 @@ def standing(proj):
     return uniq
 
 
+def _ignored(root, rels):
+    """The casefolded paths among `rels` (repo-relative, none inside a submodule) that git ignores, from ONE
+    `git check-ignore --stdin`. A tracked file is never among them, whatever .gitignore says (check-ignore
+    skips the index's files). A failure gives none: such files read as in git, as before."""
+    if not rels:
+        return set()
+    try:
+        r = subprocess.run(["git", "-C", str(root), "check-ignore", "-z", "--stdin"],
+                           input=("\0".join(rels) + "\0").encode("utf-8"), capture_output=True, timeout=60)
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if r.returncode not in (0, 1):      # 1: nothing ignored
+        return set()
+    return {x.casefold() for x in r.stdout.decode("utf-8", "replace").split("\0") if x}
+
+
 def _blobs(root, names):
     """{name: text or None} for object names -- blob ids or '<rev>:<path>' -- read through ONE
     `git cat-file --batch` (a spawn per copy costs seconds on a 30-commit window), decoded by _decode
@@ -1624,9 +1889,10 @@ def source_kind(rel, cfg):
     return ""
 
 
-def _history_pathspec(proj):
+def _history_pathspec(proj, snaps=()):
     """Every name and location a source can have (so a deleted, renamed-away or retitled source is in
-    the log), both config files, and every path HEAD's or the working tree's configs declare. Case-
+    the log), both config files, and every path HEAD's or the working tree's configs declare -- plus
+    every path the config snapshots `snaps` declare (removed() passes the window's own). Case-
     insensitive: a directory listing can spell a path differently from the index."""
     lv, mem, arch = _dirs(proj.dc)
     pats = []
@@ -1639,7 +1905,7 @@ def _history_pathspec(proj):
         pats += [d + "roadmap*.md", d + "docket*.md", d + "handoff*.md"]
     spec = [":(glob,icase)" + p for p in pats] + [":(literal,icase)" + n for n in CONFIG_NAMES]
     lits, globs = set(), set()
-    for snap in (proj.head_config(), proj.work_config):
+    for snap in (proj.head_config(), proj.work_config) + tuple(snaps):
         lits |= snap["declared"]
         globs |= set(snap["paths"])
     return spec + [":(literal,icase)" + p for p in sorted(lits)] + [":(glob,icase)" + p for p in sorted(globs)]
@@ -1729,8 +1995,8 @@ def _removed_between(path, before, after, kind, limit=SUMMARY_MAX):
     def stands(x):
         return kind != "archive" or x["standing_section"]
     if structural:
-        keep = {_core(x["fragment"]) for x in rulings_in_text(path, after, limit=limit) if stands(x)}
-        return [x for x in rulings_in_text(path, before, limit=limit) if stands(x) and _core(x["fragment"]) not in keep]
+        keep = {_copy_ident(x) for x in rulings_in_text(path, after, limit=limit) if stands(x)}
+        return [x for x in rulings_in_text(path, before, limit=limit) if stands(x) and _copy_ident(x) not in keep]
     return [x for x in rulings_in_text(path, before, limit=limit, only=touched) if stands(x)]
 
 
@@ -1799,18 +2065,43 @@ def removed(proj, count, limit=SUMMARY_MAX):
     read is counted and reported, never skipped silently."""
     if not proj.git:
         return [], [], 0, ""
-    log, err = _git(proj.root, _LOG_ARGS + ["-n", str(count), "--"] + _history_pathspec(proj), timeout=120)
-    if log is None:
-        return [], ["git log: %s" % err], 0, ""
-    recs = _raw_records(log)
-    shas = list(dict.fromkeys(r[0] for r in recs))
+    # The window is read until the configs inside it name no path the pathspec lacks: a declared source deleted
+    # in one commit and undeclared in the next -- the undeclaring the 'matched nothing' error invites -- is in
+    # no config today, but its deletion's first parent still declares it (review 3, C10). The pathspec GROWS,
+    # never is replaced: a path it gains pulls in that file's newer commits, which can push the config naming it
+    # out of the window, so a replaced pathspec flipped back and forth and never settled (review 4, F4). Those
+    # newer commits can also push today's sources' own last `count` commits out, and a removal with them: those
+    # are always read, joined to the grown window newest first (review 4, R5).
+    spec, got, errs, window = _history_pathspec(proj), {}, [], None
+    for _n in range(PATHSPEC_READS):
+        log, err = _git(proj.root, _LOG_ARGS + ["-n", str(count), "--"] + spec, timeout=120)
+        if log is None:
+            return [], ["git log: %s" % err], 0, ""
+        recs = _raw_records(log)
+        shas = list(dict.fromkeys(r[0] for r in recs))
+        if window is None:
+            window = shas               # the first read's pathspec is today's: its commits are always read (R5)
+        elif any(s not in shas for s in window):
+            log, err = _git(proj.root, _LOG_ARGS + ["--no-walk=sorted", "--stdin", "--"] + spec, timeout=120,
+                            stdin="\n".join(dict.fromkeys(shas + window)) + "\n")
+            if log is None:
+                return [], ["git log: %s" % err], 0, ""
+            recs = _raw_records(log)
+            shas = list(dict.fromkeys(r[0] for r in recs))
+        names = ["%s^:%s" % (s, n) for s in shas for n in CONFIG_NAMES]
+        oids = [o for _s, _d, ents in recs for old, new, _st, _p in ents for o in (old, new) if not _zero(o)]
+        got.update(_blobs(proj.root, [n for n in dict.fromkeys(names + oids) if n not in got]))
+        snaps = {s: _snapshot(proj.dc, got.get("%s^:%s" % (s, CONFIG_NAMES[0])), got.get("%s^:%s" % (s, CONFIG_NAMES[1])))
+                 for s in shas}
+        wider = _history_pathspec(proj, list(snaps.values()))
+        grown = spec + [p for p in wider if p not in spec]
+        if grown == spec:
+            break
+        spec = grown
+    else:
+        errs.append("the window's own configs still named new source paths after %d reads of git log" % PATHSPEC_READS)
     shorts = _short(proj.root, shas)
     dates = [r[1] for r in recs if r[1]]
-    names = ["%s^:%s" % (s, n) for s in shas for n in CONFIG_NAMES]
-    oids = [o for _s, _d, ents in recs for old, new, _st, _p in ents for o in (old, new) if not _zero(o)]
-    got = _blobs(proj.root, names + oids)
-    snaps = {s: _snapshot(proj.dc, got.get("%s^:%s" % (s, CONFIG_NAMES[0])), got.get("%s^:%s" % (s, CONFIG_NAMES[1])))
-             for s in shas}
     # a merge is read once per parent (review 3, F3; critic C3, C4 -- see below)
     sides = {}
     for gi, (sha, _d, ents) in enumerate(recs):
@@ -1835,31 +2126,34 @@ def removed(proj, count, limit=SUMMARY_MAX):
                 unread += 1
                 continue
             of = _contrast_fn(path, before, ccache, old)
+            nof = _notes_fn(path, before, ccache, old, limit)
             for r in _removed_between(path, before, after, kind, limit):
                 r["_merge_side"] = bool(others) and not _in_every(r, path, others, got)
                 r["_contrast"] = (lambda r=r, of=of: of(r))
+                r["_old_notes"] = nof
                 cands.append((short, cdate, r))
         if config_edit:
             cands += [(short, cdate, r) for r in _dropped_by_config(proj, sha, snaps[sha], limit)]
     # a merge's removal of a ruling another parent no longer had belongs to the commit that removed it there
     # -- when this window reads that commit; otherwise no one else owns it and the merge does (critic C3, C4)
-    owned = {_core(r["fragment"]) for _s, _d, r in cands if not r.get("_merge_side")}
+    owned = {_ident(r) for _s, _d, r in cands if not r.get("_merge_side")}
     out, seen = [], set()
     for short, cdate, r in cands:
-        key = _core(r["fragment"])
+        key = _ident(r)
         if r.pop("_merge_side", False) and key in owned:
             continue
         if key in seen:
             continue
         seen.add(key)
-        v, where = proj.verdict(r, r.pop("_contrast", None))
+        v, where = proj.verdict(r, r.pop("_contrast", None), r.pop("_old_notes", None))
         if v == "kept":
             continue
         if r.get("left") and v == "lost" and (proj.root / r["left"]).is_file():
             v, where = "left", r["left"]
         r.update(sha=short, commit_date=cdate, verdict=v, where=where)
         out.append(r)
-    errs = ["%d changed cop%s could not be read (git cat-file)" % (unread, "y" if unread == 1 else "ies")] if unread else []
+    if unread:
+        errs.append("%d changed cop%s could not be read (git cat-file)" % (unread, "y" if unread == 1 else "ies"))
     return out, errs, len(shas), (min(dates) if dates else "")
 
 
@@ -1983,7 +2277,7 @@ def briefing(proj, cap, history, show_all, as_json):
     out_git = proj.outside()
     if out_git and rules:
         print("(removal not checked for %d standing file(s) outside git: %s)"
-              % (len(out_git), ", ".join(proj.rel(p) for p in out_git)))
+              % (len(out_git), proj.outside_names()))
     print(ROUTE)
 
 
@@ -2002,8 +2296,9 @@ def _head_sources(proj):
     changed = {p.casefold() for p in diff.split("\0") if p}
     # a HEAD standing file now read only as an archive has left too: its rulings outside a standing
     # section no longer count (review 3, K2)
-    now_standing = {proj.rel(p).casefold() for p in proj.standing if proj.in_git(p)}
-    now = now_standing | {proj.rel(p).casefold() for p in proj.archives if proj.in_git(p)}
+    # (every file the briefing reads now, a gitignored one included: it is still read, so it has not left)
+    now_standing = {proj.rel(p).casefold() for p in proj.standing if proj.in_repo(p)}
+    now = now_standing | {proj.rel(p).casefold() for p in proj.archives if proj.in_repo(p)}
     cfg = proj.head_config()
     out = []
     for rec in tree.split("\0"):
@@ -2049,13 +2344,14 @@ def lost(proj, history=DEFAULT_HISTORY):
         for x in rs:
             for t in _toks(x):
                 counts[t] = counts.get(t, 0) + 1
+        olds = _old_notes(rs)           # the notes this copy's rulings carry each core under (F1, R1)
         for r in rs:
             checked += 1
-            key = _core(r["fragment"])
+            key = _ident(r)
             if key in seen:
                 continue
             seen.add(key)
-            v, where = proj.verdict(r, {t for t in _toks(r) if counts.get(t, 0) <= 1})
+            v, where = proj.verdict(r, {t for t in _toks(r) if counts.get(t, 0) <= 1}, olds)
             if v == "kept":
                 continue
             if left and v == "lost" and (proj.root / rel).is_file():
@@ -2073,7 +2369,7 @@ def lost(proj, history=DEFAULT_HISTORY):
     for e in rerrs:
         notes.append("RULING LOSS: could not check the recent commits -- %s" % e[:200])
     for r in rem:
-        key = _core(r["fragment"])
+        key = _ident(r)
         if key not in seen:
             seen.add(key)
             found.append(r)
@@ -2102,7 +2398,7 @@ def lost(proj, history=DEFAULT_HISTORY):
     out_git = proj.outside()
     if out_git:
         scope += "; not checked: %d standing file(s) outside git (%s)" % (
-            len(out_git), ", ".join(proj.rel(p) for p in out_git))
+            len(out_git), proj.outside_names())
     if lines or notes or proj.errors:
         print("(%s)" % scope)
     else:

@@ -163,7 +163,7 @@ finished in 10.5 minutes, but the build it had started in the background kept th
 for 17 more, and its report promised to apply the build "when it returns", so the owner waited for it.
 A build started at the wrap is one the owner waits for, however it runs.
 
-**One build per session, started early**, so it lands while the owner is still working:
+**A session's build starts early** (one per session), so it lands while the owner is still working:
 - **At session start:** when the briefing's `UPGRADES` line shows a non-empty `UPGRADE-QUEUE.md`,
   start the **oldest** item right after the briefing, in the background, and go on with the owner's
   request.

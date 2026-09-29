@@ -1,9 +1,9 @@
 ---
 name: reflect-upgrades
-description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per wrap. Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
+description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-09-28.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-09-29.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -11,12 +11,13 @@ description: Use after substantial work or a real finding to decide where each l
 
 The question worth asking by hand every session: *did we learn anything that should change our
 tools?* This skill answers it **by changing them**, not by writing a row about them. It runs three
-ways: `update-context` invokes it at every wrap (the only automatic path, and the only one that
-builds), the bundled `upgrade-reflection-nudge` hook suggests it mid-session after substantial work
-(see *Companion hook*), and the user can invoke it by name.
+ways: `update-context` invokes it at every wrap (the only automatic path; a wrap never builds), the
+bundled `upgrade-reflection-nudge` hook suggests it mid-session after substantial work (see *Companion
+hook*), and the user can invoke it by name. A session's one build starts early -- after its briefing,
+or at a mid-session firing (Step 5).
 
 **Every surviving lesson ends in exactly one outcome:** `reused` (an existing tool already does it),
-`built` (this wrap's one build), `queued` (this project's `UPGRADE-QUEUE.md`), `filed-central` (a
+`built` (this session's one build), `queued` (this project's `UPGRADE-QUEUE.md`), `filed-central` (a
 committed inbox lesson, routes a-d below), `noted` (a project memory note — owner rulings and
 preferences), `strengthened-existing` / `dedup-existing` (it is already somewhere), or `zero`.
 "Surfaced in chat" is not an outcome: chat scrolls away.
@@ -149,18 +150,25 @@ target: <the file or tool that would change>
 Show the receipt (path + short sha): "filed" means a quotable commit. The next central session
 processes the inbox under these same rules — builds it, queues it, or hands it back.
 
-**Project lessons that do not fit this wrap's build go to the project's `UPGRADE-QUEUE.md`** at its
+**Project lessons that are not this session's build go to the project's `UPGRADE-QUEUE.md`** at its
 root: one `## YYYY-MM-DD · <title>` heading per item (oldest first), then `- **Lesson:**`,
 `- **Target:**`, `- **RED:**`, `- **Source:**` bullets. **Cap 5.** A full queue shows as one briefing
 line; it is never a question for the owner.
 
-## Step 5 — Build one (wrap layer only)
+## Step 5 — Build one per session, early (never at a wrap)
 
-`update-context` runs this step at every wrap; nudge and manual firings stop at Step 4 (queue or file)
-and the next wrap builds. **Exactly one build per wrap:** the best new lesson on rungs 1-5 that fits
-one wrap, else the **oldest** queued item, else nothing. **A departure (`device-handoff`) starts
-none:** it pushes before a build could land, and a build that lands after the push is stranded on
-this machine or built a second time on the other one. Its pick stays queued for the next wrap.
+**A wrap never builds, and neither does a departure.** They queue their lesson (Step 4) and end with
+nothing left running. Measured 2026-09-29 (owner: *"30 MINUTE UPDATE CONTEXT??"*): the wrap itself
+finished in 10.5 minutes, but the build it had started in the background kept the session looking busy
+for 17 more, and its report promised to apply the build "when it returns", so the owner waited for it.
+A build started at the wrap is one the owner waits for, however it runs.
+
+**One build per session, started early**, so it lands while the owner is still working:
+- **At session start:** when the briefing's `UPGRADES` line shows a non-empty `UPGRADE-QUEUE.md`,
+  start the **oldest** item right after the briefing, in the background, and go on with the owner's
+  request.
+- **Mid-session:** a nudge or manual firing starts this session's build when none has started yet --
+  its new lesson on rungs 1-5 if one fits one session, else the oldest queued item.
 
 1. **Look again before building** — if the build edits a hook or script, query the capability index
    for other copies of it. Shared logic lives once; project differences live in per-project config;
@@ -172,24 +180,24 @@ this machine or built a second time on the other one. Its pick stays queued for 
 3. **Hand it to a fresh small-context helper in the background** (the Agent tool with
    `run_in_background: true` and worktree isolation, an agent type that has a shell) that builds the
    check in its own worktree **outside the project root** and returns the diff plus RED and GREEN
-   evidence. The wrap's own context is too large to build in.
-4. **Never wait for it.** The wrap runs its other steps, commits and reports without the build, and
-   the report says it is still running. (Measured: builds took 4 to 18 minutes, 44% of all wrap
-   time once every wrap built one.) When the helper returns — during the wrap or after
-   the report — **apply it on the main thread, run the test once, run the propagation the wrap would
+   evidence. The session's own context is too large to build in.
+4. **Never wait for it.** Go on with the owner's work. (Measured: builds take 4 to 18 minutes.) When
+   the helper returns, **apply it on the main thread, run the test once, run the propagation a wrap would
    run for those files** (for a skill, `update-context`'s Step 7 probe), **and commit** with a
    trailer, removing its queue entry in the same commit:
    `git add <paths>` then `git commit -m "<subject>" -m "Upgrade: <one plain sentence>" -- <paths>`.
    The trailer is the record: a ledger can derive *built* from it, in the repo where it landed. If the
-   session ends first, the entry stays queued and the next wrap builds it.
-5. **Too big for one wrap** → queue it (cap 5).
+   session ends first, the entry stays queued and the next session's start builds it. **A build still
+   running at a wrap is not waited for:** the wrap reports "Done — safe to close." and says closing loses
+   nothing (the lesson stays queued); a departure stops it before the push.
+5. **Too big for one session** → queue it (cap 5).
 6. **Projects with live external writes or regulated personal data:** the build may only add tests
    that import no write client, and must not touch the project's sensitive-data/secret guard, its git
    hooks, its harness settings, its config/override files or its live runners (the project's own
    `CLAUDE.md` names them). The RED proof uses an in-memory mutant or a synthetic fixture with the live
    gate forced off. The full suite must be green and the project's own reviewer must pass before the
    commit.
-7. **Central lessons** are built by the next central session's wrap, oldest first, on a branch in a
+7. **Central lessons** are built by a central session, oldest first and early as above, on a branch in a
    central worktree; `main` is fast-forwarded only when the shared checkout is clean and no other
    central session is live.
 
@@ -237,8 +245,9 @@ wrap diff small"*; *"context is high, wrap fast"*. Catching an unrecorded lesson
 means going back and recording it before finishing — the user should never have to say "file it".
 
 ## Do NOT
-- Build more than one upgrade per wrap, build on the main thread, or build from a nudge or manual firing.
-- Hold the wrap open waiting for its build, or start a build at a departure.
+- Build more than one upgrade per session, build on the main thread, or start a build at a wrap or a
+  departure.
+- Hold a wrap open for a build, or report a wrap as anything but done because a build is still running.
 - Edit a live-write project's forbidden files (Step 5 item 6).
 - Manufacture lessons to seem productive — Step 3 is the gate.
 - Emit an unlabeled row, or re-propose something Step 2 found.
@@ -253,11 +262,12 @@ write, or a `git commit`), it injects a one-line non-blocking nudge to run this 
 default 3; `UPGRADE_NUDGE_DISABLE=1` to silence). Pure stdlib, ASCII-only, fails open.
 
 ## Related
-- `update-context` — invokes this at every wrap and runs Step 5; its shipped / learned / decided signal
-  feeds Step 1.
+- `update-context` — invokes this at every wrap (Steps 1-4 and 6; a wrap never runs Step 5); its
+  shipped / learned / decided signal feeds Step 1.
 - `hooks/upgrade-reflection-nudge.py` — the once-per-session `UserPromptSubmit` nudge (above).
 - `analyze-context` — prints each project's pending inbox filings, upgrade queue and recent `Upgrade:`
-  trailers in every briefing, so nothing here waits on anyone remembering it.
+  trailers in every briefing, so nothing here waits on anyone remembering it; a non-empty queue there
+  is where a session's build starts (Step 5).
 - `SELF-AUDIT.md` (central upgrades repo root) — the own-miss stream (Step 1).
 - `/opportunity-scan` (ships in this repo's `project-scans/`) — the generative counterpart:
   capabilities a project should have but has never been hurt for lacking.

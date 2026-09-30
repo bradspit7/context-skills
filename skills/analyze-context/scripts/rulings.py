@@ -109,7 +109,10 @@ OUTPUT
     duplicate merged into it; a removal adds where its text went, the items a list lost, or the ack
     that could not clear it. Each summary is at most 180 characters (160 in a THRESHOLD), cut
     around the marker; a docket line can carry personal data, so nothing is ever printed whole and
-    nothing is written to a file. These are STATE lines: nothing here starts with FINDING. A failure
+    nothing is written to a file. A summary never stops inside the owner's quotation or just before a
+    sentence that limits the ruling's scope ('This is only for ...', 'Except ...'): it runs on over
+    them when that fits, and a cut that cannot avoid them ends '... [ruling continues -- read the
+    row]', inside the limit. These are STATE lines: nothing here starts with FINDING. A failure
     prints 'could not check', never silence.
 
 EXIT STATUS
@@ -743,6 +746,112 @@ def _cells(s):
     return re.sub(r"\s*\|\s*$", "", CELL_RE.sub(" · ", s))
 
 
+# A summary never stops inside the owner's quotation, or just before the sentence that limits the ruling's
+# scope: cut there, a scoped ruling reads as a general permission. Measured: a ruling's verbatim quote was cut
+# after its first sentence, the second -- 'This is only for severe alcohol dependence ...' -- never printed, and
+# a session applied the ruling to stimulant pages (UPGRADE-QUEUE 2026-09-29). The summary is extended over the
+# quote and the scope sentence when that fits the limit; when it cannot, the cut says so in line, inside the
+# limit (a docket line can carry personal data: nothing is ever printed whole).
+CONTINUES = "... [ruling continues -- read the row]"
+SCOPE_RE = re.compile(r"(?:this\s+is\s+only|only\s+(?:for|when)|except|not\s+for|scoped\s+to|applies\s+only"
+                      r"|limited\s+to)\b", re.I)
+_SCOPE_LEAD = re.compile(r"\s*[\"\u201c\u2018'(\[*_>]*\s*")
+_SENTENCE_END = re.compile(r"[.!?;][*_)\]\"'\u201d\u2019]*$")
+_DEAD_QUOTES = re.compile(r"<!--.*?-->|~~.*?~~")
+EXTEND_STEPS = 8       # quotes and scope sentences an extension may cross before it gives up (and marks the cut)
+
+
+def _live_quotes(line):
+    """`line` with every quote mark inside a code span, an HTML comment or strikethrough made neutral, same length:
+    those are text (_clean drops the comment and the struck text), so only a quotation's own marks are counted."""
+    chars = list(line)
+    for a, b in _code_spans(line) + [(m.start(), m.end()) for m in _DEAD_QUOTES.finditer(line)]:
+        for k in range(a, b):
+            if chars[k] in "\"\u201c\u201d":
+                chars[k] = "\x00"
+    return "".join(chars)
+
+
+def _quoted(s, state=(False, False), end=None, start=0, closes=False):
+    """(straight, curly): the quotation open after reading s[start:end] from `state`, by _mask's rules -- an inch
+    mark (a digit before a straight quote) opens nothing, and a curly open closes on either mark (review 3, F11).
+    With `closes`, the index just after the mark that closes the open quotation instead (-1: it never closes)."""
+    quote, curly = state
+    for i in range(start, len(s) if end is None else end):
+        c = s[i]
+        if c == '"':
+            if not quote and i > 0 and s[i - 1].isdigit():
+                continue
+            if curly:
+                curly = False
+            else:
+                quote = not quote
+        elif c == "\u201c":
+            curly = True
+        elif c == "\u201d":
+            curly = quote = False
+        if closes and not (quote or curly):
+            return i + 1
+    return -1 if closes else (quote, curly)
+
+
+def _scope_next(text, p):
+    """Whether text[p] ends a sentence and the next one limits the ruling before it ('This is only for ...',
+    'Except ...')."""
+    return (p < len(text) and text[p].isspace() and bool(_SENTENCE_END.search(text, max(0, p - 12), p))
+            and bool(SCOPE_RE.match(text, _SCOPE_LEAD.match(text, p).end())))
+
+
+def _marked(text, pos, limit):
+    """`text` cut around `pos` with CONTINUES in line at the cut, all of it within `limit`."""
+    keep = limit - len(CONTINUES)
+    return _cut(text[:max(0, pos - 50) + keep], pos, keep).rstrip() + CONTINUES
+
+
+def _whole(summary, clean, full, fq, q0, pos, limit):
+    """`summary` (clean, cut), unless it stops inside a quotation or just before a scope-limiting sentence: then
+    the text extended over them when that fits `limit`, else a cut carrying CONTINUES. `full` is the cleaned
+    unit from where `clean` starts to the unit's end, `fq` the same with dead quote marks neutral (_live_quotes)
+    and `q0` the quotation open where both start."""
+    n0 = len(clean)
+    if not full.startswith(clean) or len(fq) != len(full):
+        return summary                  # the two cleanings disagree (a comment or strike across the cut): as before
+    reach = max(0, pos - 50) + limit    # a cut of `limit` around `pos` prints full[:reach] at most
+
+    def size(e):                        # what the cut measures: the cells form, a trailing table pipe dropped
+        return len(_cells(full[:e]))
+    end = n0
+    for _ in range(EXTEND_STEPS):
+        if size(end) > reach or end >= len(full):
+            break
+        state = _quoted(fq, q0, end)
+        if any(state):                  # to the quotation's close, then to the end of its sentence
+            k = _quoted(fq, state, start=end, closes=True)
+            if k < 0:
+                end = len(full)         # never closed: it runs to the unit's end
+                continue
+            m = next((m for m in BOUNDARY_RE.finditer(full, max(end, k - 8)) if m.end() >= k), None)
+            end = m.end() if m else len(full)
+            continue
+        if _scope_next(full, end):      # the next sentence limits the ruling: take it too
+            m = BOUNDARY_RE.search(full, end + 1)
+            end = m.end() if m else len(full)
+            continue
+        break
+    if end == n0:
+        if size(n0) <= reach:
+            return summary              # printed whole, and nothing it stops before needs it
+        v = reach - 3                   # the cut's own '...' starts here
+        m = BOUNDARY_RE.search(full, v)
+        if not any(_quoted(fq, q0, v)) and not (m and _scope_next(full, m.end())):
+            return summary
+        return _marked(_cells(clean), pos, limit)
+    text = _cells(full[:end])
+    if len(text) <= reach and (end >= len(full) or not any(_quoted(fq, q0, end)) and not _scope_next(full, end)):
+        return _cut(text, pos, limit)
+    return _marked(text, pos, limit)
+
+
 def rulings_in_text(rel, text, first_line=1, limit=SUMMARY_MAX, only=None):
     """[{path, line, lines, marker, date, summary, fragment, kinds, anchors}] for every ruling in
     `text` (restricted as scan_text's `only` says)."""
@@ -778,6 +887,14 @@ def rulings_in_text(rel, text, first_line=1, limit=SUMMARY_MAX, only=None):
         clean = LEAD_RE.sub("", _clean(raw), count=1)
         pos = max(0, pos - (len(_clean(raw)) - len(clean)))
         summary = _cut(_cells(clean), pos, limit)
+        # never cut inside the owner's quotation or just before a sentence limiting the ruling's scope
+        lq = _live_quotes(ln)
+        if h["spans"]:
+            full = LEAD_RE.sub("", _clean(ln[a:]), count=1)
+            fq, q0 = LEAD_RE.sub("", _clean(lq[a:]), count=1), _quoted(lq, end=a)
+        else:
+            full, fq, q0 = clean, LEAD_RE.sub("", _clean(LEAD_RE.sub("", lq, count=1)), count=1), (False, False)
+        summary = _whole(summary, clean, full, fq, q0, pos, limit)
         # the row's own reversal AFTER the ruling: tagged for a re-check, never dropped
         sup = SUPERSEDED_RE.search(ln, h["end"])
         superseded = ""

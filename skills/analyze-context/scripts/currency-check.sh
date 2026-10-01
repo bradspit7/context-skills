@@ -282,7 +282,7 @@ emit_resume_class() {
     fi
     emit_docket_contract "$RC_DOC"
     emit_carry_line
-    echo "   NO memory topic files, specs, archive or other deep reads; NO helper agents or subagents;"
+    echo "   NO memory topic files, specs, archive or other deep reads; NO reading helpers or subagents;"
     echo "   NO claim-check pass; NO test or verify runs."
     # The one Step 4.5 row the arrival path keeps. A question about THIS machine's own past action
     # is the one open item an arrival on this machine can answer that the departing one could not:
@@ -294,6 +294,13 @@ emit_resume_class() {
     echo "   against this machine's runtime logs and that day's session transcripts first; ask the owner"
     echo "   only what they do not answer."
     echo "   Then offer the full briefing on request (\"brief me\")."
+    # The one background agent an arrival starts. The ban above is on READING helpers: a session
+    # starts its one build right after its briefing whenever the upgrade queue holds an item,
+    # arrivals included, because a wrap never builds. The first arrival after that change read a
+    # blanket "NO helper agents" here as covering the build too, and built nothing with five
+    # items queued.
+    echo "   ONE background agent still starts: when this report's UPGRADES section shows an upgrade queue,"
+    echo "   start its oldest item right after the briefing (reflect-upgrades Step 5) and say so in one line."
   elif [ -z "$RC_REASONS" ]; then
     echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); ${RC_PROV}; machine stamp matches; single-doc pattern.${RC_BASIS}"
     echo "=> UNLESS the user asked for a full briefing: take the SLIM PATH (analyze-handoff contract):"

@@ -76,7 +76,7 @@ Invoke the `analyze-context` skill (Skill tool) with args `arrival`. It re-runs 
 - **Re-implement a transport.** Execute what the project documents. If no recipe is documented and the family is ambiguous, say so rather than guessing a command.
 - **Infer sync direction from conflicting timestamps.** Direction comes from the operation (sync = arrival/pull, handoff = departure/push), never from a guess about which copy is newer. When the direction is genuinely ambiguous, surface the evidence and stop. An ordinary two-sided git divergence is not ambiguous: merge it (Step 1a).
 - **Ask permission to merge a divergence.** The merge is part of the command the user already gave.
-- **Launch helper agents or subagents on arrival.** The pull, bootstrap, memory sync and the arrival briefing all run in the main thread.
+- **Launch helper agents or subagents for the arrival work.** The pull, bootstrap, memory sync and the arrival briefing all run in the main thread. The one background agent an arrival starts is the upgrade queue's build: when `UPGRADE-QUEUE.md` holds an item, the briefing starts it right after it is delivered (analyze-context Step 1).
 - **Run test suites or the verify loop on arrival,** except the ones Step 1a's merge path requires (its step 5).
 - **Re-verify the pull or bootstrap beyond their own output.** Their output is the evidence, and analyze-context's gate already re-checks the post-pull state.
 

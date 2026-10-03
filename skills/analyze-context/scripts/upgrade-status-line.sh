@@ -17,7 +17,8 @@
 #                    of the last 30 days (newest 5, with the short sha, then 'and N more').
 #                    The whole message is read, not git's trailer block: the commit shape puts
 #                    'Upgrade:' ABOVE a Co-Authored-By paragraph, where the trailer parser
-#                    never looks.
+#                    never looks. A commit that changed ONLY test files is not listed; one
+#                    line counts and names those, so none is dropped silently.
 #
 # These are STATE lines, never FINDINGs: nothing printed here may start with FINDING, because
 # currency-check.sh counts '^FINDING' lines to block synthesis. A git failure prints
@@ -195,13 +196,68 @@ if [ "$IN_GIT" = 1 ] && git -C "$TOP" rev-parse -q --verify 'HEAD^{commit}' >/de
           if (l ~ /^Upgrade:[ \t]*[^ \t]/) { sub(/^Upgrade:[ \t]*/, "", l); print $1 "\t" l }
         }
       }')
+    # A commit whose changed paths are ALL test files is a test or review repair, not an upgrade
+    # anyone would notice: its Upgrade: line is not listed, but it is counted and named below.
+    # Test file = a directory component 'tests' or 'test', or a basename test-* test_* *_test.*
+    # *.test.* *.spec.*. The paths come from a log whose format prints no message text (grepping
+    # `git show --name-only` would read the message too); --no-renames keeps a file moved INTO
+    # tests/ from hiding the path it left. A merge, a commit with no paths, or a path list git
+    # could not give is NOT test-only -- each of those is listed.
+    TONLY=" "; TWHY=""; XN=0; XK=0; XSEEN=" "; XSHAS=""
     if [ -n "$HITS" ]; then
-      HN=$(printf '%s\n' "$HITS" | grep -c .)
+      PLOG=$(printf '%s\n' "$HITS" | cut -f1 | git -C "$TOP" -c core.quotePath=false log --no-walk \
+               --stdin --no-renames --name-only --format='%x1e%h%x1f%p' 2>"$ERRF")
+      PRC=$?
+      if [ "$PRC" -ne 0 ]; then
+        WHY=$(head -1 "$ERRF" 2>/dev/null | tr -d '\r' | cut -c1-160)
+        TWHY="git log exited $PRC${WHY:+ -- $WHY}"
+      else
+        TONLY=" "$(printf '%s' "$PLOG" | LC_ALL=C awk 'BEGIN { RS = "\036" }
+          function is_test(p,   C, c, k) {
+            c = split(p, C, "/")
+            for (k = 1; k < c; k++) if (C[k] == "tests" || C[k] == "test") return 1
+            return C[c] ~ /^test[-_]/ || C[c] ~ /_test\./ || C[c] ~ /\.(test|spec)\./
+          }
+          NF > 0 {
+            n = split($0, L, "\n"); split(L[1], H, "\037")
+            if (H[1] == "" || H[2] ~ / /) next          # two or more parents: a merge
+            np = 0
+            for (i = 2; i <= n; i++) {
+              p = L[i]; sub(/\r$/, "", p)
+              if (p == "") continue
+              np++
+              if (!is_test(p)) next
+            }
+            if (np > 0) printf "%s ", H[1]
+          }')
+      fi
+      KEPT=""
+      while IFS= read -r h; do
+        sha=${h%%$'\t'*}
+        case "$TONLY" in
+          *" $sha "*)
+            XN=$((XN + 1))                      # Upgrade: lines; XK counts their commits
+            case "$XSEEN" in *" $sha "*) ;; *)
+              XSEEN="$XSEEN$sha "; XK=$((XK + 1))
+              [ "$XK" -le 10 ] && XSHAS="${XSHAS:+$XSHAS, }$sha" ;;
+            esac ;;
+          *) KEPT="$KEPT$h"$'\n' ;;
+        esac
+      done <<< "$HITS"
+      HITS=${KEPT%$'\n'}
+    fi
+    if [ -n "$HITS" ] || [ "$XN" -gt 0 ] || [ -n "$TWHY" ]; then
       RECENT=("landed here in the last 30 days:")
-      while IFS=$'\t' read -r sha sentence; do
-        RECENT+=("  $sha  $sentence")
-      done < <(printf '%s\n' "$HITS" | head -5)
-      [ "$HN" -gt 5 ] && RECENT+=("  and $((HN - 5)) more")
+      if [ -n "$HITS" ]; then
+        HN=$(printf '%s\n' "$HITS" | grep -c .)
+        while IFS=$'\t' read -r sha sentence; do
+          RECENT+=("  $sha  $sentence")
+        done < <(printf '%s\n' "$HITS" | head -5)
+        [ "$HN" -gt 5 ] && RECENT+=("  and $((HN - 5)) more")
+      fi
+      [ "$XK" -gt 10 ] && XSHAS="$XSHAS and $((XK - 10)) more"
+      [ "$XN" -gt 0 ] && RECENT+=("  ($XN Upgrade: line(s) on test-only commits not listed: $XSHAS)")
+      [ -n "$TWHY" ] && RECENT+=("  (test-only filter: could not check: $TWHY -- every Upgrade: line is listed)")
     fi
   fi
   rm -f "$ERRF" 2>/dev/null

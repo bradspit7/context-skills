@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-09-29.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-02.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -186,10 +186,12 @@ A build started at the wrap is one the owner waits for, however it runs.
    run for those files** (for a skill, `update-context`'s Step 7 probe), **and commit** with a
    trailer, removing its queue entry in the same commit:
    `git add <paths>` then `git commit -m "<subject>" -m "Upgrade: <one plain sentence>" -- <paths>`.
-   The trailer is the record: a ledger can derive *built* from it, in the repo where it landed. If the
-   session ends first, the entry stays queued and the next session's start builds it. **A build still
-   running at a wrap is not waited for:** the wrap reports "Done — safe to close." and says closing loses
-   nothing (the lesson stays queued); a departure stops it before the push.
+   The trailer is the record (a ledger can derive *built* from it, in the repo where it landed), so a
+   delivered upgrade gets exactly one, on the commit that delivers it, and a test-only, review-fix or
+   fix-up commit gets none. If the session ends first, the entry stays queued and the next session's
+   start builds it. **A build still running at a wrap is not waited for:** the wrap reports
+   "Done — safe to close." and says closing loses nothing (the lesson stays queued); a departure stops
+   it before the push.
 5. **Too big for one session** → queue it (cap 5).
 6. **Projects with live external writes or regulated personal data:** the build may only add tests
    that import no write client, and must not touch the project's sensitive-data/secret guard, its git

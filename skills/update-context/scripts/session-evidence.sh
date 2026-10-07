@@ -981,6 +981,70 @@ for pf in ${PLAN_FILES[@]+"${PLAN_FILES[@]}"}; do
 done
 [ -n "$PLAN_FINDINGS" ] && printf '%s\n' "$PLAN_FINDINGS"
 
+# == WORKFLOWS (queue 2026-09-28): the finished lanes of a Workflow run that never completed ==
+# The Workflow tool notifies only when a WHOLE run completes. When its remaining lanes die (a machine
+# switch, a usage limit), the lanes that already FINISHED stay unread in the run's journal, and a wrap
+# that reads only the notification records every lane as "killed, re-run" (measured in another
+# project: two lanes had returned FAIL before the cut, and their verdicts sat unread for six days).
+# workflow-lanes.py prints, per in-scope run that did not complete, every lane WITH a result (label +
+# verdict) and one NO RESULT line naming only the rest; it prints nothing when every in-scope run
+# completed or there is none. Journals are parsed by orchestrate's task-output.py.
+# SCOPE is handed over as explicit slug dirs -- this repo's main checkout and its linked worktrees,
+# named the way the MEMORY HEALTH pass names the main checkout's -- because task-output.py's own
+# find_journals() widens to EVERY project when cwd's has none (G#97). WINDOW: journals modified since
+# the EARLIER of the last commit touching HANDOFF.md and SE_WORKFLOW_DAYS (default 7) days back.
+# Its own function, sharing no variables with the sections around it.
+_workflow_lanes_section() {
+  local root helper py c wt native hct found=0 errf out rc why s j
+  local -a slugs=() args=()
+  root="${CLAUDE_PROJECTS_DIR:-$HOME/.claude/projects}"
+  root=${root//\\//}       # a native C:\ path -> C:/ : one spelling for bash, Python and the scope line
+  [ -d "$root" ] || return 0
+  helper="$(dirname "${BASH_SOURCE[0]}")/workflow-lanes.py"
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    while IFS= read -r wt; do
+      [ -n "$wt" ] || continue
+      if command -v cygpath >/dev/null 2>&1; then native=$(cygpath -w "$wt"); else native="$wt"; fi
+      slugs+=("$(printf '%s' "$native" | sed 's/[^A-Za-z0-9]/-/g')")
+    done < <(git worktree list --porcelain 2>/dev/null | awk '/^worktree /{sub(/^worktree /,""); print}')
+    hct=$(git log -1 --format=%ct -- HANDOFF.md 2>/dev/null)
+  fi
+  if [ "${#slugs[@]}" -eq 0 ]; then
+    if command -v cygpath >/dev/null 2>&1; then native=$(cygpath -w "$(pwd)"); else native=$(pwd); fi
+    slugs+=("$(printf '%s' "$native" | sed 's/[^A-Za-z0-9]/-/g')")
+  fi
+  # The QUOTED prefix is literal (a [ or space in $HOME is not a pattern); only the tail globs.
+  for s in "${slugs[@]}"; do
+    for j in "$root/$s"/*/workflows/wf_*.json; do [ -e "$j" ] && { found=1; break 2; }; done
+  done
+  [ "$found" -eq 1 ] || return 0                 # no Workflow run in this project at all: silent
+  if [ ! -f "$helper" ]; then
+    echo; echo "== WORKFLOWS =="; echo "WORKFLOWS: could not check -- workflow-lanes.py is missing beside session-evidence.sh"; return 0
+  fi
+  py=""
+  # `python` first: on Windows a bare `python3` can resolve to the Microsoft Store alias stub.
+  for c in python python3 py; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)' >/dev/null 2>&1; then
+      py="$c"; break
+    fi
+  done
+  if [ -z "$py" ]; then
+    echo; echo "== WORKFLOWS =="; echo "WORKFLOWS: could not check -- no Python 3.8+ on PATH, and this project has Workflow run journals"; return 0
+  fi
+  args=(--projects-dir "$root" --days "${SE_WORKFLOW_DAYS:-7}" --handoff-epoch "${hct:-}")
+  for s in "${slugs[@]}"; do args+=(--slug "$s"); done
+  errf=$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/wf-lanes.$$")
+  out=$("$py" "$helper" "${args[@]}" 2>"$errf"); rc=$?
+  [ -n "$out" ] && printf '%s\n' "$out"
+  if [ "$rc" -ne 0 ]; then
+    why=$(grep -v '^[[:space:]]*$' "$errf" 2>/dev/null | tail -1 | tr -d '\r' | cut -c1-200)
+    [ -n "$out" ] || { echo; echo "== WORKFLOWS =="; }
+    echo "WORKFLOWS: could not check -- workflow-lanes.py exited $rc${why:+: $why}"
+  fi
+  rm -f "$errf"
+}
+_workflow_lanes_section
+
 # IDENTITY: a throwaway git identity (tmp-proof <tmp@proof.invalid>, set by a proof script inside a
 # linked worktree, which shares the main repo's config) authors every commit this wrap makes. Same
 # helper as the briefing's; it prints nothing unless the identity looks throwaway, and its line is a

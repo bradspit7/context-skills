@@ -437,6 +437,134 @@ else
   echo "  (live memory dir does not exist -- cannot search for a recipe file)"
 fi
 
+# == OUT-OF-REPO DELIVERABLES == (departure only). Measured (a sibling project,
+# 2026-09-30): another agent wrote a 481-file, 52 MB audit to ~/Documents/<NAME>_SEO_.../
+# with a README_CLAUDE.md addressed to Claude. Everything above enumerates the repo tree,
+# so the departure named nothing and the owner had to ask for it by hand. This section
+# POINTS at such a dir so the handoff report can name it; it never copies, moves or
+# modifies anything (copying was refused as a sensitive source), and it never blocks.
+# Two traps, both from the incident:
+#   time -- this probe runs AFTER the wrap committed HANDOFF.md, so a deliverable written
+#           earlier in the session is OLDER than HEAD's newest handoff commit. The threshold
+#           is what the other machine last received: the newest handoff-doc commit on
+#           @{upstream}; else the second-newest on HEAD; else 7 days ago.
+#   name -- the real README never said the repo name, only its first word, and the dir was
+#           named <WORD>_SEO_... So the match is on whole-word tokens of the repo name, in
+#           the file's text or its directory's name, minus a stoplist of generic words.
+if [ "$DIRECTION" = departure ]; then
+  echo
+  echo "== OUT-OF-REPO DELIVERABLES (departure only; a pointer for the report -- never copied, never blocks the push) =="
+  DELIV_ROOT="${PROBE_DELIVERABLE_ROOT:-$HOME/Documents}"
+  [ "$DELIV_ROOT" != "/" ] && DELIV_ROOT="${DELIV_ROOT%/}"
+  if [ ! -d "$DELIV_ROOT" ]; then
+    echo "search-root: $DELIV_ROOT -- MISSING (or not a directory); nothing searched (PROBE_DELIVERABLE_ROOT overrides it)"
+  else
+    HANDOFF_DOCS=(HANDOFF.md context/HANDOFF.md CONTEXT.md continuation/context.md)
+    DT=""; DT_SRC=""
+    if git rev-parse --git-dir >/dev/null 2>&1; then
+      if git rev-parse '@{upstream}' >/dev/null 2>&1; then
+        DT=$(git -C "$CUR_WT" log -1 --format='%ct %ci' '@{upstream}' -- "${HANDOFF_DOCS[@]}" 2>/dev/null)
+        [ -n "$DT" ] && DT_SRC="newest handoff-doc commit on @{upstream}: what the other machine last received"
+      fi
+      if [ -z "$DT" ]; then
+        DT=$(git -C "$CUR_WT" log -2 --format='%ct %ci' HEAD -- "${HANDOFF_DOCS[@]}" 2>/dev/null | sed -n 2p)
+        [ -n "$DT" ] && DT_SRC="second-newest handoff-doc commit on HEAD (no upstream, or no handoff-doc commit on it)"
+      fi
+    fi
+    case "${DT%% *}" in
+      ''|*[!0-9]*)
+        DT_EPOCH=$(( $(date +%s) - 7 * 86400 ))
+        DT_HUMAN=$(date -d "@$DT_EPOCH" '+%Y-%m-%d %H:%M:%S %z' 2>/dev/null || date -r "$DT_EPOCH" '+%Y-%m-%d %H:%M:%S %z' 2>/dev/null || echo "epoch $DT_EPOCH")
+        DT_SRC="7 days ago (no usable handoff-doc commit)" ;;
+      *) DT_EPOCH=${DT%% *}; DT_HUMAN=${DT#* } ;;
+    esac
+    # Words of a name: split on every non-alphanumeric and on camelCase, lowercased.
+    deliv_words() {
+      printf '%s\n' "$1" | sed 's/\([a-z0-9]\)\([A-Z]\)/\1 \2/g; s/\([A-Z]\)\([A-Z][a-z]\)/\1 \2/g' \
+        | tr -c 'A-Za-z0-9\n' '\n' | tr 'A-Z' 'a-z' | sed '/^$/d'
+    }
+    DELIV_STOP=" claude website site main project projects repo the and docs app web for with final solution type "
+    DELIV_TOKS=""
+    while IFS= read -r w; do
+      [ "${#w}" -ge 3 ] || continue
+      case "$DELIV_STOP" in *" $w "*) continue ;; esac
+      case " $DELIV_TOKS " in *" $w "*) continue ;; esac
+      DELIV_TOKS="${DELIV_TOKS:+$DELIV_TOKS }$w"
+    done <<DWEOF
+$(deliv_words "$PROJ_NAME")
+DWEOF
+    [ -z "$DELIV_TOKS" ] && DELIV_TOKS=$(norm "$PROJ_NAME")
+    echo "search-root: $DELIV_ROOT (find -maxdepth 3 for README_CLAUDE.md / *HANDOFF*.md; node_modules, .git, venvs pruned)"
+    echo "threshold: $DT_HUMAN -- $DT_SRC"
+    if [ -z "$DELIV_TOKS" ]; then
+      echo "project-tokens: none (no usable word in '$PROJ_NAME') -- nothing can match; check $DELIV_ROOT by hand"
+    else
+      echo "project-tokens: $DELIV_TOKS (whole words of '$PROJ_NAME', generic words dropped)"
+      DELIV_RE="(^|[^[:alnum:]])($(printf '%s' "$DELIV_TOKS" | tr ' ' '|'))([^[:alnum:]]|$)"
+      # Physical, lowercased path: the repo's own handoff doc is never an out-of-repo deliverable.
+      deliv_phys() { (cd "$1" 2>/dev/null && pwd -P) | tr 'A-Z' 'a-z'; }
+      REPO_P=$(deliv_phys "$CUR_WT"); MAIN_P=$(deliv_phys "$MAIN_WT")
+      DELIV_FOUND=$(find "$DELIV_ROOT" -mindepth 1 -maxdepth 3 \
+        \( -type d \( -name node_modules -o -name .git -o -name .venv -o -name venv -o -name __pycache__ \) \) -prune \
+        -o -type f \( -iname 'README_CLAUDE.md' -o -iname '*HANDOFF*.md' \) -print 2>/dev/null)
+      DELIV_FIND_RC=$?
+      N_CAND=0; N_NEW=0; DELIV_HITS=""; DELIV_UNREAD=""
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        N_CAND=$((N_CAND + 1))
+        m=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null)
+        case "$m" in ''|*[!0-9]*) DELIV_UNREAD="${DELIV_UNREAD}  could not read the mtime of $f -- check it by hand
+"; continue ;; esac
+        [ "$m" -gt "$DT_EPOCH" ] || continue
+        d=$(dirname "$f")
+        dp=$(deliv_phys "$d")
+        if [ -n "$dp" ]; then
+          [ -n "$REPO_P" ] && case "$dp/" in "$REPO_P/"*) continue ;; esac
+          [ -n "$MAIN_P" ] && case "$dp/" in "$MAIN_P/"*) continue ;; esac
+        fi
+        N_NEW=$((N_NEW + 1))
+        # A file loose in the root is its own deliverable; never size the whole root.
+        if [ "$d" = "$DELIV_ROOT" ]; then unit="$f"; else unit="$d"; fi
+        hit=""
+        for dw in $(deliv_words "$(basename "$d")"); do
+          case " $DELIV_TOKS " in *" $dw "*) hit=yes ;; esac
+        done
+        if [ -z "$hit" ]; then
+          LC_ALL=C.UTF-8 grep -qiE "$DELIV_RE" "$f" 2>/dev/null
+          grc=$?
+          if [ "$grc" -eq 0 ]; then hit=yes
+          elif [ "$grc" -ne 1 ]; then DELIV_UNREAD="${DELIV_UNREAD}  could not scan $f (grep rc=$grc) -- check it by hand
+"; fi
+        fi
+        if [ -n "$hit" ]; then
+          case "
+$DELIV_HITS" in *"
+$unit
+"*) ;; *) DELIV_HITS="${DELIV_HITS}${unit}
+" ;; esac
+        fi
+      done <<DFEOF
+$DELIV_FOUND
+DFEOF
+      N_HIT=0
+      while IFS= read -r u; do
+        [ -n "$u" ] || continue
+        N_HIT=$((N_HIT + 1))
+        n=$(find "$u" -type f 2>/dev/null | wc -l | tr -d ' ')
+        sz=$(du -sh "$u" 2>/dev/null | cut -f1)
+        [ "$n" = 1 ] && nf="1 file" || nf="$n files"
+        echo "OUT-OF-REPO DELIVERABLE: $u ($nf, ${sz:-size unknown}) -- will NOT travel with the push"
+      done <<DHEOF
+$DELIV_HITS
+DHEOF
+      echo "scanned: $N_CAND named file(s), $N_NEW newer than the threshold and outside this repo, $N_HIT deliverable(s) naming this project"
+      [ -n "$DELIV_UNREAD" ] && printf '%s' "$DELIV_UNREAD"
+      [ "$DELIV_FIND_RC" -ne 0 ] && echo "  note: find exited $DELIV_FIND_RC under $DELIV_ROOT (unreadable entries?) -- the listing may be partial"
+      [ "$N_HIT" -eq 0 ] && echo "OUT-OF-REPO DELIVERABLES: none found under $DELIV_ROOT newer than $DT_HUMAN naming: $DELIV_TOKS"
+    fi
+  fi
+fi
+
 echo
 echo "== VERDICT =="
 echo "Identify the transport branch IN ORDER; take the FIRST that matches:"

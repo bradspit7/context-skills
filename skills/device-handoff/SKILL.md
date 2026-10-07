@@ -25,7 +25,7 @@ Run the bundled probe from the project root:
 bash ~/.claude/skills/device-handoff/scripts/probe-sync.sh
 ```
 
-Read the full structured output (same transport signals device-sync uses).
+Read the full structured output (same transport signals device-sync uses). Each `OUT-OF-REPO DELIVERABLE:` line goes into the departure report as a pointer the owner sees; it is never copied, and it does not block the push.
 
 ## Step 3 — Memory departure sync (reverse of device-sync; evaluate IN ORDER, first match wins)
 

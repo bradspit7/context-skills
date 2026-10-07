@@ -86,11 +86,15 @@ both directions for every marker alternative, tests/mutations/rulings.py kills e
                      a colon, parenthesis or dash before its date.
     voided-by-owner  'VOIDED ... owner' inside one clause
     dead-lever       'dead lever(s)'
-    section          a top-level item or table body row under a heading that names rulings ('owner
-                     rulings', "the owner's rulings", 'owner-rulings', 'standing rulings', 'locked
-                     decisions', 'decisions locked', 'ruled out', 'do not re-propose|raise|ask|open|
-                     litigate|file'), nested sub-headings included, up to the next heading of the same
-                     or a higher level
+    section          a top-level item or table body row under a heading that names rulings, nested
+                     sub-headings included, up to the next heading of the same or a higher level. A
+                     heading names rulings by a 'do not re-propose|raise|ask|open|litigate|file'
+                     directive anywhere in it, or by a NAME as its subject ('owner rulings', "the
+                     owner's rulings", 'owner-rulings', 'standing rulings', 'locked decisions',
+                     'decisions locked', 'ruled out'): leading the title once a date, a machine name in
+                     parentheses after it, a status glyph, a list number, separators and 'the' are set
+                     aside, and in a dated heading ending its clause. '2026-09-30 -- Ruled out' rules;
+                     '2026-09-30 (laptop) -- RULED OUT cut fixed' is a day's log naming the feature
     label            a bold 'Locked decisions' / 'Decisions locked' / 'Standing rulings' / 'Owner
                      rulings' / 'Ruled out' label (a status glyph may lead) with content after it
     NOT markers: a bare no-entry sign, 'killed', 'REFUTED', 'ruled out' in prose, 'verbatim',
@@ -236,9 +240,25 @@ REMOVED_SHOWN = 5      # removed rulings listed before 'and N more'
 STANDING_HEAD_RE = re.compile(r"^\s{0,3}#{1,6}\s.*(?:standing\s+rulings?|do\s+not\s+re-?(?:propose|raise|ask|open|litigate|file))",
                               re.I | re.M)
 ARCHIVE_KINDS = ("archive", "handoff-archive")
-SECTION_RE = re.compile(
+# A heading names a ruling section by its SUBJECT, never by a word in its narrative (measured 2026-10-01: the
+# HANDOFF heading '### 2026-09-30 / 10-01 (laptop) -- RULED OUT cut fixed, ...' made its four shipped
+# bullets the briefing's four newest standing rulings). A do-not-re DIRECTIVE instructs about the section's
+# items wherever it stands, as the title or as a qualifier after it ('Refuted findings -- DO NOT RE-FILE',
+# 'Good kills (... -- do NOT re-file)': measured in five projects' headings, never once narrative). A NAME
+# rules only as the heading's subject (_section_subject).
+SECTION_DIRECTIVE_RE = re.compile(r"\bdo\s+not\s+re-?(?:propose|raise|ask|open|litigate|file)\b", re.I)
+SECTION_NAME_RE = re.compile(
     r"\b(?:owner(?:['\u2019]s)?|standing)(?:\s+|-)rulings?\b|\bdecisions?\s+locked\b|\blocked\s+decisions?\b"
-    r"|\bruled[- ]out\b|\bdo\s+not\s+re-?(?:propose|raise|ask|open|litigate|file)\b", re.I)
+    r"|\bruled[- ]out\b", re.I)
+# What may stand before a heading's subject: a date or date range ('2026-09-30', '2026-09-30 / 10-01',
+# '2026-09-02c'), after a date a parenthesised machine name ('(laptop)'), a status glyph, a list
+# number ('4.', '2.12'), separator punctuation, 'the'. A DATED heading's subject must also end its clause:
+_HEAD_DATE_RE = re.compile(_DATE + r"[a-z]?(?:\s*/\s*(?:\d{4}-)?\d{2}-\d{2}[a-z]?)?(?!\d)")
+_HEAD_PAREN_RE = re.compile(r"\([^()]*\)")
+_HEAD_FURNITURE_RE = re.compile(
+    r"\s+|[\u2600-\u27bf\u2b00-\u2bff\U0001F300-\U0001FAFF]\ufe0f?|\d{1,3}(?:\.\d{1,3})*[a-z]?[.)]?(?=[\s\u2014\u2013:,-]|$)"
+    r"|[\u2014\u2013\u00b7:,/|-]+|the\b", re.I)
+_CLAUSE_END_RE = re.compile(r"\s*(?:$|[(\[\u2014\u2013:;,.!?\u00b7/|]|-\s)")
 _GLYPH = r"(?:[☀-➿⬀-⯿\U0001F300-\U0001FAFF]️?\s*)?"
 # A bold ruling label that carries content after it: '**Locked decisions:** a; b'. A status glyph
 # may lead ('✅ **Owner rulings this session:** ...'); a label with nothing after it, colon inside
@@ -385,10 +405,35 @@ def _groups(line, mask, memory=False):
 
 
 def _heading_rules(text):
-    m = SECTION_RE.search(_plain(text))
-    if not m:
-        return False
-    return not _mention(text, m.start(), _mask(text, _Para()))
+    """True when heading text `text` names a ruling section: a do-not-re directive anywhere in it, or a ruling
+    NAME as its subject (_section_subject); a quoted, italic or code mention of either is neither."""
+    plain, mask = _plain(text), _mask(text, _Para())
+    m = SECTION_DIRECTIVE_RE.search(plain)
+    if m and not _mention(text, m.start(), mask):
+        return True
+    m = _section_subject(plain)
+    return bool(m) and not _mention(text, m.start(), mask)
+
+
+def _section_subject(plain):
+    """The ruling NAME that is heading text `plain`'s subject (a match), or None: SECTION_NAME_RE at the start of
+    the text once its furniture is set aside. In a DATED heading -- a log entry, whose title narrates the day --
+    the name must also end its clause: '2026-09-30 -- Ruled out' rules, '2026-09-30 -- RULED OUT cut fixed' (the
+    day's narrative naming the feature) does not."""
+    pos, dated = 0, False
+    while True:
+        m = _HEAD_DATE_RE.match(plain, pos)
+        if m:
+            dated = True
+        else:
+            m = (dated and _HEAD_PAREN_RE.match(plain, pos)) or _HEAD_FURNITURE_RE.match(plain, pos)
+        if not m or m.end() == pos:
+            break
+        pos = m.end()
+    m = SECTION_NAME_RE.match(plain, pos)
+    if m and dated and not _CLAUSE_END_RE.match(plain, m.end()):
+        return None
+    return m
 
 
 def _starts_unit(ln):

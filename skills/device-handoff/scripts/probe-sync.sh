@@ -227,7 +227,32 @@ RFEOF
 fi
 NDECL=$(norm "$DECLARED")
 
-EXACT=""; DECL_M=""; ALIAS_M=""; SUBSTR_LIST=""
+# RETIRED buckets -- checked per bucket BEFORE the tier tests, so every tier (and any
+# later change to a tier's predicate) composes with it. A bucket whose TOP LEVEL holds a
+# regular file whose name contains SUPERSEDED (case-SENSITIVE substring, e.g.
+# 00-SUPERSEDED-BY-GIT.md) carries its own retirement tombstone: it is never a
+# candidate at any tier. Measured live: a project repo was offered its own
+# tombstoned bucket as a lowconf candidate on every arrival, and the
+# settle-it hint below would have DECLARED the dead bucket. Matching on bucket NAMES
+# alone cannot see this. Deliberately NOT a `*retired*` glob and NOT case-insensitive:
+# a live bucket legitimately holds memory files such as
+# project_debug_menu_grants_retired.md. A retired bucket that is ALSO this project's
+# exact/declared/alias match is a CONFLICT (a stale name or declaration), printed as a
+# bucket-match-warning and treated as no match -- never as a positive bucket-match.
+# A retired bucket that would have been this project's substring (lowconf) candidate
+# prints `bucket-retired:` instead. A retired bucket matching this project at NO tier
+# prints nothing: it is another project's bucket, and naming it would put a line about
+# that project into every unrelated project's arrival (measured on the live root).
+retired_tombstone() { # $1 bucket dir -> prints the first tombstone file name, if any
+  local f
+  for f in "$1"*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in *SUPERSEDED*) printf '%s' "${f##*/}"; return 0 ;; esac
+  done
+  return 0
+}
+
+EXACT=""; DECL_M=""; ALIAS_M=""; SUBSTR_LIST=""; RETIRED_HITS=""; RETIRED_DECL=""
 for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/Dropbox/claude-memory"; do
   [ -n "$root" ] && [ -d "$root" ] || continue
   for b in "$root"/*/; do
@@ -235,16 +260,16 @@ for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/
     bn=$(basename "$b")
     nb=$(norm "$bn")
     [ -n "$nb" ] || continue
+    tomb=$(retired_tombstone "$b")
     # NOTE: exact/declared/alias are whole-string equality with NO minimum length
     # (a short exact name is still strong ownership evidence); the >=4 gate below
     # guards only the fuzzy substring tier. Pinned by fixture (short-exact case).
+    tier=""
     if [ "$nb" = "$NPROJ" ]; then
-      [ -z "$EXACT" ] && EXACT="$root/$bn"; continue
-    fi
-    if [ -n "$NDECL" ] && [ "$nb" = "$NDECL" ]; then
-      [ -z "$DECL_M" ] && DECL_M="$root/$bn"; continue
-    fi
-    if [ -n "$ALIASES" ]; then
+      tier=exact
+    elif [ -n "$NDECL" ] && [ "$nb" = "$NDECL" ]; then
+      tier=declared
+    elif [ -n "$ALIASES" ]; then
       amatch=""
       # set -f: the comma-split fields must NOT glob-expand against the cwd --
       # an alias like 'proj-*' would otherwise expand to repo filenames and could
@@ -255,14 +280,32 @@ for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/
         [ -n "$na" ] && [ "$nb" = "$na" ] && amatch=yes
       done
       IFS=$OLDIFS; set +f
-      if [ -n "$amatch" ]; then [ -z "$ALIAS_M" ] && ALIAS_M="$root/$bn"; continue; fi
+      [ -n "$amatch" ] && tier=alias
     fi
+    if [ -n "$tomb" ] && [ -n "$tier" ]; then
+      RETIRED_HITS="${RETIRED_HITS}bucket-match-warning: $root/$bn is this project's $tier bucket but carries a retirement tombstone ($tomb); treated as no match -- the name or declaration pointing at it is stale
+"
+      [ "$tier" != exact ] && RETIRED_DECL=yes
+      continue
+    fi
+    case "$tier" in
+      exact) [ -z "$EXACT" ] && EXACT="$root/$bn"; continue ;;
+      declared) [ -z "$DECL_M" ] && DECL_M="$root/$bn"; continue ;;
+      alias) [ -z "$ALIAS_M" ] && ALIAS_M="$root/$bn"; continue ;;
+    esac
     [ ${#nb} -ge 4 ] || continue
-    case "$NPROJ" in *"$nb"*) SUBSTR_LIST="${SUBSTR_LIST}${root}/${bn}
-";; esac
+    case "$NPROJ" in *"$nb"*)
+      if [ -n "$tomb" ]; then
+        echo "bucket-retired: $root/$bn (tombstone $tomb) -- not a candidate"
+      else
+        SUBSTR_LIST="${SUBSTR_LIST}${root}/${bn}
+"
+      fi ;;
+    esac
   done
 done
 
+printf '%s' "$RETIRED_HITS"
 BMATCH="none"; BTIER=""
 if [ -n "$EXACT" ]; then
   BMATCH="$EXACT"; BTIER="exact"
@@ -274,7 +317,9 @@ if [ "$BMATCH" != "none" ]; then
   echo "bucket-match: $BMATCH ($BTIER)"
 else
   echo "bucket-match: none"
-  if [ -n "$NDECL" ] || [ -n "$ALIASES" ]; then
+  # A declared/alias bucket that exists but is RETIRED was already warned about above;
+  # "no matching bucket exists" would be false about it.
+  if { [ -n "$NDECL" ] || [ -n "$ALIASES" ]; } && [ -z "$RETIRED_DECL" ]; then
     DECL_DESC="$DECLARED"
     [ -z "$DECL_DESC" ] && DECL_DESC="$ALIASES"
     echo "bucket-match-warning: recipe declares '$DECL_DESC' but no matching bucket exists in any sync root"
@@ -573,6 +618,7 @@ echo "  2 in-repo mirror + bootstrap script => bootstrap / mirror copy-back hand
 echo "  3 junction-to-out-of-band => OS auto-syncs"
 echo "  4 POSITIVE bucket-match (exact/declared/alias) => out-of-band bucket transport; use the recipe's declared command or read only its body range (RECIPE FILE above)."
 echo "    bucket-match-lowconf (substring) is NOT branch 4 -- surface candidates + confirm with the user."
+echo "    bucket-retired (tombstoned) is NOT branch 4 -- never executed, never asked about."
 echo "  4b repo-is-transport: yes => the git-tracked memory dir IS the transport; it travels on the"
 echo "     push the handoff already performs. A no-op FOR A STATED REASON, not an absent transport."
 echo "  5 none of the above AND repo-is-transport: no => genuinely no cross-device memory transport."

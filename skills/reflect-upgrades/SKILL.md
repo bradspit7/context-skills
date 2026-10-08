@@ -152,7 +152,8 @@ processes the inbox under these same rules — builds it, queues it, or hands it
 
 **Project lessons that are not this session's build go to the project's `UPGRADE-QUEUE.md`** at its
 root: one `## YYYY-MM-DD · <title>` heading per item (oldest first), then `- **Lesson:**`,
-`- **Target:**`, `- **RED:**`, `- **Source:**` bullets. **Cap 5.** A full queue shows as one briefing
+`- **Target:**`, `- **RED:**`, `- **Source:**` bullets (plus `- **Partial:**` once a stopped helper's
+work is parked, Step 5 item 4). **Cap 5.** A full queue shows as one briefing
 line; it is never a question for the owner.
 
 ## Step 5 — Build one per session, early (never at a wrap)
@@ -166,7 +167,12 @@ A build started at the wrap is one the owner waits for, however it runs.
 **A session's build starts early** (one per session), so it lands while the owner is still working:
 - **At session start:** when the briefing's `UPGRADES` line shows a non-empty `UPGRADE-QUEUE.md`,
   start the **oldest** item right after the briefing, in the background, and go on with the owner's
-  request.
+  request. **When that entry carries a `- **Partial:** <patch> at <base>` bullet** (an earlier helper's
+  parked work, item 4), the build starts from it, not from scratch:
+  `python ~/.claude/skills/reflect-upgrades/scripts/park-worktree.py --unpark <patch> --into <worktree dir> --branch build/<topic>`
+  creates the helper's worktree at the patch's base with the partial applied (read from its committed
+  blob); the helper commits that as its starting point, merges the local HEAD, then builds. Anything the
+  partial recorded (a FAILED count, a passing run) is a **lead, not a result**: re-run it.
 - **Mid-session:** a nudge or manual firing starts this session's build when none has started yet --
   its new lesson on rungs 1-5 if one fits one session, else the oldest queued item.
 
@@ -191,7 +197,17 @@ A build started at the wrap is one the owner waits for, however it runs.
    fix-up commit gets none. If the session ends first, the entry stays queued and the next session's
    start builds it. **A build still running at a wrap is not waited for:** the wrap reports
    "Done — safe to close." and says closing loses nothing (the lesson stays queued); a departure stops
-   it before the push.
+   it before the push. **Its partial diff is parked, never left in a worktree no step names** (stopped
+   unreported, it sits there untracked and machine-local; measured once, a restart stranded a 9-file
+   diff that was saved by hand): the wrap snapshots it without stopping the helper
+   (`park-worktree.py <worktree> --snapshot --item "<queue title>"`, update-context Step 5), and a
+   departure stops the helper and parks it (`park-worktree.py <worktree> --item "<queue title>"`,
+   device-handoff Step 1). Either commits the patch, its base sha and the entry's
+   `- **Partial:** <patch> at <base>` bullet; without `--snapshot` it then removes the worktree. It
+   refuses a worktree holding a mutation battery's sentinel, an emptied one, or one with nothing to park.
+   **Park only a worktree this session's helper used;** the briefing's and wrap's `WORKTREES` lines
+   name every other one, and those are reported, never parked. When the build lands, its commit
+   removes the queue entry **and** the partial's `.patch` and `.base` files.
 5. **Too big for one session** → queue it (cap 5).
 6. **Projects with live external writes or regulated personal data:** the build may only add tests
    that import no write client, and must not touch the project's sensitive-data/secret guard, its git

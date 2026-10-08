@@ -128,6 +128,13 @@ emit_carry_line() {
     echo "   Carry the IDENTITY section printed under MACHINE too, verbatim, and fix a throwaway identity in the"
     echo "   config file it names before the next commit."
   fi
+  # Only when the WORKTREES section named a worktree (or could not check): nothing else the short paths
+  # read would surface a stopped build helper's partial work.
+  if [ "${WORKTREE_LINES_N:-0}" -gt 0 ]; then
+    echo "   Carry the WORKTREES lines (NOTE worktree-... or could not check) too, verbatim: each names a linked"
+    echo "   worktree holding work HEAD does not carry -- park a stopped build helper's (reflect-upgrades'"
+    echo "   park-worktree.py), drop the rest, never commit one's files."
+  fi
 }
 
 emit_docket_contract() {   # $1 = the pickup doc
@@ -440,6 +447,17 @@ git worktree list --porcelain | awk '/^worktree /{sub(/^worktree /,""); print}' 
     echo "FINDING newer-sibling-worktree: $wt  ($(git -C "$wt" log -1 --format='%h %ai' HEAD 2>/dev/null))"
   fi
 done
+# The loop above sees only a NEWER commit, so a stopped build helper's uncommitted partial diff printed
+# nothing (measured once: a restart stranded a helper's 9-file diff, saved later by hand). The shared
+# helper names every linked worktree holding work HEAD does not carry, an emptied or prunable one, and a
+# stranded mutation battery. Its lines are NOTEs, never FINDINGs; emit_carry_line carries them on the
+# short paths. A missing helper is told so, never skipped.
+WTN="$(dirname "${BASH_SOURCE[0]}")/worktrees-note.sh"
+if [ -f "$WTN" ]; then
+  bash "$WTN"
+else
+  echo "WORKTREES: could not check -- analyze-context/scripts/worktrees-note.sh is not installed"
+fi
 echo "(current worktree: $CUR_WT)"
 
 echo
@@ -621,6 +639,7 @@ emit_rulings
 REPORT=$(emit_report)
 printf '%s\n' "$REPORT"
 FINDINGS_N=$(printf '%s\n' "$REPORT" | grep -c '^FINDING')
+WORKTREE_LINES_N=$(printf '%s\n' "$REPORT" | grep -cE '^(NOTE worktree-|WORKTREES: could not check)')
 
 if [ -n "$DOC" ]; then
   # Git-path inputs to the shared emitter. Age comes from the last COMMIT touching the doc

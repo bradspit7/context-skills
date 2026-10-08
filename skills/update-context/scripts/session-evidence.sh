@@ -1045,6 +1045,21 @@ _workflow_lanes_section() {
 }
 _workflow_lanes_section
 
+# WORKTREES: a linked worktree holding work HEAD does not carry -- above all a build helper this session
+# started that has not returned: its partial diff sits there, untracked and machine-local, and a closed
+# session or a restart strands it (measured once: a 9-file diff saved later by hand). Same helper as the
+# briefing's; NOTE lines, never TRIAGE or THRESHOLD. update-context Step 5 snapshots this session's
+# helper's worktree with reflect-upgrades' park-worktree.py before the audit artifact. A git project with
+# the helper missing is told so, never skipped.
+WTN="$(dirname "${BASH_SOURCE[0]}")/../../analyze-context/scripts/worktrees-note.sh"
+if [ -f "$WTN" ]; then
+  bash "$WTN" --header
+elif git rev-parse --git-dir >/dev/null 2>&1; then
+  echo
+  echo "== WORKTREES =="
+  echo "WORKTREES: could not check -- analyze-context/scripts/worktrees-note.sh is not installed"
+fi
+
 # IDENTITY: a throwaway git identity (tmp-proof <tmp@proof.invalid>, set by a proof script inside a
 # linked worktree, which shares the main repo's config) authors every commit this wrap makes. Same
 # helper as the briefing's; it prints nothing unless the identity looks throwaway, and its line is a

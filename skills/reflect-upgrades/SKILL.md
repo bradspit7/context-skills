@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-02.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-08.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -183,15 +183,24 @@ A build started at the wrap is one the owner waits for, however it runs.
    condition (Step 3's five fields). **The lesson must be in `UPGRADE-QUEUE.md` before the helper
    starts** — a queued item already is; write a new lesson's entry now, even one past the cap. That
    entry is what carries the lesson if the build never lands.
-3. **Hand it to a fresh small-context helper in the background** (the Agent tool with
-   `run_in_background: true` and worktree isolation, an agent type that has a shell) that builds the
-   check in its own worktree **outside the project root** and returns the diff plus RED and GREEN
-   evidence. The session's own context is too large to build in.
+3. **Hand it to a fresh small-context helper in the background** that builds the check in its own
+   worktree **outside the project root**, made by hand from the local HEAD:
+   `git worktree add ../<repo>-<topic> -b build/<topic> <local HEAD sha>`, then the Agent tool with
+   `run_in_background: true`, an agent type that has a shell and **no isolation flag**, told to work
+   only in that worktree's absolute path. It returns the diff plus RED and GREEN evidence. (Not the
+   Agent tool's `isolation` option: it creates `<project root>/.claude/worktrees/agent-<id>/`, inside
+   the tree, and, unless the `worktree.baseRef` setting is `head`, cuts it from origin's default
+   branch rather than the local HEAD. Measured once: while one existed, every `rglob` test in the main
+   checkout saw each source file twice.) The session's own context is too large to build in.
 4. **Never wait for it.** Go on with the owner's work. (Measured: builds take 4 to 18 minutes.) When
-   the helper returns, **apply it on the main thread, run the test once, run the propagation a wrap would
-   run for those files** (for a skill, `update-context`'s Step 7 probe), **and commit** with a
-   trailer, removing its queue entry in the same commit:
+   the helper returns, **apply it on the main thread, remove the build worktree, run the test once, run
+   the propagation a wrap would run for those files** (for a skill, `update-context`'s Step 7 probe),
+   **and commit** with a trailer, removing its queue entry in the same commit:
    `git add <paths>` then `git commit -m "<subject>" -m "Upgrade: <one plain sentence>" -- <paths>`.
+   The removal comes before the gating test run: `git worktree unlock <path>` first if the harness
+   locked it, then `git worktree remove <path>` and `git branch -d build/<topic>` (`-D` only after
+   confirming main holds the same bytes, when the build was squash-merged). A harness worktree left
+   under `.claude/worktrees/` is a second copy of every file the main checkout's tests scan.
    The trailer is the record (a ledger can derive *built* from it, in the repo where it landed), so a
    delivered upgrade gets exactly one, on the commit that delivers it, and a test-only, review-fix or
    fix-up commit gets none. If the session ends first, the entry stays queued and the next session's

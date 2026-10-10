@@ -45,8 +45,16 @@ SOURCES
                carries half its word 4-grams with a gram through each marker, or 60% of its
                distinctive words and every marker kind it had, AND carries its dates and numbers, 60%
                of its contrastive words (the words no other ruling of its old copy has: a sibling that
-               stood beside it cannot vouch for it) and 60% of each list item's words. A list that
-               lost items is 'pruned' (the items are named); text that survives only in its own file
+               stood beside it cannot vouch for it) and 60% of each list item's words. A list ruling
+               (' · ' items, two or more; or three split at ';') is also kept while EACH item is carried --
+               60% of its words -- by a ruling of the same file, whatever the order, the window or the
+               lines the items sit on. A CITATION of a ruling (every marker names 'the owner's ruling', or
+               an 'Owner ruling' label) whose text survives -- rotated into an archive, or un-marked -- is
+               kept while ONE ruling line of its own file (struck-through subject included) holds every key
+               word of it (its clause's subject, two words at least, each a typo apart at most), or the
+               commit its marker's note names and two of those words; a deleted citation is not. A list
+               that lost items is 'pruned' (the items are named, once
+               however many older copies of the list the window holds); text that survives only in its own file
                or a standing file, no longer read as a ruling, is 'unruled'; only in an archive or
                note is 'moved'; a source that left the configs takes its rulings with it ('left');
                nowhere is 'lost'.
@@ -73,6 +81,12 @@ both directions for every marker alternative, tests/mutations/rulings.py kills e
     unit             a paragraph, or a list item with its wrapped lines, joined: a marker, a quote or
                      a sentence can wrap. A table row and a heading are one line each. Markers match
                      with bold / underscore delimiters read as spaces: 'Do **not** re-propose' counts.
+                     A marker that ends its line but for ':' or a dash ('6. **Do NOT re-propose:**')
+                     introduces a list: the lines after it in the unit and the list items nested under
+                     the unit are its items, one per line. A ' · ' list runs to its sentence's end, read
+                     past a mark inside parentheses or a quotation and an item's own end before ' · '.
+    header block     above the first section heading, a '**Updated:**', '**Machine:**' or '**Summary:**'
+                     field (to the next bold label) is a per-wrap snapshot: a marker there is no ruling.
     do-not-re        'do not / don't / never' + re-propose|raise|ask|litigate|suggest|pitch|apply|
                      surface; 'stop re-...ing'; 'stop proposing'; 'never propose'; the passive
                      'not (be) re-proposed|raised|asked|litigated|pitched|applied|surfaced'.
@@ -96,7 +110,9 @@ both directions for every marker alternative, tests/mutations/rulings.py kills e
                      aside, and in a dated heading ending its clause. '2026-09-30 -- Ruled out' rules;
                      '2026-09-30 (laptop) -- RULED OUT cut fixed' is a day's log naming the feature
     label            a bold 'Locked decisions' / 'Decisions locked' / 'Standing rulings' / 'Owner
-                     rulings' / 'Ruled out' label (a status glyph may lead) with content after it
+                     rulings' / 'Ruled out' label (a status glyph may lead) with content after it. A
+                     label whose bold carries text after its colon ('**Owner ruling: model names.**')
+                     titles ONE ruling: a list is read from that title only, never from its narrative
     NOT markers: a bare no-entry sign, 'killed', 'REFUTED', 'ruled out' in prose, 'verbatim',
     'OWNER DECISION', an undated capital 'OWNER-RULED' or 'OWNER RULINGS', 'an OWNER ruling', an
     undated 'owner-ratified', a reference to a dated ruling, 'she declined'.
@@ -266,6 +282,20 @@ _GLYPH = r"(?:[☀-➿⬀-⯿\U0001F300-\U0001FAFF]️?\s*)?"
 LABEL_RE = re.compile(
     r"^\s{0,3}(?:>\s*)?(?:[-*+]\s+|\d{1,4}[.)]\s+)?" + _GLYPH + r"\*\*\s*(?:locked\s+decisions?|decisions?\s+locked|"
     r"standing\s+rulings?|owner\s+rulings?|ruled[- ]out)\b[^*]*\*\*\s*:?\s*[^\s:]", re.I)
+# A label whose bold carries the ruling after its colon -- '**Owner ruling: model names (`cdedfa0`).** The routing
+# statements ...; ...' -- TITLES one ruling: what follows the bold is its narrative, never the items of a list
+# (measured 2026-10-09: a session line's ';'-joined narrative read as a four-item list that no ruling could carry;
+# UPGRADE-QUEUE 2026-10-03, third shape). A label whose bold ends at its colon introduces a list as before. The
+# label's bold is the line's first (LABEL_RE allows only a list marker and a glyph before it): _label_title.
+LABEL_BOLD_RE = re.compile(r"\*\*([^*]*)\*\*")
+# A CITATION of a ruling: a marker that names THE OWNER'S RULING ('model names updated by owner ruling', 'renamed ... on
+# the owner's ruling (`cdedfa0`)', '(owner ruling 2026-10-09)', '[OWNER RULING]') or an 'Owner ruling' label. Such a
+# line records what was done on a ruling that can stand as its own line in the same file (Project.cited). A
+# declarative marker -- do-not-re, 'RULED <date>', 'owner declined' -- is the ruling itself, never a citation.
+CITE_RE = re.compile(r"\bowner(?:['’]s)?[\s-]+ruling\b", re.I)
+# a commit id a citation's own note names: hex, 7 to 40 characters, a digit and a letter among them
+COMMIT_RE = re.compile(r"(?<![0-9a-z])(?=[0-9a-f]{0,39}\d)(?=[0-9a-f]{0,39}[a-f])[0-9a-f]{7,40}(?![0-9a-z])")
+NOTE_AFTER_RE = re.compile(r"[\s*_]*\(([^()]{0,120})\)")
 HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*)$")
 FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 ITEM_RE = re.compile(r"^\s{0,3}(?:>\s*)?(?:[-*+]|\d{1,4}[.)])\s+\S")
@@ -280,6 +310,22 @@ BOUNDARY_RE = re.compile(r"[.!?;](?:[*_)\]\"'\u201d\u2019]*)(?=\s)")
 SEGMENT_RE = re.compile(r"\s(?:--|\u2014|\u2013|\|)(?=\s)|:(?=\s)")
 LEAD_RE = re.compile(r"^\s*(?:>\s*)*(?:[-*+]\s+|\|\s*)?")
 CELL_RE = re.compile(r"\s\|\s")            # a table cell boundary: printed as ' · ' in a summary only
+# A HANDOFF's header block above its first section -- '**Updated:** ...', '**Machine:** ...', '**Summary:** ...' -- is
+# a per-wrap snapshot that every wrap rewrites: a ruling it cites stands in the body, so a marker in one of those
+# fields is never itself a ruling (measured 2026-10-09: the mandatory header rewrite raised two RULING LOSS
+# THRESHOLDs for a header citing the owner's ruling, while the ruling stood as a RULED line under Pending user
+# decisions; UPGRADE-QUEUE 2026-10-03, second shape). A field runs from its bold label to the next label; any other
+# field, and the same labels under a section heading (a docket row's field), read as before.
+FIELD_RE = re.compile(r"^\s{0,3}(?:>\s*)?(?:\*\*|__)\s*([a-z][a-z -]{0,30}?)\s*(?::\s*(?:\*\*|__)|(?:\*\*|__)\s*:)", re.I)
+SNAPSHOT_FIELDS = frozenset(("updated", "machine", "summary"))
+# A list a marker INTRODUCES -- the marker ends its line ('6. **Do NOT re-propose:**') and the items follow one per
+# line, as continuation lines or as items nested under it -- is that ruling's list: its items are read as part of
+# it, ' · '-joined (UPGRADE-QUEUE 2026-10-03: items moved onto their own lines read as un-ruled).
+INTRO_REST_RE = re.compile(r"[\s*_]*(?:\([^()]{0,80}\)[\s*_]*)?[:\u2014\u2013][\s*_:]*$")
+BULLET_RE = re.compile(r"^\s*(?:>\s*)?(?:[-*+]|\d{1,4}[.)])\s+")
+LIST_JOIN = " \u00b7 "
+MIDDOT_RE = re.compile(r"\s\u00b7\s")
+_NEXT_ITEM_RE = re.compile(r"\s+\u00b7\s")
 
 
 class _Para(object):
@@ -385,13 +431,14 @@ def _plain(line):
     return _EMPH_RE.sub(lambda m: " " * len(m.group()), line)
 
 
-def _groups(line, mask, memory=False):
-    """Marker matches on one line, merged into ruling groups: [(start, end, marker, spans, kinds)]."""
+def _groups(line, mask, memory=False, skip=None):
+    """Marker matches on one line, merged into ruling groups: [(start, end, marker, spans, kinds)]. `skip(pos)`
+    True drops a match before the merge (a header field's citation, _fields: never merged into a ruling beside it)."""
     found = []
     plain = _plain(line)
     for name, rx in MARKERS + (MEMORY_MARKERS if memory else ()):
         for m in rx.finditer(plain):
-            if not _mention(line, m.start(), mask):
+            if not _mention(line, m.start(), mask) and not (skip and skip(m.start())):
                 found.append((m.start(), m.end(), name))
     found.sort()
     groups = []
@@ -525,21 +572,85 @@ def _blank_comments(lines):
     return out
 
 
+def _indent(ln):
+    return len(ln) - len(ln.lstrip())
+
+
+def _absorbed(lines, units, memory=False):
+    """`units` (_units) with a list a marker INTRODUCES read into the unit that introduces it: (kind, index, indices,
+    text, starts, listed). Where a marker ends one of a unit's lines but for ':' or a dash (INTRO_REST_RE), the
+    lines after it in the unit and the list items nested under the unit (indented deeper than its first line) are
+    its items, ' · '-joined after the intro line; `listed` is (where the intro line ends, where the nested items
+    begin) in the new text, else None. A nested item stays a unit of its own too: its own markers are its own."""
+    out, n = [], len(units)
+    for u, (kind, i, idx, unit, starts) in enumerate(units):
+        listed = None
+        cand = [k for k, li in enumerate(idx) if lines[li].rstrip(" *_\t").endswith((":", "\u2014", "\u2013"))]
+        nested = []
+        if kind == "unit" and cand:
+            j = u + 1
+            while (j < n and units[j][0] == "unit" and ITEM_RE.match(lines[units[j][1]])
+                   and _indent(lines[units[j][1]]) > _indent(lines[i])):
+                nested.append(units[j])
+                j += 1
+        if cand and (nested or cand[0] < len(idx) - 1):
+            ends = [starts[k + 1] - 1 if k + 1 < len(starts) else len(unit) for k in range(len(idx))]
+            intro = None
+            for _s, e, _n, _sp, _kd in _groups(unit, _mask(unit, _Para()), memory):
+                k = bisect.bisect_right(starts, e - 1) - 1
+                if k in cand and INTRO_REST_RE.match(unit, e, ends[k]):
+                    intro = k
+                    break
+            if intro is not None and (nested or intro < len(idx) - 1):
+                text, st = unit[:ends[intro]], list(starts[:intro + 1])
+                parts = [(li, BULLET_RE.sub("", lines[li].strip(), count=1)) for li in idx[intro + 1:]]
+                for li, x in parts:
+                    text += (" " if len(st) == intro + 1 else LIST_JOIN)
+                    st.append(len(text))
+                    text += x
+                at, inner = len(text), list(idx)
+                for _kd, _i, nidx, ntext, _ns in nested:
+                    text += (" " if len(st) == intro + 1 else LIST_JOIN)
+                    st += [len(text)] * len(nidx)
+                    text += BULLET_RE.sub("", ntext, count=1)
+                    inner += nidx
+                idx, unit, starts, listed = inner, text, st, (ends[intro], at)
+        out.append((kind, i, idx, unit, starts, listed))
+    return out
+
+
+def _fields(lines, idx):
+    """For each line of a unit, the bold field it belongs to ('updated' for '**Updated:** ...' and the lines that
+    continue it), '' before any field."""
+    out, cur = [], ""
+    for li in idx:
+        m = FIELD_RE.match(lines[li])
+        if m:
+            cur = m.group(1).strip().lower()
+        out.append(cur)
+    return out
+
+
 def scan_text(text, first_line=1, only=None, memory=False):
     """Every ruling in a markdown text: [{line, lines, marker, start, end, spans, text, section_date,
     heading_date}]. `line` is the physical line of the marker (of the unit's first line for a section
     or label ruling); `lines` every physical line of its unit; `text` the unit, wrapped lines joined.
     `only` (a set of line numbers) restricts the result to rulings whose unit touches one of those
     lines, plus the items of a ruling section whose heading line is in it (a retitled or deleted
-    heading un-rules them); headings and fences are still tracked across the whole text."""
+    heading un-rules them); headings and fences are still tracked across the whole text. A list a marker
+    introduces is part of its unit (_absorbed; the ruling carries `list_at`); a header field above the first
+    section is never a ruling (SNAPSHOT_FIELDS)."""
     out = []
     lines = _blank_comments(text.splitlines())
     stack = []          # open ruling sections, outermost first: (level, date, says-standing, touched)
     heads = []          # open headings that carry a date: (level, date)
-    for kind, i, idx, unit, starts in _units(lines):
+    preamble = True     # above the first section heading (level 2 or deeper): where the header block lives
+    for kind, i, idx, unit, starts, listed in _absorbed(lines, list(_units(lines)), memory):
         if kind == "heading":
             h = HEADING_RE.match(unit)
             level = len(h.group(1))
+            if level >= 2:
+                preamble = False
             while stack and stack[-1][0] >= level:
                 stack.pop()
             while heads and heads[-1][0] >= level:
@@ -560,14 +671,22 @@ def scan_text(text, first_line=1, only=None, memory=False):
                 "section_date": stack[-1][1] if stack else "", "heading_date": heads[-1][1] if heads else "",
                 "standing_section": bool(stack and stack[-1][2]),
                 "section_line": stack[-1][4] if stack else 0}
-        groups = _groups(unit, _mask(unit, _Para()), memory)
+        # dropped before the merge: a header field's citation of a ruling is not the ruling (SNAPSHOT_FIELDS), and a
+        # nested item's own markers are read in its own unit, never twice nor merged into the list's intro
+        fields = _fields(lines, idx) if preamble else None
+        nest = listed[1] if listed else len(unit)
+
+        def skip(p, fields=fields, starts=starts, nest=nest):
+            return p >= nest or bool(fields) and fields[bisect.bisect_right(starts, p) - 1] in SNAPSHOT_FIELDS
+        groups = _groups(unit, _mask(unit, _Para()), memory, skip)
         if groups:
             if not hit:
                 continue        # a marker ruling does not depend on its section heading
             for s, e, name, spans, kinds in groups:
                 k = bisect.bisect_right(starts, s) - 1
+                intro = bool(listed) and e <= listed[0] and bool(INTRO_REST_RE.match(unit, e, listed[0]))
                 out.append(dict(base, line=first_line + idx[k], marker=name, start=s, end=e, spans=spans,
-                                kinds=sorted(kinds)))
+                                kinds=sorted(kinds), list_at=listed[0] if intro else None))
             continue
         if stack and _section_item(lines, i, kind):
             out.append(dict(base, line=first_line + i, marker="section", start=0, end=0, spans=[], kinds=["section"]))
@@ -743,6 +862,29 @@ def _window(line, s, e):
     return a, b, a0
 
 
+def _label_title(line, lab):
+    """A titled label's title -- the text after the colon inside its bold, '**Owner ruling: model names.**' -- or ''
+    for a label whose bold ends at its colon ('**Locked decisions:** a; b', '**Owner rulings (call: 3):** a; b')."""
+    m = LABEL_BOLD_RE.search(line, 0, lab.end())
+    text = m.group(1).strip() if m else ""
+    _head, colon, rest = text.partition(":")
+    return rest.strip() if colon and not text.endswith(":") and re.search(r"\w", rest) else ""
+
+
+def _marker_note(line, s, e):
+    """The parenthetical a marker at line[s:e] carries: the one right after it ('on the owner's ruling (`cdedfa0`, ...)')
+    or the one it stands in ('(owner ruling 2026-10-09, `cdedfa0`)'); '' for none."""
+    m = NOTE_AFTER_RE.match(line, e)
+    if m:
+        return m.group(1)
+    o = line.rfind("(", 0, s)
+    if o >= 0 and ")" not in line[o:s]:
+        c = line.find(")", e)
+        if c >= 0 and "(" not in line[e:c]:
+            return line[o + 1:c]
+    return ""
+
+
 def _cut(text, pos, limit):
     """At most `limit` characters of `text`, keeping the part around character `pos`."""
     if len(text) <= limit:
@@ -840,6 +982,64 @@ def _quoted(s, state=(False, False), end=None, start=0, closes=False):
     return -1 if closes else (quote, curly)
 
 
+def _inside(s):
+    """[bool] per character of `s`: inside parentheses, a quotation (_quoted's rules) or a code span -- where a mark
+    ends no sentence of a list and separates none of its items: '(owner: "solved"; blocker lifted)' and
+    '"how did you hear about us?"' are one item's words (measured: a 40-item list's first ';' sat inside an item's
+    note, so the list read as two items and every later item as no part of the ruling; UPGRADE-QUEUE 2026-10-03)."""
+    lq, out = _live_quotes(s), [False] * len(s)
+    for a, b in _code_spans(s):
+        for k in range(a, b):
+            out[k] = True
+    depth, quote, curly = 0, False, False
+    for i, c in enumerate(lq):
+        if out[i]:
+            continue
+        if c == '"':
+            if not quote and i > 0 and lq[i - 1].isdigit():
+                pass                    # an inch mark opens no quote
+            elif curly:
+                curly = False
+            else:
+                quote = not quote
+        elif c == "\u201c":
+            curly = True
+        elif c == "\u201d":
+            curly = quote = False
+        elif c == "(" and not (quote or curly):
+            depth += 1
+        elif c == ")" and not (quote or curly) and depth:
+            depth -= 1
+        out[i] = depth > 0 or quote or curly
+    return out
+
+
+def _list_end(text, start):
+    """Where the sentence holding text[start:] ends (just past its boundary mark, or the text's end). When a ' · '
+    list follows `start`, a boundary inside parentheses or a quotation ends an item's note, and one right before the
+    next ' · ' ends an item ('... harder to read"). · sending ...'), never the list."""
+    if not MIDDOT_RE.search(text, start):
+        m = BOUNDARY_RE.search(text, start)
+        return m.end() if m else len(text)
+    inside = _inside(text)
+    for m in BOUNDARY_RE.finditer(text, start):
+        if not inside[m.start()] and not _NEXT_ITEM_RE.match(text, m.end()):
+            return m.end()
+    return len(text)
+
+
+def _split_list(tail):
+    """`tail` split at its list separators (LIST_SEP_RE), never at one inside parentheses or a quotation."""
+    inside = _inside(tail)
+    out, last = [], 0
+    for m in LIST_SEP_RE.finditer(tail):
+        if not inside[m.start()]:
+            out.append(tail[last:m.start()])
+            last = m.end()
+    out.append(tail[last:])
+    return out
+
+
 def _scope_next(text, p):
     """Whether text[p] ends a sentence and the next one limits the ruling before it ('This is only for ...',
     'Except ...')."""
@@ -904,6 +1104,7 @@ def rulings_in_text(rel, text, first_line=1, limit=SUMMARY_MAX, only=None):
     memory = rel.rsplit("/", 1)[-1].lower() == "memory.md"
     for h in scan_text(text, first_line, only, memory):
         ln = h["text"]
+        lab, title = None, ""
         if h["spans"]:
             a, b, a0 = _window(ln, h["start"], h["end"])
             raw = ln[a:b]
@@ -911,24 +1112,30 @@ def rulings_in_text(rel, text, first_line=1, limit=SUMMARY_MAX, only=None):
             s0 = max([a0] + [m.end() for m in SEGMENT_RE.finditer(ln, a0, h["start"])])
             segment = normalize(LEAD_RE.sub("", _clean(ln[s0:b]), count=1)) if s0 > a0 else ""
             # a list after the marker ('Do NOT re-propose: a · b · c.'), to its sentence's end however
-            # long: the window stops at WINDOW_MAX, a list's last items do not
-            end = BOUNDARY_RE.search(ln, h["end"])
-            tail = ln[h["end"]:end.end() if end else len(ln)]
+            # long: the window stops at WINDOW_MAX, a list's last items do not. A list the marker introduces
+            # (_absorbed) runs to the unit's end: its items are lines, each may end a sentence
+            tail = ln[h["end"]:] if h.get("list_at") is not None else ln[h["end"]:_list_end(ln, h["end"])]
             pos = len(_clean(ln[a:h["start"]]))
             date = _date(ln, a, b, h["spans"], h["section_date"], h["heading_date"])
         else:
             raw = LEAD_RE.sub("", ln, count=1)
             clause = segment = ""
             lab = LABEL_RE.match(ln) if h["marker"] == "label" else None
-            tail = ln[lab.end() - 1:] if lab else raw
+            # a titled label ('**Owner ruling: model names.** ...') is one ruling: a list is read from its title only
+            title = _label_title(ln, lab) if lab else ""
+            tail = title or (ln[lab.end() - 1:] if lab else raw)
             pos = 0
             d = DATE_RE.search(ln)
             date = d.group(1) if d else (h["section_date"] or h["heading_date"])
         # a list-shaped ruling's items, each with its own words: a dropped item is a dropped killed
         # option, so a match that keeps the ruling must keep each item (review FK-HIST#7)
-        parts = [_clean(x).strip(" :*_.") for x in LIST_SEP_RE.split(tail)]
+        parts = [_clean(x).strip(" :*_.") for x in _split_list(tail)]
         parts = [x for x in parts if x]
-        list_items = [_list_item(x) for x in parts] if len(parts) >= LIST_MIN_ITEMS else []
+        # three items make a list; so do two that ' · ' or their own lines set apart ('a · b' -> 'c · a · b' kept
+        # every item: UPGRADE-QUEUE 2026-10-03), never two halves of one sentence a ';' joins
+        listy = len(parts) >= LIST_MIN_ITEMS or (len(parts) >= 2 and (h.get("list_at") is not None
+                                                                      or bool(MIDDOT_RE.search(tail))))
+        list_items = [_list_item(x) for x in parts] if listy else []
         clean = LEAD_RE.sub("", _clean(raw), count=1)
         pos = max(0, pos - (len(_clean(raw)) - len(clean)))
         summary = _cut(_cells(clean), pos, limit)
@@ -956,6 +1163,22 @@ def rulings_in_text(rel, text, first_line=1, limit=SUMMARY_MAX, only=None):
         tokens = ruling_tokens(fragment)
         for it in list_items:
             tokens |= it["tokens"]      # a long list's every item, not only the 400 characters kept
+        # a CITATION of a ruling (CITE_RE: every marker of the ruling names the owner's ruling, or an 'Owner ruling'
+        # label): its KEY words -- its own clause's subject, the marker's words aside; a label's title, or the first
+        # sentence after the label -- and the commit ids its marker's own note names (Project.cited)
+        cite, key, cites = False, frozenset(), frozenset()
+        if h["spans"]:
+            if all(CITE_RE.search(normalize(ln[s:e])) for s, e in h["spans"]):
+                own = set()
+                for s, e in h["spans"]:
+                    own |= ruling_tokens(normalize(ln[s:e]))
+                cite, key = True, frozenset(_subject(clause) - own)
+                cites = frozenset(COMMIT_RE.findall(normalize(_marker_note(ln, h["start"], h["end"]))))
+        elif lab and CITE_RE.search(normalize(ln[:lab.end()])):
+            first = title or ln[lab.end() - 1:]
+            m = BOUNDARY_RE.search(first)
+            first = normalize(_clean(first[:m.end()] if m else first))
+            cite, key, cites = True, frozenset(_subject(first)), frozenset(COMMIT_RE.findall(first))
         out.append({"path": rel, "line": h["line"], "lines": h["lines"], "marker": h["marker"], "date": date,
                     "summary": summary, "superseded": superseded, "hidden_items": hidden,
                     "fragment": fragment, "tokens": tokens, "clause": clause, "segment": segment, "items": list_items,
@@ -963,7 +1186,11 @@ def rulings_in_text(rel, text, first_line=1, limit=SUMMARY_MAX, only=None):
                     # the ruling section it sits in (its items vouch for each other together)
                     "section_key": "%s:%d" % (rel, h["section_line"]) if h.get("section_line") else "",
                     # each marker's own words: a kept ruling must still carry every one of them
-                    "anchors": [normalize(ln[s:e]) for s, e in h["spans"]]})
+                    "anchors": [normalize(ln[s:e]) for s, e in h["spans"]],
+                    "cite": cite, "key": key, "cites": cites,
+                    # the whole unit's words, a struck-through subject included ('~~Model names~~ **RULED ...**'):
+                    # what this ruling's LINE holds when a citation of it is weighed (_cites)
+                    "unit": frozenset(ruling_tokens(normalize(ln)))})
     return out
 
 
@@ -1155,6 +1382,39 @@ def _carried(it, c, items, lenient):
     return False
 
 
+def _stands(it, c, items):
+    """Whether current ruling `c` still carries list item `it` (of a removed list whose items are `items`) for the
+    list rule (kept_as_ruling's last path): main's 60% share of its words with its trailing note's facts in `c` too,
+    or ONE item of `c` holding 60% of its own words word for word whose note is its note, dropped, or only re-dated
+    (_redated), and that is not another old item's words (a twin dated apart never vouches: review 4, R4). Neither
+    _carried mode fits: the share alone reads a moved limit or cap as the same item (review 4, L4), and the exact
+    path's typo and shortening branches carry a short list's narrowed item that main flags (review 4, L2, L6)."""
+    toks, note = it["tokens"], it.get("note", frozenset())
+    if len(toks & c["tokens"]) >= ITEM_SHARE * len(toks) and note <= c["tokens"]:
+        return True
+    own = it.get("own", toks)
+    others = [o.get("own", o["tokens"]) for o in items if o is not it and o["tokens"]]
+    for x in c.get("items") or ():
+        if (own and len(own & x["tokens"]) >= ITEM_SHARE * len(own) and not any(x["tokens"] <= o for o in others)
+                and (not _conflict(note, x["note"]) or _redated(note, x["note"], it.get("note_text", ""), x["note_text"]))):
+            return True
+    return False
+
+
+def _cites(r, c):
+    """Whether current ruling `c` -- its whole unit: its line, a struck-through subject and the sentences after its
+    marker -- holds what CITATION `r` names (rulings_in_text's `key` and `cites`): EVERY one of r's key words, two at
+    least, each word for word or a typo apart ('updated' is 'update'); or the commit r's marker's own note names and
+    two of r's other key words. A key word c lacks is another subject: 'Owner ruling: the model picker' is not
+    vouched for by a ruling on model names."""
+    key, unit = r.get("key") or frozenset(), c.get("unit") or frozenset()
+    have = {k for k in key if k in unit or any(_near(k, u) for u in unit)}
+    if len(key) >= CLAUSE_MIN_TOKENS and len(have) == len(key):
+        return True
+    ids = r.get("cites") or frozenset()
+    return bool(ids & unit) and len(have - ids) >= CLAUSE_MIN_TOKENS
+
+
 def kept_as_ruling(r, idx, contrast=None, old_notes=None):
     """(kept, missing items): is ruling `r` -- from a HEAD copy or an old commit -- still a ruling among
     the current ones (`idx`, build_index)? Kept, in this order, when:
@@ -1183,7 +1443,11 @@ def kept_as_ruling(r, idx, contrast=None, old_notes=None):
     C14) -- when it already stood beside this one (`old_notes`: the notes its old copy carried each core under,
     _old_notes; _stood_beside, keyed by the core or clause the match was made on, review 4, R1). The same ruling
     re-dated, reconfirmed or corrected vouches (review 4, F1) -- when only its note's STAMP dates changed, never a
-    number, a price, a version or a limit date (_redated; review 4, R2)."""
+    number, a price, a version or a limit date (_redated; review 4, R2).
+    Last, a LIST ruling is kept when each item is carried (_stands: main's 60% rule, its note compared as a note) by
+    some ruling of its own file,
+    whatever the order, the window or the lines the items sit on; the items none carries are `missing` when some
+    others are carried (UPGRADE-QUEUE 2026-10-03). Prose rulings have only the paths above."""
     frag = r["fragment"]
     if not frag:
         return True, []
@@ -1241,6 +1505,19 @@ def kept_as_ruling(r, idx, contrast=None, old_notes=None):
             return True, []
         if best is None or len(missing) < len(best):
             best = missing
+    # a list is a set of killed options: it stands while each item does. An item carried by a ruling of its own file
+    # (_stands: main's 60% rule, its note compared as a note) stands whatever the order, the window or the lines it
+    # sits on; only the items no ruling there carries are gone (measured: a 40-item list grown in front read as a
+    # whole dropped ruling at every wrap, and no ack could clear it; UPGRADE-QUEUE 2026-10-03). None carried: no
+    # list is left to have pruned. Another file's ruling never vouches: an id or a word it shares names another thing.
+    named = [it for it in items if it["tokens"]]
+    if named:
+        peers = [c for c in idx["entries"] if c["parts"] is None and c.get("path") == here]
+        gone = [it for it in named if not any(_stands(it, c, items) for c in peers)]
+        if not gone:
+            return True, []
+        if len(gone) < len(named) and (best is None or len(gone) < len(best)):
+            best = gone
     return False, [it["text"] for it in best or []]
 
 
@@ -1673,6 +1950,18 @@ class Project(object):
                                                   'nothing this run' % (_cut(a["text"], 0, 60), a["rel"], a["line"]))
         return self._acks
 
+    def cited(self, r):
+        """Whether removed ruling `r` is a CITATION (rulings_in_text's `cite`; a list never is: its items are its
+        rulings) of a ruling that a current ruling of its OWN file holds (_cites). Measured 2026-10-09: rotating a
+        session section that cited the owner's model-name ruling into archive/HANDOFF-history-2026-10.md raised
+        THRESHOLDs while the ruling stood as a 'RULED 2026-10-08' line of the same HANDOFF (UPGRADE-QUEUE 2026-10-03,
+        third shape). Only a citation whose text SURVIVES asks (verdict): a deleted line leaves no record to re-read,
+        so it is reported however its words match. Another file's ruling never vouches."""
+        if not r.get("cite") or r.get("items"):
+            return False
+        own = str(r.get("path", "")).casefold()
+        return any(_cites(r, c) for c in self.current() if str(c.get("path", "")).casefold() == own)
+
     def verdict(self, r, contrast=None, old_notes=None):
         """What became of a ruling that a HEAD copy or an old commit carried (`contrast`, `old_notes`: see
         kept_as_ruling):
@@ -1683,13 +1972,17 @@ class Project(object):
         ("moved", rel)      its text survives only in `rel`, a file the briefing does not read as
                             standing (an archive, a note);
         ("lost", "")        nowhere.
-        Acknowledgements are applied afterwards, to the whole run's removals at once (apply_acks)."""
+        A CITATION whose text survives (rotated into an archive, or un-marked) is kept while the ruling it cites
+        stands in its own file (cited). Acknowledgements are applied afterwards, to the whole run's removals at
+        once (apply_acks)."""
         kept, missing = kept_as_ruling(r, self.index(), contrast, old_notes)
         if kept:
             return "kept", ""
         if missing:
             return "pruned", _items_text(missing)
         if text_survives(r, self.corpus(), self.cored_corpus):
+            if self.cited(r):
+                return "kept", ""       # a citation rotated or un-marked, its ruling standing in its own file
             standing = {_key(p) for p in self.standing}
             own = str(r.get("path", "")).casefold()
             # the ruling's own file first: text still where it was (a standing file, or an archive whose
@@ -2316,7 +2609,22 @@ def removed(proj, count, limit=SUMMARY_MAX):
         out.append(r)
     if unread:
         errs.append("%d changed cop%s could not be read (git cat-file)" % (unread, "y" if unread == 1 else "ies"))
-    return out, errs, len(shas), (min(dates) if dates else "")
+    return _one_prune(out), errs, len(shas), (min(dates) if dates else "")
+
+
+def _one_prune(rems):
+    """`rems` with a list's pruned items reported once: every older copy of a list in the window still had the items
+    gone now, so each names the same items -- one loss, printed by its newest removal (the first in the list).
+    Measured: one item deleted from a list reordered four times in the window printed five THRESHOLDs."""
+    seen, out = set(), []
+    for r in rems:
+        if r.get("verdict") == "pruned":
+            key = ((r.get("path") or "").casefold(), r.get("where"))
+            if key in seen:
+                continue
+            seen.add(key)
+        out.append(r)
+    return out
 
 
 # ---------------------------------------------------------------------------------------
@@ -2535,7 +2843,7 @@ def lost(proj, history=DEFAULT_HISTORY):
         if key not in seen:
             seen.add(key)
             found.append(r)
-    still, cleared = apply_acks(proj, found)
+    still, cleared = apply_acks(proj, _one_prune(found))
     lines = []
     for r in still:
         if r["sha"] is None:

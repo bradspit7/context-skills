@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-11.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-11.2 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -197,15 +197,26 @@ A build started at the wrap is one the owner waits for, however it runs.
    the tree, and, unless the `worktree.baseRef` setting is `head`, cuts it from origin's default
    branch rather than the local HEAD. Measured once: while one existed, every `rglob` test in the main
    checkout saw each source file twice.) The session's own context is too large to build in.
-4. **Never wait for it.** Go on with the owner's work. (Measured: builds take 4 to 18 minutes.) When
-   the helper returns, **apply it on the main thread, remove the build worktree, run the test once, run
-   the propagation a wrap would run for those files** (for a skill, `update-context`'s Step 7 probe),
-   **and commit** with a trailer, removing its queue entry in the same commit:
-   `git add <paths>` then `git commit -m "<subject>" -m "Upgrade: <one plain sentence>" -- <paths>`.
-   The removal comes before the gating test run: `git worktree unlock <path>` first if the harness
-   locked it, then `git worktree remove <path>` and `git branch -d build/<topic>` (`-D` only after
-   confirming main holds the same bytes, when the build was squash-merged). A harness worktree left
-   under `.claude/worktrees/` is a second copy of every file the main checkout's tests scan.
+4. **Never wait for it.** Go on with the owner's work. (Measured: most builds take 4 to 18 minutes,
+   but one whose acceptance includes a serial mutation battery can take far longer -- one battery alone
+   ran about 100 minutes -- so time its first rows before giving an ETA.) When the helper returns,
+   **land it on the main thread with one command**, then run the propagation a wrap would run for those
+   files (for a skill, `update-context`'s Step 7 probe):
+   `python ~/.claude/skills/reflect-upgrades/scripts/land-build.py <worktree> --item "<queue title>" --subject "<subject>" --upgrade "<one plain sentence>" --verify "<the project's quick verify loop>"`
+   (for example `--verify "bash run-tests.sh --quick"`, whatever the project's own quick test command
+   is). **Pass the project's quick verify loop, not
+   only the build's own test:** cross-cutting lints scan every test file, so a new test can turn a
+   DIFFERENT suite red while its own stays green. The script brings the branch's paths over and removes
+   the queue entry (and a Partial's `.patch` and `.base`) in one commit with the trailer and a pathspec,
+   so a sibling session's staged work stays out. It refuses, changing nothing, a dirty worktree, a path
+   main also changed since the branch's base, a main checkout dirty in a path it touches, or a title
+   that is not exactly one queue heading. It byte-checks the COMMITTED tree (a check before `git add`
+   reads an untracked new file as deleted and fails on identical bytes), and only then removes the
+   worktree, before the gating verify run: `git worktree unlock <path>` first if the harness locked it,
+   then `git worktree remove <path>` and `git branch -d build/<topic>` (as `-D`, since main gets the
+   branch's bytes, not its commits; the byte check is what licenses it). A harness
+   worktree left under `.claude/worktrees/` is a second copy of every file the main checkout's tests
+   scan. It exits with the verify's code; `--dry-run` prints the plan and changes nothing.
    The trailer is the record (a ledger can derive *built* from it, in the repo where it landed), so a
    delivered upgrade gets exactly one, on the commit that delivers it, and a test-only, review-fix or
    fix-up commit gets none. If the session ends first, the entry stays queued and the next session's
@@ -221,7 +232,7 @@ A build started at the wrap is one the owner waits for, however it runs.
    refuses a worktree holding a mutation battery's sentinel, an emptied one, or one with nothing to park.
    **Park only a worktree this session's helper used;** the briefing's and wrap's `WORKTREES` lines
    name every other one, and those are reported, never parked. When the build lands, its commit
-   removes the queue entry **and** the partial's `.patch` and `.base` files.
+   removes the queue entry **and** the partial's `.patch` and `.base` files (`land-build.py` does both).
 5. **Too big for one session** → queue it (cap 5).
 6. **Projects with live external writes or regulated personal data:** the build may only add tests
    that import no write client, and must not touch the project's sensitive-data/secret guard, its git

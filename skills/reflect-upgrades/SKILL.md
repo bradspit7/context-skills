@@ -244,12 +244,13 @@ A build started at the wrap is one the owner waits for, however it runs.
    central worktree; `main` is fast-forwarded only when the shared checkout is clean and no other
    central session is live.
 
-**Done means adopted, not built.** An upgrade moves **filed → built → adopted → observed**. *Built*:
+**Done means adopted, not built.** An upgrade moves **filed → built → adopted → confirmed**. *Built*:
 the artifact exists with a RED/GREEN proof. *Adopted*: the project reaches it through its normal work
-path — a hook, the runner, a lifecycle step — and it has run that way at least once. *Observed*: a later
-session recorded it catching, removing or preventing something. **The owner-facing test:** start from
-an ordinary request; if anyone has to name the upgrade or remember its command for the benefit to
-appear, it is not adopted. The wrap records adoption in the handoff, not just the build.
+path — a hook, the runner, a lifecycle step — and it has run that way at least once. *Confirmed*: a later
+session recorded it catching, removing or preventing something, as a `confirmed` event (Step 6); the
+defect coming back after it shipped is the opposite record, a `recurrence` event. **The owner-facing
+test:** start from an ordinary request; if anyone has to name the upgrade or remember its command for
+the benefit to appear, it is not adopted. The wrap records adoption in the handoff, not just the build.
 
 ## Step 6 — Report and record
 
@@ -278,9 +279,19 @@ session:   <uuid>            (when the session id is visible)
 `nudge` when prompted by `[upgrade-reflection]`, `manual` otherwise. If you keep the companion
 `upgrade-ledger` machinery, that is `upgrade-ledger.py record --layer ... --status ... --candidate
 "..." --reason "..." [--session <uuid>]`. A later **catch** or **recurrence** is an event, with a
-repo-qualified id and an explicit owner (`upgrade-ledger.py event --candidate <project>:<id> --owner
-<project> --event <confirmed|observed> --evidence-ref <where> --note "<what ran and what it caught>"`).
-If you cannot record it in the moment, say so in the report — never silently skip.
+repo-qualified id and an explicit owner — one name per meaning:
+
+- it **caught, removed or prevented** something → `confirmed`, bound to the deploy it names
+  (`upgrade-ledger.py event --candidate <project>:<id> --owner <project> --event confirmed
+  --mechanism-key <key> --commit <sha> --evidence-ref <where> --note "<what ran and what it caught>"`;
+  a trailer-built upgrade's key is `upgrade-trailer` and its sha is the one the report prints);
+- the **defect came back** after it shipped → `recurrence`, which marks the mechanism ineffective
+  (`--event recurrence --evidence-ref <where> --note "<how the defect came back>"`).
+
+A row recorded under the wrong name is corrected append-only, never edited
+(`--event retracted --supersedes <its exact first-field stamp> --note "<why>"`). The old name
+`observed` is refused, because it was written for both meanings; existing rows still read as
+recurrences. If you cannot record it in the moment, say so in the report — never silently skip.
 
 **Never drop a surviving lesson.** Each named non-reason licensed a real near-drop: *"the docket is on
 rotation-hold"* (a hold blocks structural rotation, never a queue line or an inbox filing); *"keep the

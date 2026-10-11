@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-08.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-11.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -175,6 +175,11 @@ A build started at the wrap is one the owner waits for, however it runs.
   partial recorded (a FAILED count, a passing run) is a **lead, not a result**: re-run it.
 - **Mid-session:** a nudge or manual firing starts this session's build when none has started yet --
   its new lesson on rungs 1-5 if one fits one session, else the oldest queued item.
+- **Topping up the queue from the docket:** when the queue holds fewer than its cap of 5, append the top
+  open row of the project's docket as a new entry before the build starts (central: the first row under
+  `## Open — pick up here` in `roadmap.md`, kept in value order), its `- **Source:**` naming the row id. A
+  sorted docket then drains one row per session whenever fresh lessons are scarce, and a fresh lesson
+  never waits behind more than four. The row stays in the docket until the build that lands it closes it.
 
 1. **Look again before building** — if the build edits a hook or script, query the capability index
    for other copies of it. Shared logic lives once; project differences live in per-project config;

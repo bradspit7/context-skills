@@ -192,6 +192,8 @@ If a leg fails, compensate only transaction-owned bytes that still equal the san
 
 **Why a probe here rather than an edit-time hook.** A hook matcher is a tool-name filter, so a hook keyed to the file-writing tools is blind to every other route that reaches the same files — a `cp`, a `sed -i`, an external editor, an agent using a shell tool — and an under-scoped matcher fails OPEN, silently. A reporter that **compares the actual trees** is route-independent by construction: it does not care how the bytes got there, which is the only property that makes the check trustworthy.
 
+**A direct edit of the rulebook or a skill runs the project's quick verify loop — also before `git add`.** If this session edited the global instructions, or a skill, command, hook or script the project's tests pin, directly rather than through a landed build (which already runs it), run the project's quick verify loop — the one its CLAUDE.md names — not only the edited file's own test, because a cross-cutting suite can pin bytes that file's own test never reads; read the failing-suite list, and never commit a red suite as clean.
+
 Auto-commit is the default:
 
 ```bash

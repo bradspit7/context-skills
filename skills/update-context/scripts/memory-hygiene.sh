@@ -12,7 +12,19 @@
 #   2. Lists MEMORY.md index lines over 200 chars (line number + length). REPORT-ONLY:
 #      trimming is a judgment MOVE (verify the detail lives in the topic file first).
 #   3. With [mirror_dir]: copies *.md into the mirror (never *.md.bak), then verifies
-#      byte parity. Mirror-only strays are REPORTED, never deleted.
+#      byte parity. A mirror-only *.md (in the mirror, not in live) is classified when
+#      <memory_dir>/.restored-from names the commit the mirror was last copied INTO live
+#      from (a restore step writes it; a dotfile, so it is never mirrored or indexed):
+#        deleted live  -- present at that commit with the SAME bytes, so live received it and
+#                         it is gone there: REMOVED from the mirror, named with its recovery
+#                         command (git show <sha>:<path>);
+#        arrived later -- absent from that commit's tree (a pull brought it after the restore):
+#                         named, never deleted; the next restore copies it into live;
+#        conflict      -- present at that commit but its bytes changed since: named, never
+#                         deleted.
+#      No stamp, a stamp that is not a full commit id, a commit the mirror's repository
+#      does not have, or no git: the STRAY report, unchanged, plus one line saying why the
+#      check did not run. Only a classified deletion is ever removed.
 # Always exits 0. Writes ONLY inside <memory_dir> (pass 1) and [mirror_dir] (pass 3).
 
 set -u
@@ -69,6 +81,93 @@ else
   echo "(no MEMORY.md index at $IDX)"
 fi
 
+# git, run in the mirror's own repository. cd in a subshell rather than -C: under
+# MSYS_NO_PATHCONV (needed so <sha>:<path> reaches git verbatim) a POSIX -C path would
+# not be converted either. A GIT_DIR/GIT_WORK_TREE leaked from a hook would point the
+# lookups at another repository, so they are dropped.
+mgit() {
+  ( cd "$MIRROR" 2>/dev/null || exit 128
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+    MSYS_NO_PATHCONV=1 git "$@" )
+}
+
+# The commit live memory was last restored from, checked against the mirror's repository.
+# Sets RSHA (full id) and RPREFIX (the mirror's path inside its repo) and returns 0, or
+# sets WHY and returns 1. A symbolic name ("HEAD", a branch) or an abbreviated id is
+# refused: it would name whatever commit it points at NOW, not the one restored from.
+restore_point() {
+  RSHA=""; RPREFIX=""; WHY=""
+  local f s
+  f="$MEMDIR/.restored-from"
+  if [ ! -f "$f" ]; then
+    WHY="no .restored-from stamp in $MEMDIR, so nothing records which commit live memory was last restored from"
+    return 1
+  fi
+  s=$(sed -n '1p' "$f" 2>/dev/null | tr -d '\r')
+  case "$s" in
+    ""|*[!0-9a-f]*) WHY="the .restored-from stamp does not hold a full commit id"; return 1 ;;
+  esac
+  if [ "${#s}" -ne 40 ] && [ "${#s}" -ne 64 ]; then
+    WHY="the .restored-from stamp does not hold a full commit id"
+    return 1
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    WHY="git is not on PATH"
+    return 1
+  fi
+  if ! RPREFIX=$(mgit rev-parse --show-prefix 2>/dev/null); then
+    RPREFIX=""
+    WHY="the mirror is not inside a git repository"
+    return 1
+  fi
+  if ! mgit cat-file -e "$s^{commit}" 2>/dev/null; then
+    WHY="the .restored-from stamp names $s, a commit the mirror's repository does not have"
+    return 1
+  fi
+  RSHA="$s"
+}
+
+# One mirror-only file, against the restore commit. Removes it ONLY when that commit holds
+# it with the same bytes; every other outcome leaves it and names it.
+classify() {
+  local m b ent rc mode type oid rest
+  m="$1"; b="$2"
+  ent=$(mgit ls-tree --full-tree "$RSHA" -- "$RPREFIX$b" 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "UNKNOWN $b could not be looked up in $SHORT (git ls-tree exited $rc): left in place"
+    N_UNK=$((N_UNK+1)); return
+  fi
+  if [ -z "$ent" ]; then
+    echo "ARRIVED $b is not in $SHORT, the commit live memory was restored from: it reached the mirror later (a pull), so it is left in place and the next bootstrap copies it into live"
+    N_ARR=$((N_ARR+1)); return
+  fi
+  read -r mode type oid rest <<< "$ent"
+  case "$ent" in *"
+"*) type="(several entries)" ;; esac
+  if [ "$type" != "blob" ] || { [ "$mode" != "100644" ] && [ "$mode" != "100755" ]; }; then
+    echo "UNKNOWN $b is not a plain file at $SHORT ($mode $type): left in place"
+    N_UNK=$((N_UNK+1)); return
+  fi
+  mgit cat-file blob "$oid" 2>/dev/null | cmp -s - "$m"
+  local ps=("${PIPESTATUS[@]}")
+  if [ "${ps[0]}" -ne 0 ] || [ "${ps[1]}" -gt 1 ]; then
+    echo "UNKNOWN $b could not be compared with its blob at $SHORT: left in place"
+    N_UNK=$((N_UNK+1)); return
+  fi
+  if [ "${ps[1]}" -eq 1 ]; then
+    echo "CONFLICT $b was deleted live here but changed elsewhere since $SHORT: left in place (compare: git diff $SHORT -- $RPREFIX$b; remove it from the mirror by hand if the deletion should win)"
+    N_CON=$((N_CON+1)); return
+  fi
+  rm -f "$m"
+  if [ -e "$m" ]; then
+    echo "ERROR   $b was deleted live but could not be removed from the mirror"
+    N_UNK=$((N_UNK+1)); return
+  fi
+  echo "DELETED $b was deleted live (restored into live at $SHORT, unchanged since): removed from the mirror. Recover: git show $RSHA:$RPREFIX$b"
+  N_DEL=$((N_DEL+1))
+}
+
 if [ -n "$MIRROR" ]; then
   echo
   echo "== MIRROR SYNC ($MEMDIR -> $MIRROR) =="
@@ -92,11 +191,32 @@ if [ -n "$MIRROR" ]; then
       b=$(basename "$f")
       cmp -s "$f" "$MIRROR/$b" || { echo "PARITY-FAIL $b"; BAD=1; }
     done
+    # Mirror-only files: a deletion in live, or a file that reached the mirror after live
+    # was last restored from it? Only the restore commit can tell them apart (pass 3 above).
+    NONLY=0
     for m in "$MIRROR"/*.md; do
       [ -f "$m" ] || continue
-      b=$(basename "$m")
-      [ -f "$MEMDIR/$b" ] || echo "STRAY   $b exists only in the mirror (deleted live? remove by hand if intended)"
+      [ -f "$MEMDIR/$(basename "$m")" ] || NONLY=$((NONLY+1))
     done
+    if [ "$NONLY" -gt 0 ]; then
+      if restore_point; then
+        SHORT=$(printf '%s' "$RSHA" | cut -c1-12)
+        N_DEL=0; N_ARR=0; N_CON=0; N_UNK=0
+        for m in "$MIRROR"/*.md; do
+          [ -f "$m" ] || continue
+          b=$(basename "$m")
+          [ -f "$MEMDIR/$b" ] || classify "$m" "$b"
+        done
+        echo "deletion check (live restored from $SHORT): $N_DEL removed, $N_ARR arrived later, $N_CON conflict(s), $N_UNK unknown"
+      else
+        for m in "$MIRROR"/*.md; do
+          [ -f "$m" ] || continue
+          b=$(basename "$m")
+          [ -f "$MEMDIR/$b" ] || echo "STRAY   $b exists only in the mirror (deleted live? remove by hand if intended)"
+        done
+        echo "NOT-RUN deletion check: $WHY. The STRAY file(s) above are left in place."
+      fi
+    fi
     [ "$BAD" -eq 0 ] && echo "parity: OK"
   fi
 fi

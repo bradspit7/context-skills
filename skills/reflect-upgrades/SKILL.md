@@ -192,7 +192,10 @@ A build started at the wrap is one the owner waits for, however it runs.
    worktree **outside the project root**, made by hand from the local HEAD:
    `git worktree add ../<repo>-<topic> -b build/<topic> <local HEAD sha>`, then the Agent tool with
    `run_in_background: true`, an agent type that has a shell and **no isolation flag**, told to work
-   only in that worktree's absolute path. It returns the diff plus RED and GREEN evidence. (Not the
+   only in that worktree's absolute path, **never to use `cd ..` or a `../` path, and to put scratch
+   files in a `mktemp -d` dir** (2 of 3 helpers told only "write nothing outside it" still wrote a
+   scratch file one level up, into a parent no `git status` sees). It returns the diff plus RED and
+   GREEN evidence. (Not the
    Agent tool's `isolation` option: it creates `<project root>/.claude/worktrees/agent-<id>/`, inside
    the tree, and, unless the `worktree.baseRef` setting is `head`, cuts it from origin's default
    branch rather than the local HEAD. Measured once: while one existed, every `rglob` test in the main
@@ -210,7 +213,8 @@ A build started at the wrap is one the owner waits for, however it runs.
    the queue entry (and a Partial's `.patch` and `.base`) in one commit with the trailer and a pathspec,
    so a sibling session's staged work stays out. It refuses, changing nothing, a dirty worktree, a path
    main also changed since the branch's base, a main checkout dirty in a path it touches, or a title
-   that is not exactly one queue heading. It byte-checks the COMMITTED tree (a check before `git add`
+   that is not exactly one queue heading. It warns, never refuses, about anything in the worktree's
+   parent newer than the worktree. It byte-checks the COMMITTED tree (a check before `git add`
    reads an untracked new file as deleted and fails on identical bytes), and only then removes the
    worktree, before the gating verify run: `git worktree unlock <path>` first if the harness locked it,
    then `git worktree remove <path>` and `git branch -d build/<topic>` (as `-D`, since main gets the

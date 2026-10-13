@@ -42,6 +42,12 @@ Run it from the main checkout (or name it with --repo). In order:
      Pass the project's quick verify loop, not only the build's own test: cross-cutting lints scan every
      test file, so a new test can turn a DIFFERENT suite red. --no-verify must be explicit and says loudly
      that nothing was verified.
+Between steps 1 and 2, on --dry-run too, it checks the worktree's PARENT: every top-level entry newer than the
+worktree (the mtime of its `.git` file), skipping the worktree and any repo or worktree, is printed with its
+mtime under a `PARENT CHECK WARNING` line, repeated after the verify. A helper that wrote outside its worktree
+(a `../` path) leaves a file there that no `git status` sees, and removing the worktree removes the last link to
+this build. It warns and never refuses (other sessions write into the same parent), stats entries without
+opening or deleting any, changes no exit code, and prints `PARENT CHECK UNKNOWN` when it cannot run.
 --dry-run runs every step-1 check, prints the plan (paths, queue entry, partial files, commit message,
 the verify command) and changes nothing.
 
@@ -57,9 +63,11 @@ import argparse
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -276,6 +284,86 @@ def plan(a):
             "partial_paths": partial_paths, "paths": paths, "message": message(a)}
 
 
+def stamp(t):
+    return time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t))
+
+
+def parent_unknown(why):
+    print("PARENT CHECK UNKNOWN: %s -- the check could not run, so a file this build wrote outside its worktree "
+          "would go unseen: look in the parent yourself before the worktree goes" % why)
+    return "PARENT CHECK UNKNOWN (repeated): %s" % why
+
+
+def parent_check(wt):
+    """Print what changed in the worktree's PARENT since the worktree was created; return the line to repeat after
+    the verify ("" when clean). It stats entries only: it never opens, moves or deletes one.
+
+    A helper told to write only in its worktree can still write one level up (a `../` path: 2 of 3 helpers did, in
+    one session), into a shared parent that is no repo, so no `git status` sees the file, and removing the
+    worktree removes the only thing tying it to this build. So, before anything changes, this names every
+    top-level entry of the parent newer than the worktree's creation, skipping the worktree itself and every repo
+    or worktree (a `.git` file or dir). It WARNS and never refuses: other sessions write into the same parent
+    while a build runs, so a stray may be theirs, and a refusal would strand a good build behind it.
+    The creation time is the mtime of the worktree's own `.git` FILE, which `git worktree add` writes before its
+    checkout and nothing rewrites in normal use (`git worktree repair` or `move` can): not st_ctime (change time on
+    POSIX), not the admin dir's `gitdir` (documented as touched whenever the worktree is accessed) or HEAD (moves
+    with every commit). Either input missing prints UNKNOWN, never clean.
+    """
+    wt = Path(wt)
+    parent = wt.parent
+    try:
+        st = os.stat(wt / ".git")
+    except OSError as e:
+        return parent_unknown("no creation time for %s (its .git: %s)" % (wt, e.strerror or e))
+    if not stat.S_ISREG(st.st_mode):
+        return parent_unknown("no creation time for %s (its .git is not the file a linked worktree has)" % wt)
+    born = st.st_mtime
+    try:
+        entries = sorted(os.scandir(parent), key=lambda x: x.name)
+    except OSError as e:
+        return parent_unknown("could not list %s (%s)" % (parent, e.strerror or e))
+    newer, unreadable, repos, older, others = [], [], 0, 0, 0
+    for e in entries:
+        if os.path.normcase(e.name) == os.path.normcase(wt.name):
+            continue
+        others += 1
+        if os.path.lexists(os.path.join(e.path, ".git")):
+            repos += 1
+            continue
+        try:
+            m = e.stat(follow_symlinks=False).st_mtime
+        except OSError as err:
+            unreadable.append("  %-19s  %s  (mtime UNKNOWN: %s)" % ("?", e.path, err.strerror or err))
+            continue
+        if m <= born:
+            older += 1
+            continue
+        newer.append("  %s  %s%s" % (stamp(m), e.path, os.sep if e.is_dir(follow_symlinks=False) else ""))
+    counts = ("%d newer, %d unreadable, %d repo/worktree skipped, %d older skipped, of %d entries besides the "
+              "worktree in %s" % (len(newer), len(unreadable), repos, older, others, parent))
+    listed = newer + unreadable
+    if not listed:
+        print("PARENT CHECK clean: nothing next to the worktree changed after it was created (%s): %s"
+              % (stamp(born), counts))
+        return ""
+    n = "%d entr%s" % (len(listed), "y" if len(listed) == 1 else "ies")
+    print("PARENT CHECK WARNING: %s next to the worktree changed after it was created (%s)%s. A build that wrote "
+          "outside its worktree (a ../ path) leaves its file here, where no git status sees it, and removing the "
+          "worktree removes the last link to this build; another session may own it, so this landing never opens or "
+          "deletes one. Look before the worktree goes: %s" % (
+              n, stamp(born), " or could not be read" if unreadable else "", counts))
+    for ln in listed:
+        print(ln)
+    return "PARENT CHECK WARNING (repeated): %s in %s changed after the worktree was created; listed above" % (
+        n, parent)
+
+
+def repeat_parent(p):
+    """The parent check's warning again, after the verify: a long verify log would scroll the first one away."""
+    if p.get("parent_note"):
+        print(p["parent_note"])
+
+
 def show(p, a):
     counts = {k: sum(1 for kk, _ in p["changes"] if kk[:1] == k) for k in "AMD"}
     print("DRY RUN -- nothing changed.")
@@ -393,6 +481,7 @@ def land(p, a):
     if not a.verify:
         print("NO VERIFY RAN (--no-verify): the landing is committed (%s) but unverified -- run the project's "
               "verify loop yourself" % commit[:7])
+        repeat_parent(p)
         return 0
     print("VERIFY: %s" % a.verify)
     sys.stdout.flush()
@@ -404,6 +493,7 @@ def land(p, a):
         print("VERIFY FAILED rc %d -- the landing is already committed (%s): fix forward" % (verify_rc, commit[:7]))
     else:
         print("VERIFY PASSED rc 0")
+    repeat_parent(p)
     return verify_rc
 
 
@@ -441,6 +531,8 @@ def main(argv=None):
             ap.error("--body-file holds an Upgrade: line; the trailer comes from --upgrade, once")
     try:
         p = plan(a)
+        # Before anything changes: a warning, never a refusal, and no exit code of its own.
+        p["parent_note"] = parent_check(p["wt"])
         return show(p, a) if a.dry_run else land(p, a)
     except Refused as e:
         print("REFUSED: %s" % e)

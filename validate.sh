@@ -9,7 +9,8 @@
 #   4. python files that no longer compile
 #   5. CRLF line endings (the LF-everywhere rule; CRLF breaks bash run-in-place
 #      and parses clean, so it is invisible to bash -n)
-#   6. the intentionally-duplicated probe-sync.sh drifting between the two skills
+#   6. the intentionally-duplicated probe-sync.sh / bucket-sync.py drifting
+#      between the device-sync and device-handoff skills
 #
 # Unlike the lifecycle DIAGNOSTIC scripts (currency-check / session-evidence,
 # which exit 0 and signal via FINDING/THRESHOLD lines), this is a GATE: it exits
@@ -97,13 +98,19 @@ while IFS= read -r f; do
   [ "$(tr -cd '\r' < "$f" | wc -c)" -gt 0 ] && FAIL "CRLF line endings: $f"
 done < <(gate_files '*.sh' '*.py' '*.md')
 
-# 6. duplicated probe stays byte-identical
-A=skills/device-sync/scripts/probe-sync.sh
-B=skills/device-handoff/scripts/probe-sync.sh
-if [ -f "$A" ] && [ -f "$B" ]; then
-  cmp -s "$A" "$B" && OK "probe-sync.sh byte-identical across device-sync/device-handoff" \
-                   || FAIL "probe-sync.sh DIFFERS between device-sync and device-handoff"
-fi
+# 6. duplicated device-sync/device-handoff scripts stay byte-identical
+for dup in probe-sync.sh bucket-sync.py; do
+  A=skills/device-sync/scripts/$dup
+  B=skills/device-handoff/scripts/$dup
+  if [ -f "$A" ] || [ -f "$B" ]; then
+    if [ -f "$A" ] && [ -f "$B" ]; then
+      cmp -s "$A" "$B" && OK "$dup byte-identical across device-sync/device-handoff" \
+                       || FAIL "$dup DIFFERS between device-sync and device-handoff"
+    else
+      FAIL "$dup is bundled in only one of device-sync/device-handoff"
+    fi
+  fi
+done
 
 # 7. behavioral tests (fixture-based -- the net the structural checks 1-6 cannot give).
 #    Committed tests/*.py run when a working python is present; each exits non-zero on

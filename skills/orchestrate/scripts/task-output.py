@@ -17,7 +17,10 @@ Usage:
   task-output.py wf_c502254a --full       dump the full result JSON
   task-output.py wf_c502254a --key primary.0.title    dump one keypath of the result
   task-output.py wf_c502254a --logs       the run's log() lines
-  task-output.py wf_c502254a --agents     per-agent table (label, model, state, tokens)
+  task-output.py wf_c502254a --agents     per-agent table (label, model, state, tokens), plus one
+                                          `<agentId> cause: ...` line under each agent with NO result
+                                          (schema rejections by field, API error, tool errors, or
+                                          an explicit `unknown` / `no transcript`)
   task-output.py wf_c502254a --agent a07e    one agent's structured output (id prefix or label)
   task-output.py wf_c502254a --extract out.json   all agents' outputs -> JSON (fleet-resume step 1)
   task-output.py <path .json|.jsonl>      parse a journal / agent transcript file directly
@@ -39,6 +42,36 @@ if hasattr(sys.stdout, "reconfigure"):
 
 PROJECTS = Path.home() / ".claude" / "projects"
 ENTITY_RE = re.compile(r"&(?:quot|amp|lt|gt|#x?[0-9a-fA-F]+);")
+
+# How a dead agent's transcript records its errors -- probed live 2026-10-14 over 4,232 agent transcripts
+# (297 StructuredOutput rejections, 1,737 other tool errors, 50 API errors); re-probe if causes read `unknown`.
+#   * an error tool result: a `tool_result` block with `is_error: true` and a STRING `content`, matched to its
+#     `tool_use` (which carries the tool name) by `tool_use_id`.
+#   * a StructuredOutput schema rejection's content: SCHEMA_PREFIX + ajv clauses joined by ", ", each clause
+#     `<JSON pointer or root>: <ajv message>`, e.g. "/reason: must NOT have more than 1500 characters".
+#   * a StructuredOutput call that is not JSON: "<tool_use_error>InputValidationError: StructuredOutput was
+#     called with input that could not be parsed as JSON. ..."
+#   * an API error: an assistant record with `isApiErrorMessage: true`, `error` (rate_limit, server_error),
+#     `apiErrorStatus` (429, or absent) and the message text in a `<synthetic>` text block.
+SCHEMA_PREFIX = "Output does not match required schema:"
+UNPARSEABLE_MARK = "could not be parsed as JSON"
+CLAUSE_SPLIT_RE = re.compile(r", (?=(?:root|/[^\s:]*): )")
+CLAUSE_RE = re.compile(r"^(root|/[^\s:]*): (.+)$", re.S)
+# ajv message -> (schema keyword, whether group 1 is shown beside it). maxLength, additionalProperties,
+# required, enum and type were seen in real rejections; minLength, maxItems, minItems and pattern are ajv's
+# default messages for the same family, not yet seen here. An unmatched message is shown verbatim
+# (clipped), never dropped.
+AJV_KEYWORDS = [
+    (re.compile(r"^must NOT have more than (\d+) characters$"), "maxLength", True),
+    (re.compile(r"^must NOT have fewer than (\d+) characters$"), "minLength", True),
+    (re.compile(r"^must NOT have more than (\d+) items$"), "maxItems", True),
+    (re.compile(r"^must NOT have fewer than (\d+) items$"), "minItems", True),
+    (re.compile(r"^must NOT have additional properties$"), "additionalProperties", False),
+    (re.compile(r"^must have required property '([^']*)'$"), "required", False),
+    (re.compile(r"^must be equal to one of the allowed values"), "enum", False),
+    (re.compile(r'^must match pattern "'), "pattern", False),
+    (re.compile(r"^must be ([a-z]+(?:,[a-z]+)*)$"), "type", True),
+]
 
 
 def cwd_slug():
@@ -144,6 +177,114 @@ def agent_transcript_output(path):
     return {"final_text": text} if text else None
 
 
+def has_result(entry):
+    """True when the run journal recorded a result for this agent. state 'done' coincides exactly with a
+    `result` record in the run's journal.jsonl (3,608 of 3,608 agents, 0 disagreeing, probed 2026-10-14);
+    resultPreview is the second leg workflow-lanes.py's lane_summary() also accepts. Never decided from the
+    transcript: a dead agent's last StructuredOutput call is a REJECTED payload, not a result."""
+    return entry.get("state") == "done" or bool(entry.get("resultPreview"))
+
+
+def _block_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(c.get("text") or "" for c in content if isinstance(c, dict))
+    return "" if content is None else str(content)
+
+
+def _clip(s, n):
+    s = re.sub(r"\s+", " ", str(s)).strip()
+    return s if len(s) <= n else s[: n - 3] + "..."
+
+
+def _rejection_items(text):
+    """The distinct '<field path> (<keyword>)' items one rejected StructuredOutput call names. Array indices
+    collapse to * so a cap on a list item counts once per call, not once per element."""
+    if UNPARSEABLE_MARK in text:
+        return ["unparseable JSON"]
+    if not text.startswith(SCHEMA_PREFIX):
+        return ['unrecognized error "%s"' % _clip(text, 60)]
+    items = []
+    for clause in CLAUSE_SPLIT_RE.split(text[len(SCHEMA_PREFIX):].strip()):
+        m = CLAUSE_RE.match(clause.strip())
+        if not m:
+            items.append('unrecognized clause "%s"' % _clip(clause, 60))
+            continue
+        ptr, msg = m.group(1), m.group(2).strip()
+        segs = [] if ptr == "root" else ptr.split("/")[1:]
+        label = '"%s"' % _clip(msg, 60)
+        for rx, keyword, show_arg in AJV_KEYWORDS:
+            km = rx.match(msg)
+            if km:
+                label = "%s %s" % (keyword, km.group(1)) if show_arg else keyword
+                if keyword == "required":
+                    segs.append(km.group(1))       # name the missing field, not its parent
+                break
+        segs = ["*" if s.isdigit() else s.replace("~1", "/").replace("~0", "~") for s in segs]
+        item = "%s (%s)" % ("/".join(segs) or "(root)", label)
+        if item not in items:
+            items.append(item)
+    return items
+
+
+def _counted(counter, order):
+    return ", ".join("%s x%d" % (k, counter[k])
+                     for k in sorted(counter, key=lambda k: (-counter[k], order.index(k))))
+
+
+def agent_death_cause(path):
+    """One line saying why an agent that has NO result died, read from its transcript: StructuredOutput
+    rejections by field path + schema keyword + count, API errors, other tools' errors by name + count, or
+    an explicit 'unknown'. Every signal present is named, most specific first; it is never an empty string."""
+    if not path or not os.path.isfile(str(path)):
+        return "no transcript"
+    names, rejected, items, order = {}, 0, {}, []
+    tool_errs, tool_order, api = {}, [], []
+    with open(str(path), encoding="utf-8", errors="replace") as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+            except (json.JSONDecodeError, ValueError):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            msg = rec.get("message") if isinstance(rec.get("message"), dict) else {}
+            if rec.get("isApiErrorMessage"):
+                api.append(" ".join(str(x) for x in (rec.get("error"), rec.get("apiErrorStatus")) if x)
+                           + ": " + _clip(_block_text(msg.get("content")), 100))
+            content = msg.get("content")
+            if not isinstance(content, list):
+                continue
+            for c in content:
+                if not isinstance(c, dict):
+                    continue
+                if c.get("type") == "tool_use":
+                    names[c.get("id")] = c.get("name")
+                elif c.get("type") == "tool_result" and c.get("is_error"):
+                    text = _block_text(c.get("content")).strip()
+                    tool = names.get(c.get("tool_use_id")) or (
+                        "StructuredOutput" if text.startswith(SCHEMA_PREFIX) else "<unmatched tool_use_id>")
+                    if tool == "StructuredOutput":
+                        rejected += 1
+                        for it in _rejection_items(text):
+                            if it not in items:
+                                order.append(it)
+                            items[it] = items.get(it, 0) + 1
+                    else:
+                        if tool not in tool_errs:
+                            tool_order.append(tool)
+                        tool_errs[tool] = tool_errs.get(tool, 0) + 1
+    parts = []
+    if rejected:
+        parts.append("StructuredOutput rejected %dx -- %s" % (rejected, _counted(items, order)))
+    if api:
+        parts.append("API error x%d -- %s" % (len(api), api[-1]))
+    if tool_errs:
+        parts.append("tool errors -- %s" % _counted(tool_errs, tool_order))
+    return "; ".join(parts) or "unknown -- no error tool result and no API error in the transcript"
+
+
 def keypath_get(obj, keypath):
     node = obj
     for part in keypath.split("."):
@@ -240,10 +381,22 @@ def main():
             print(line if isinstance(line, str) else json.dumps(line, ensure_ascii=False))
         return
     if args.agents:
+        adir = agents_dir_for(path)
         for e in agent_entries(journal):
             print("%-19s %-18s %-9s %-26s %-12s tok=%s" % (
                 e.get("agentId", "?"), (e.get("label") or "?")[:18], e.get("state", "?"),
                 (e.get("model") or "?")[:26], (e.get("phaseTitle") or "")[:12], e.get("tokens", "?")))
+            if not has_result(e):
+                # printed for EVERY agent without a result, live or dead: a run whose session ended without
+                # recording an outcome still reads 'running', and skipping it would be silence for a dead lane
+                aid = e.get("agentId")
+                cause = agent_death_cause(adir / ("agent-%s.jsonl" % aid) if aid else None)
+                if e.get("state") != "error":
+                    # no terminal state: in a killed run the lane was cut off, so its transcript's errors are
+                    # incidental -- say what was RECORDED rather than let them read as the reason
+                    cause = "[no terminal state recorded: agent state=%s, run status=%s] %s" % (
+                        e.get("state") or "none", journal.get("status") or "?", cause)
+                print("%-19s cause: %s" % (aid or "?", cause))
         return
     if args.agent or args.extract:
         adir = agents_dir_for(path)
@@ -277,7 +430,7 @@ def main():
         if args.extract == "-":
             dump(blob)
         else:
-            with io.open(args.extract, "w", encoding="utf-8") as f:
+            with io.open(args.extract, "w", encoding="utf-8", newline="") as f:
                 json.dump(blob, f, indent=2, ensure_ascii=False)
             print("wrote %d agent outputs -> %s" % (len(agents), args.extract))
         return
@@ -292,6 +445,10 @@ def main():
         print("phases: " + ", ".join(str(p) for p in phases))
     logs = journal.get("logs") or []
     print("logs: %d (--logs to print)" % len(logs))
+    entries = agent_entries(journal)
+    no_result = [e for e in entries if not has_result(e)]
+    if no_result:
+        print("agents without a result: %d of %d (--agents prints each one's cause)" % (len(no_result), len(entries)))
     if result is None:
         print("result: MISSING (run %s) -- per-agent outputs may still be recoverable: --agents / --extract"
               % journal.get("status", "?"))

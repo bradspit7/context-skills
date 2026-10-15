@@ -47,7 +47,11 @@ import sys
 import tempfile
 from urllib.parse import unquote
 
-WINDOW = 2.0                       # seconds; robocopy's FAT-time tolerance
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+WINDOW = 2.0                      # seconds; robocopy's FAT-time tolerance
 INDEX = "MEMORY.md"
 ENTRY_RE = re.compile(r"^\s*- \[[^\]]*\]\(([^)]+)\)")
 TOMBSTONE = "SUPERSEDED"           # a top-level bucket file naming it retires the bucket (as probe-sync.sh reads it)
@@ -491,9 +495,6 @@ def report_stop(plan, a):
 # ---- main ---------------------------------------------------------------------------------------
 
 def main(argv=None):
-    if hasattr(sys.stdout, "reconfigure"):
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(
         prog="bucket-sync.py",
         description="Sync a project's live memory dir with its out-of-band bucket, plan first, then apply.")

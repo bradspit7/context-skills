@@ -32,8 +32,9 @@ Run it from the main checkout (or name it with --repo). In order:
      undoes every write and counts as a refusal;
   5. checks the COMMIT: one new commit on the old HEAD, holding exactly the landed paths; every landed
      path equal to the branch tip (`git diff --quiet <tip> HEAD -- <path>`), every deleted one absent
-     from HEAD, the queue blob equal to the edited bytes. On any difference it stops loudly and keeps the
-     worktree and branch;
+     from HEAD, the queue blob equal to the edited bytes in the form git stores them (their eol conversion
+     applied: under core.autocrlf=true a CRLF checkout commits an LF blob, and a CRLF blob stays as it is). On
+     any difference it stops loudly and keeps the worktree and branch;
   6. removes the worktree (`git worktree unlock` first when locked) and deletes the branch (`-D`), only
      after step 5 passed and only while the branch still points at the tip that was landed;
   7. runs the --verify command from the main checkout through the platform shell (cmd.exe on Windows,
@@ -104,9 +105,11 @@ class UndoFailed(Exception):
     """The commit failed and the main checkout could not be fully restored."""
 
 
-def git(cwd, *args, check=True):
-    """Run git with literal pathspecs; bytes out. check=True raises Refused with git's own message."""
-    r = subprocess.run(["git", "--literal-pathspecs", "-C", str(cwd)] + [str(a) for a in args], capture_output=True)
+def git(cwd, *args, check=True, data=None):
+    """Run git with literal pathspecs; bytes out (`data`, when given, is its stdin). check=True raises Refused with
+    git's own message."""
+    r = subprocess.run(["git", "--literal-pathspecs", "-C", str(cwd)] + [str(a) for a in args], input=data,
+                       capture_output=True)
     if check and r.returncode:
         raise Refused("git %s failed (rc %d): %s" % (" ".join(str(a) for a in args[:3]), r.returncode,
                                                     r.stderr.decode("utf-8", "replace").strip()[:400]))
@@ -190,6 +193,20 @@ def cut_entry(raw, item):
             raise Refused("the entry's Partial bullet does not read '<patch inside the checkout> at <base>': %s" % text)
         patches.append(rel.as_posix())
     return b"".join(lines[:start] + lines[end:]), entry, patches
+
+
+def blob_ids(top, rel, data):
+    """The blob ids a commit of `data`, written at `rel`, can hold: the bytes as they are, and the bytes through
+    rel's clean filters and eol conversion (core.autocrlf, .gitattributes), the form `git add` stores. Under
+    core.autocrlf=true with no eol attribute a CRLF checkout of an LF queue commits the converted form; a blob that
+    already holds CRLF is committed as it is (the index's safer-autocrlf rule, which `hash-object --path` does not
+    apply, so the converted form alone would refuse it)."""
+    ids = set()
+    for how in (["--no-filters"], ["--path", rel]):
+        r = git(top, "hash-object", "--stdin", *how, check=False, data=data)
+        if r.returncode == 0 and out(r):
+            ids.add(out(r))
+    return ids
 
 
 def message(a):
@@ -447,9 +464,13 @@ def land(p, a):
     for path in p["deleted"] + p["partial_paths"]:
         if git(top, "cat-file", "-e", "HEAD:" + path, check=False).returncode == 0:
             problems.append("%s is still in the commit" % path)
-    qheld = git(top, "cat-file", "blob", "HEAD:" + p["queue_rel"], check=False)
-    if qheld.returncode or qheld.stdout != p["queue_new"]:
-        problems.append("the committed %s is not the edited queue byte for byte" % p["queue_rel"])
+    # The queue is written with the checkout's own line endings and committed through git's eol conversion, so it
+    # is compared in the form git STORES, not as working-tree bytes: under core.autocrlf=true and no eol attribute
+    # the working file is CRLF and the blob LF, and a byte compare refused every correct landing (exit 71, no
+    # verify; measured in two projects, 2026-10-13 and 2026-10-15). Still exact: a blob git would not store from these bytes fails.
+    qblob = out(git(top, "rev-parse", "-q", "--verify", "HEAD:" + p["queue_rel"], check=False))
+    if not qblob or qblob not in blob_ids(top, p["queue_rel"], p["queue_new"]):
+        problems.append("the committed %s is not the edited queue byte for byte (as git stores it)" % p["queue_rel"])
     if problems:
         raise Mismatch("commit %s does not match %s (%s): %s -- the worktree %s and branch %s are kept; inspect "
                        "with git diff %s HEAD" % (commit[:7], p["branch"], tip[:7], "; ".join(problems), p["wt"],

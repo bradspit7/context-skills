@@ -2,7 +2,8 @@
 """bucket-sync.py -- the out-of-band memory leg of device-sync (arrival) and device-handoff (departure).
 
     python bucket-sync.py --direction arrival|departure --live <live memory dir> --bucket <bucket dir>
-                          [--dry-run] [--backup-root <dir>]
+                          --project <name> [--dry-run] [--backup-root <dir>]
+    python bucket-sync.py --claim --project <name> --bucket <bucket dir> [--dry-run]
 
 Bundled byte-identically in device-sync/scripts/ and device-handoff/scripts/ (like probe-sync.sh).
 Spec: docs/superpowers/specs/2026-10-14-bucket-sync-design.md in the central upgrades repo.
@@ -10,6 +11,16 @@ Spec: docs/superpowers/specs/2026-10-14-bucket-sync-design.md in the central upg
 The direction fixes source and destination: arrival copies bucket -> live, departure live -> bucket.
 Arrival writes only the live dir, departure only the bucket. Only the top-level regular *.md files of
 each dir are in scope; subdirectories, other files and *.bak are never read or written.
+
+OWNERSHIP, checked before planning, so a refusal writes nothing. The probe finds a bucket by a case-
+and punctuation-blind name, so `MyApp` and `my-app` find the same one; the bucket says whose it is in
+a top-level `.bucket-owner` file holding one line `project: <name>` (UTF-8, LF), and --project (the
+probe's project-name:) must equal that name exactly. A different name, or a malformed marker, is
+refused. A bucket with no marker and no top-level *.md file is claimed by the first departure (the
+marker is its first write); an arrival from it has nothing to copy and writes nothing to it. A bucket
+with no marker that holds notes is UNCLAIMED and refused in both directions: the refusal names its
+notes and prints the --claim line, which writes only the marker (and refuses a bucket recorded for
+another project). The marker is never copied and is not counted among the out-of-scope entries.
 
 PLAN FIRST, THEN APPLY. Every note is classified before anything is written, and any STOP in the plan
 means nothing is written in that run:
@@ -35,8 +46,8 @@ at the destination after the sync is named DANGLING, and an unchanged result is 
 Every destination file is copied to <backup-root>/<bucket name>/<UTC stamp>/ and byte-compared before
 it is overwritten; new bytes go to a temp file in the destination dir, then os.replace.
 
-Exit codes: 0 synced or nothing to do; 3 STOP (nothing written); 2 refusal or usage; 1 an unexpected
-error, naming any file already written.
+Exit codes: 0 synced or nothing to do; 3 STOP (nothing written); 2 refusal or usage (an ownership
+refusal included); 1 an unexpected error, naming any file already written.
 """
 import argparse
 import datetime
@@ -56,6 +67,9 @@ INDEX = "MEMORY.md"
 ENTRY_RE = re.compile(r"^\s*- \[[^\]]*\]\(([^)]+)\)")
 TOMBSTONE = "SUPERSEDED"           # a top-level bucket file naming it retires the bucket (as probe-sync.sh reads it)
 DEFAULT_BACKUP_ROOT = os.path.join("~", ".claude", "bucket-sync-backups")
+OWNER = ".bucket-owner"            # top level of the bucket: one line "project: <name>"
+OWNER_RE = re.compile(r"project: ([^\r\n]*)(?:\r?\n)?")
+NAMES_SHOWN = 5                    # an UNCLAIMED refusal names this many notes, then counts the rest
 
 EXIT_OK, EXIT_ERROR, EXIT_REFUSED, EXIT_STOP = 0, 1, 2, 3
 
@@ -65,7 +79,11 @@ COPY, SKIP, KEEP, STOP = "COPY", "SKIP", "KEEP", "STOP"
 
 
 class Refusal(Exception):
-    """A precondition failed: exit 2, nothing written."""
+    """A precondition failed: exit 2, nothing written. `lines` are printed before the RESULT line."""
+
+    def __init__(self, msg, lines=()):
+        Exception.__init__(self, msg)
+        self.lines = list(lines)
 
 
 class ApplyError(Exception):
@@ -84,14 +102,14 @@ def read_bytes(path):
         return f.read()
 
 
-def scan(d):
-    """({normcase(name): name} for the top-level regular *.md files, count of everything else)."""
+def scan(d, skip=()):
+    """({normcase(name): name} for the top-level regular *.md files, count of everything else but `skip`)."""
     notes, other = {}, 0
     with os.scandir(d) as it:
         for e in it:
             if e.name.endswith(".md") and e.is_file(follow_symlinks=False):
                 notes[os.path.normcase(e.name)] = e.name
-            else:
+            elif e.name not in skip:
                 other += 1
     return notes, other
 
@@ -122,14 +140,92 @@ def refuse_if_unsafe(live, bucket, backup_root):
     if inside(rl, rb) or inside(rb, rl):
         raise Refusal("one directory resolves inside the other (live %s, bucket %s): a junction/symlink "
                       "into the other is branch 3, with no copy leg" % (rl, rb))
-    with os.scandir(bucket) as it:
-        tombs = sorted(e.name for e in it if TOMBSTONE in e.name and e.is_file())
-    if tombs:
-        raise Refusal("the bucket is retired: its top level holds a %s tombstone (%s)" % (TOMBSTONE, tombs[0]))
+    refuse_if_retired(bucket)
     rk = norm(backup_root)
     for label, r in (("bucket", rb), ("live memory dir", rl)):
         if inside(rk, r):
             raise Refusal("--backup-root %s lies inside the %s; backups must live outside both dirs" % (rk, label))
+
+
+def refuse_if_retired(bucket):
+    with os.scandir(bucket) as it:
+        tombs = sorted(e.name for e in it if TOMBSTONE in e.name and e.is_file())
+    if tombs:
+        raise Refusal("the bucket is retired: its top level holds a %s tombstone (%s)" % (TOMBSTONE, tombs[0]))
+
+
+# ---- ownership ----------------------------------------------------------------------------------
+
+def q(path):
+    return '"%s"' % path
+
+
+def claim_line(project, bucket):
+    return "python %s --claim --project %s --bucket %s" % (
+        q(os.path.abspath(__file__)), q(project), q(os.path.abspath(bucket)))
+
+
+def read_owner(bucket):
+    """The project name the bucket's marker records, or None when there is no marker. Refusal if malformed."""
+    path = os.path.join(bucket, OWNER)
+    if not os.path.lexists(path):
+        return None
+    want = "expected one line 'project: <name>' (UTF-8); fix or remove it by hand, then run again"
+    if os.path.islink(path) or not os.path.isfile(path):
+        raise Refusal("the bucket's ownership marker is malformed: %s is not a regular file; %s" % (path, want))
+    try:
+        with open(path, "rb") as f:
+            raw = f.read(4097)
+    except OSError as e:
+        raise Refusal("the bucket's ownership marker could not be read (%s: %r)" % (path, e))
+    try:
+        m = OWNER_RE.fullmatch(raw.decode("utf-8")) if len(raw) <= 4096 else None
+    except UnicodeDecodeError:
+        m = None
+    name = m.group(1) if m else ""
+    if not name or name != name.strip():
+        raise Refusal("the bucket's ownership marker is malformed: %s holds %r; %s" % (path, raw[:80], want))
+    return name
+
+
+def check_owner(bucket, project, direction):
+    """Before planning. (the OWNER line for the plan, whether this run claims the bucket); Refusal otherwise."""
+    rec = read_owner(bucket)
+    path = os.path.join(bucket, OWNER)
+    if rec is not None:
+        if rec != project:
+            raise Refusal("the bucket belongs to another project: %s records '%s', this run is for '%s'"
+                          % (path, rec, project),
+                          ["FOREIGN: the probe found this bucket by name, and names compare case- and punctuation-blind.",
+                           "  If this project's folder was renamed, the owner edits %s by hand. Otherwise give this "
+                           "project its own bucket, under a name no other project's normalizes to, and name it with "
+                           "a 'sync-bucket: <folder name>' line in the recipe note." % OWNER])
+        return "OWNER %s records project: %s (this project)" % (OWNER, rec), False
+    notes = sorted(scan(bucket)[0].values())
+    if notes:
+        shown = ", ".join(notes[:NAMES_SHOWN])
+        if len(notes) > NAMES_SHOWN:
+            shown += " and %d more" % (len(notes) - NAMES_SHOWN)
+        raise Refusal("UNCLAIMED bucket (no %s marker, %d top-level *.md files)" % (OWNER, len(notes)),
+                      ["UNCLAIMED: %s has no %s marker and holds %d top-level *.md file(s): %s"
+                       % (os.path.abspath(bucket), OWNER, len(notes), shown),
+                       "  Another project may own it. If it is this project's bucket, claim it, then run this "
+                       "sync again:",
+                       "  CLAIM: %s" % claim_line(project, bucket)])
+    if direction == "departure":
+        return ("OWNER the bucket has no %s marker and no notes: this departure claims it for project: %s"
+                % (OWNER, project)), True
+    return ("OWNER the bucket has no %s marker and no notes: an arrival writes nothing to it (the next "
+            "departure claims it)" % OWNER), False
+
+
+def write_marker(bucket, project):
+    """The marker, through a temp file in the bucket and os.replace. Never over an existing marker."""
+    path = os.path.join(bucket, OWNER)
+    if os.path.lexists(path):
+        raise IOError("%s appeared after the plan was made; not overwritten" % path)
+    replace_via_temp(path, data=("project: %s\n" % project).encode("utf-8"))
+    return path
 
 
 # ---- the plan -----------------------------------------------------------------------------------
@@ -177,6 +273,8 @@ class Plan(object):
         self.items = []
         self.index = None
         self.src_other = self.dst_other = 0
+        self.owner_line = None
+        self.claim = None          # the project name a departure claims an unmarked empty bucket for
 
     def of(self, *classes):
         return [i for i in self.items if i.cls in classes]
@@ -192,8 +290,8 @@ class Plan(object):
 
 def make_plan(direction, src, dst):
     plan = Plan(direction, src, dst)
-    s_notes, plan.src_other = scan(src)
-    d_notes, plan.dst_other = scan(dst)
+    s_notes, plan.src_other = scan(src, skip=(OWNER,) if direction == "arrival" else ())
+    d_notes, plan.dst_other = scan(dst, skip=(OWNER,) if direction == "departure" else ())
     ikey = os.path.normcase(INDEX)
     for key in sorted(set(s_notes) | set(d_notes)):
         if key == ikey:
@@ -386,6 +484,11 @@ def install(dst_path, backups, src_path=None, data=None):
     """Back the destination up (byte-compared), then write through a temp file and os.replace."""
     if os.path.lexists(dst_path):
         backups.save(dst_path)
+    replace_via_temp(dst_path, src_path=src_path, data=data)
+
+
+def replace_via_temp(dst_path, src_path=None, data=None):
+    """New bytes (a copy of src_path, or data) to a temp file in the destination's dir, then os.replace."""
     fd, tmp = tempfile.mkstemp(prefix=".bucket-sync-", suffix=".tmp", dir=os.path.dirname(dst_path))
     try:
         if data is None:
@@ -406,6 +509,8 @@ def install(dst_path, backups, src_path=None, data=None):
 def apply_plan(plan, backups):
     written = []
     try:
+        if plan.claim is not None:                 # the claim is the first write, so a later failure leaves it
+            written.append(write_marker(plan.dst, plan.claim))
         for item in plan.copies:
             install(item.dst, backups, src_path=item.src)
             written.append(item.dst)
@@ -423,12 +528,12 @@ def apply_plan(plan, backups):
 
 # ---- output -------------------------------------------------------------------------------------
 
-def q(path):
-    return '"%s"' % path
-
-
 def print_plan(plan):
     print("bucket-sync %s: %s -> %s" % (plan.direction, plan.src, plan.dst))
+    if plan.owner_line:
+        print(plan.owner_line)
+    if plan.claim is not None:
+        print("CLAIM %s (project: %s) -- the first write of this departure" % (OWNER, plan.claim))
     for i in plan.items:
         if i.cls == EQUAL:
             continue
@@ -443,8 +548,9 @@ def print_plan(plan):
             print(ln)
         for t in ix.dangling:
             print("DANGLING %s (a %s entry; no such note at the destination after this sync; left alone)" % (t, INDEX))
-    print("out of scope (never read or written): source %d, destination %d -- subdirectories, non-.md files, *.bak"
-          % (plan.src_other, plan.dst_other))
+    print("out of scope (never read or written): source %d, destination %d -- subdirectories, non-.md files, *.bak; "
+          "the bucket's %s marker is not counted here: it is read for ownership and never copied"
+          % (plan.src_other, plan.dst_other, OWNER))
 
 
 def counts(plan):
@@ -462,14 +568,15 @@ def index_word(plan):
 
 def summary(plan):
     c = counts(plan)
-    return ("%d copied (%d source-only, %d source-newer), %s, %d equal, %d kept dest-newer, %d kept dest-only"
-            % (c[SOURCE_ONLY] + c[SOURCE_NEWER], c[SOURCE_ONLY], c[SOURCE_NEWER], index_word(plan), c[EQUAL],
-               c[DEST_NEWER], c[DEST_ONLY]))
+    claimed = "bucket claimed for project '%s', " % plan.claim if plan.claim is not None else ""
+    return ("%s%d copied (%d source-only, %d source-newer), %s, %d equal, %d kept dest-newer, %d kept dest-only"
+            % (claimed, c[SOURCE_ONLY] + c[SOURCE_NEWER], c[SOURCE_ONLY], c[SOURCE_NEWER], index_word(plan),
+               c[EQUAL], c[DEST_NEWER], c[DEST_ONLY]))
 
 
 def arrival_line(a):
-    cmd = "python %s --direction arrival --live %s --bucket %s" % (
-        q(os.path.abspath(__file__)), q(os.path.abspath(a.live)), q(os.path.abspath(a.bucket)))
+    cmd = "python %s --direction arrival --live %s --bucket %s --project %s" % (
+        q(os.path.abspath(__file__)), q(os.path.abspath(a.live)), q(os.path.abspath(a.bucket)), q(a.project))
     if a.backup_root:
         cmd += " --backup-root %s" % q(os.path.abspath(a.backup_root))
     return cmd
@@ -494,24 +601,86 @@ def report_stop(plan, a):
 
 # ---- main ---------------------------------------------------------------------------------------
 
+def bad_name(name):
+    return not name or name != name.strip() or "\n" in name or "\r" in name
+
+
+def run_claim(a):
+    """--claim: write only the bucket's marker. Same name already recorded = nothing to do; another = refused."""
+    path = os.path.join(a.bucket, OWNER)
+    try:
+        if not os.path.isdir(a.bucket):
+            raise Refusal("the bucket is not an existing directory: %s" % a.bucket)
+        refuse_if_retired(a.bucket)
+        rec = read_owner(a.bucket)
+        if rec is not None and rec != a.project:
+            raise Refusal("%s records project '%s', not '%s'; a claim never replaces another project's marker"
+                          % (path, rec, a.project))
+    except Refusal as e:
+        for ln in e.lines:
+            print(ln)
+        print("RESULT: bucket-sync claim REFUSED -- %s; nothing written" % e)
+        return EXIT_REFUSED
+    print("bucket-sync claim: %s (%d top-level *.md file(s); none is read or written)"
+          % (a.bucket, len(scan(a.bucket)[0])))
+    if rec == a.project:
+        print("RESULT: bucket-sync claim nothing to do -- %s already records project: %s" % (path, rec))
+        return EXIT_OK
+    if a.dry_run:  # --claim --dry-run
+        print("RESULT: bucket-sync claim dry-run -- nothing written; would write %s (project: %s)" % (path, a.project))
+        return EXIT_OK
+    try:
+        write_marker(a.bucket, a.project)
+    except Exception as e:  # noqa: BLE001 -- report it; the temp file is already removed
+        print("RESULT: bucket-sync claim ERROR -- %r; nothing written" % e)
+        return EXIT_ERROR
+    print("RESULT: bucket-sync claim claimed -- wrote %s (project: %s); no note touched" % (path, a.project))
+    return EXIT_OK
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(
         prog="bucket-sync.py",
-        description="Sync a project's live memory dir with its out-of-band bucket, plan first, then apply.")
-    ap.add_argument("--direction", required=True, choices=("arrival", "departure"),
-                    help="arrival: bucket -> live; departure: live -> bucket")
-    ap.add_argument("--live", required=True, help="the live memory dir (the probe's live-memory-dir:)")
+        description="Sync a project's live memory dir with its out-of-band bucket, plan first, then apply; "
+                    "or, with --claim, record the project that owns the bucket.")
+    ap.add_argument("--direction", choices=("arrival", "departure"),
+                    help="arrival: bucket -> live; departure: live -> bucket (required for a sync run)")
+    ap.add_argument("--live", help="the live memory dir (the probe's live-memory-dir:; required for a sync run)")
     ap.add_argument("--bucket", required=True, help="the bucket dir (the probe's bucket-match: path)")
+    ap.add_argument("--project",
+                    help="this project's name (the probe's project-name:); the bucket's %s must record it" % OWNER)
+    ap.add_argument("--claim", action="store_true",
+                    help="write only the bucket's %s for --project (no --direction, --live or --backup-root)" % OWNER)
     ap.add_argument("--dry-run", action="store_true", help="print the plan and write nothing")
     ap.add_argument("--backup-root", default=None,
                     help="where overwritten files are backed up (default ~/.claude/bucket-sync-backups)")
     a = ap.parse_args(argv)
+    if a.claim:
+        extra = [f for f, v in (("--direction", a.direction), ("--live", a.live), ("--backup-root", a.backup_root))
+                 if v is not None]
+        if extra:
+            ap.error("--claim takes only --project, --bucket and --dry-run (got %s)" % ", ".join(extra))
+        if a.project is None:
+            ap.error("--claim needs --project NAME")
+    else:
+        missing = [f for f, v in (("--direction", a.direction), ("--live", a.live), ("--project", a.project))
+                   if v is None]
+        if missing:
+            ap.error("a sync run needs %s" % ", ".join(missing))
+    if bad_name(a.project):
+        ap.error("--project must be a non-empty name with no surrounding whitespace and no line break")
+    if a.claim:
+        return run_claim(a)
+
     backup_root = os.path.expanduser(a.backup_root or DEFAULT_BACKUP_ROOT)
     src, dst = (a.bucket, a.live) if a.direction == "arrival" else (a.live, a.bucket)
 
     try:
         refuse_if_unsafe(a.live, a.bucket, backup_root)
+        owner_line, claims = check_owner(a.bucket, a.project, a.direction)
     except Refusal as e:
+        for ln in e.lines:
+            print(ln)
         print("RESULT: bucket-sync %s REFUSED -- %s; nothing written" % (a.direction, e))
         return EXIT_REFUSED
 
@@ -520,6 +689,9 @@ def main(argv=None):
     except Exception as e:  # noqa: BLE001 -- reading failed before any write
         print("RESULT: bucket-sync %s ERROR -- %r while planning; files already written: none" % (a.direction, e))
         return EXIT_ERROR
+    plan.owner_line = owner_line
+    if claims:
+        plan.claim = a.project
     print_plan(plan)
 
     if plan.stops:
@@ -528,7 +700,7 @@ def main(argv=None):
     if a.dry_run:
         print("RESULT: bucket-sync %s dry-run -- nothing written; would apply: %s" % (a.direction, summary(plan)))
         return EXIT_OK
-    if not plan.copies and not (plan.index is not None and plan.index.writes):
+    if plan.claim is None and not plan.copies and not (plan.index is not None and plan.index.writes):
         print("RESULT: bucket-sync %s nothing to do: %s" % (a.direction, summary(plan)))
         return EXIT_OK
 

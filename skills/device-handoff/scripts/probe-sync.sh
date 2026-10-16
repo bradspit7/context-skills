@@ -188,13 +188,33 @@ fi
 echo
 echo "== OUT-OF-BAND SYNC ROOT (hint only -- recipe file is authoritative) =="
 PROJ_NAME=$(basename "$MAIN_WT")
-FOUND=""
+# Each root ONCE, keyed by its physical path (case-folded on Windows, whose paths are case-blind).
+# $CLAUDE_MEMORY_SYNC_DIR naming the OneDrive root, or a second spelling of it, would otherwise list
+# every bucket twice, and BUCKET MATCH below would read one bucket found twice as two buckets
+# matching at one tier: an ambiguity that is not real. Two DIFFERENT roots holding one name are real.
+SYNC_ROOTS=""; SEEN_ROOTS="
+"
 for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/Dropbox/claude-memory"; do
   [ -n "$root" ] && [ -d "$root" ] || continue
+  rkey=$(cd "$root" 2>/dev/null && pwd -P) || rkey="$root"
+  case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) rkey=$(printf '%s' "$rkey" | tr 'A-Z' 'a-z') ;; esac
+  case "$SEEN_ROOTS" in *"
+$rkey
+"*) continue ;; esac
+  SEEN_ROOTS="${SEEN_ROOTS}${rkey}
+"
+  SYNC_ROOTS="${SYNC_ROOTS}${root}
+"
+done
+FOUND=""
+while IFS= read -r root; do
+  [ -n "$root" ] || continue
   FOUND="yes"
   echo "sync-root: $root"
   ls -1 "$root" 2>/dev/null | grep -v '\.txt$\|\.bat$\|\.md$' | sed 's/^/  bucket: /'
-done
+done <<SREOF
+$SYNC_ROOTS
+SREOF
 [ -z "$FOUND" ] && echo "no conventional sync root found (\$CLAUDE_MEMORY_SYNC_DIR / OneDrive / Dropbox)"
 echo "repo-folder-name (for bucket matching): $PROJ_NAME"
 
@@ -202,18 +222,26 @@ echo
 echo "== BUCKET MATCH (does a sync-root bucket belong to THIS project?) =="
 # A sync root merely EXISTING is not enough -- other projects' buckets share it.
 # Skill Step-2 branch 4 (out-of-band) keys off a POSITIVE bucket-match line.
-# F5 tiers: exact > declared > alias > substring. Only exact/declared/alias are
-# confident (provenance printed in parens). Substring is a LOW-CONFIDENCE hint
-# (bucket-match-lowconf block): the calling skill must confirm with the user --
-# never silently execute, never silently ignore. declared/alias come from
-# optional recipe-file lines (whole-string equality after normalization, never
-# substring):
+# Tiers, strongest first: declared > exact > alias > substring. The recipe's
+# sync-bucket: line is the owner's own statement; the exact tier is a NAME
+# COINCIDENCE (another project's `my-app` against this repo's `MyApp`), so the
+# declaration wins (since 2026-10-15; exact used to). A tier with TWO OR MORE
+# hits is no match AT THAT TIER, with a `bucket-match-warning: ambiguous` line:
+# picking the first hit silently synced one project's memory into another's
+# (measured, 2026-10-15). Only declared/exact/alias are confident (provenance
+# printed in parens). Substring is a LOW-CONFIDENCE hint (bucket-match-lowconf
+# block): the calling skill must confirm with the user -- never silently
+# execute, never silently ignore. Either SKILL runs no bucket-sync while any
+# bucket-match-warning line is printed. declared/alias come from optional
+# recipe-file lines (whole-string equality after normalization, never substring):
 #   sync-bucket: <exact-bucket-dir-name>
 #   sync-bucket-aliases: <name1>, <name2>
 # single normalization rule for every tier comparison -- the whole exact/declared/
 # alias equality contract rests on all call sites applying the identical rule.
+# bucket-sync.py then checks the bucket's own .bucket-owner against project-name:.
 norm() { printf '%s' "$1" | tr 'A-Z' 'a-z' | sed 's/[^a-z0-9]//g'; }
 NPROJ=$(norm "$PROJ_NAME")
+echo "project-name: $PROJ_NAME"
 
 DECLARED=""; ALIASES=""
 if [ -d "$LIVE_MEM" ]; then
@@ -252,9 +280,10 @@ retired_tombstone() { # $1 bucket dir -> prints the first tombstone file name, i
   return 0
 }
 
-EXACT=""; DECL_M=""; ALIAS_M=""; SUBSTR_LIST=""; RETIRED_HITS=""; RETIRED_DECL=""
-for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/Dropbox/claude-memory"; do
-  [ -n "$root" ] && [ -d "$root" ] || continue
+# Every hit of a tier is collected (one path per line), never only the first: see pick_tier.
+EXACT_L=""; DECL_L=""; ALIAS_L=""; SUBSTR_LIST=""; RETIRED_HITS=""; RETIRED_DECL=""
+while IFS= read -r root; do
+  [ -n "$root" ] || continue
   for b in "$root"/*/; do
     [ -d "$b" ] || continue
     bn=$(basename "$b")
@@ -264,11 +293,13 @@ for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/
     # NOTE: exact/declared/alias are whole-string equality with NO minimum length
     # (a short exact name is still strong ownership evidence); the >=4 gate below
     # guards only the fuzzy substring tier. Pinned by fixture (short-exact case).
+    # declared is tested first: a bucket the recipe declares that ALSO bears the
+    # project's name is the declared bucket (declared > exact, as the pick below).
     tier=""
-    if [ "$nb" = "$NPROJ" ]; then
-      tier=exact
-    elif [ -n "$NDECL" ] && [ "$nb" = "$NDECL" ]; then
+    if [ -n "$NDECL" ] && [ "$nb" = "$NDECL" ]; then
       tier=declared
+    elif [ "$nb" = "$NPROJ" ]; then
+      tier=exact
     elif [ -n "$ALIASES" ]; then
       amatch=""
       # set -f: the comma-split fields must NOT glob-expand against the cwd --
@@ -289,9 +320,12 @@ for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/
       continue
     fi
     case "$tier" in
-      exact) [ -z "$EXACT" ] && EXACT="$root/$bn"; continue ;;
-      declared) [ -z "$DECL_M" ] && DECL_M="$root/$bn"; continue ;;
-      alias) [ -z "$ALIAS_M" ] && ALIAS_M="$root/$bn"; continue ;;
+      declared) DECL_L="${DECL_L}$root/$bn
+"; continue ;;
+      exact) EXACT_L="${EXACT_L}$root/$bn
+"; continue ;;
+      alias) ALIAS_L="${ALIAS_L}$root/$bn
+"; continue ;;
     esac
     [ ${#nb} -ge 4 ] || continue
     case "$NPROJ" in *"$nb"*)
@@ -303,23 +337,48 @@ for root in "${CLAUDE_MEMORY_SYNC_DIR:-}" "$HOME/OneDrive/claude-memory" "$HOME/
       fi ;;
     esac
   done
-done
+done <<BMEOF
+$SYNC_ROOTS
+BMEOF
 
 printf '%s' "$RETIRED_HITS"
+# hit_list <newline-separated paths> -> "a, b, c"
+hit_list() { printf '%s' "$1" | awk 'NF { printf "%s%s", (n++ ? ", " : ""), $0 }'; }
+# pick_tier <tier> <newline-separated hits>: PICK = the hit when there is exactly one. Two or
+# more are no match at this tier, with a warning; the next tier down is still consulted, and
+# either SKILL runs no bucket-sync while any bucket-match-warning line is printed.
+pick_tier() {
+  local n
+  PICK=""
+  n=$(printf '%s' "$2" | grep -c .)
+  if [ "$n" -eq 1 ]; then
+    PICK=$(printf '%s' "$2" | sed '/^$/d')
+  elif [ "$n" -gt 1 ]; then
+    echo "bucket-match-warning: ambiguous $1 bucket: $(hit_list "$2") ($n buckets match at the $1 tier; none of them is taken) -- rename all but one: bucket names compare case- and punctuation-blind, so a sync-bucket: line cannot tell them apart"
+  fi
+}
 BMATCH="none"; BTIER=""
-if [ -n "$EXACT" ]; then
-  BMATCH="$EXACT"; BTIER="exact"
-  [ -n "$DECL_M" ] && echo "bucket-match-warning: recipe declares '$DECLARED' ($DECL_M) but an exact-name bucket also exists; preferring exact"
-elif [ -n "$DECL_M" ]; then BMATCH="$DECL_M"; BTIER="declared"
-elif [ -n "$ALIAS_M" ]; then BMATCH="$ALIAS_M"; BTIER="alias"
+pick_tier declared "$DECL_L"
+if [ -n "$PICK" ]; then
+  BMATCH="$PICK"; BTIER="declared"
+  [ -n "$EXACT_L" ] && echo "bucket-match-warning: recipe declares '$DECLARED' ($PICK) and an exact-name bucket also exists ($(hit_list "$EXACT_L")); using the declared one"
+else
+  pick_tier exact "$EXACT_L"
+  if [ -n "$PICK" ]; then
+    BMATCH="$PICK"; BTIER="exact"
+  else
+    pick_tier alias "$ALIAS_L"
+    [ -n "$PICK" ] && { BMATCH="$PICK"; BTIER="alias"; }
+  fi
 fi
 if [ "$BMATCH" != "none" ]; then
   echo "bucket-match: $BMATCH ($BTIER)"
 else
   echo "bucket-match: none"
-  # A declared/alias bucket that exists but is RETIRED was already warned about above;
-  # "no matching bucket exists" would be false about it.
-  if { [ -n "$NDECL" ] || [ -n "$ALIASES" ]; } && [ -z "$RETIRED_DECL" ]; then
+  # A declared/alias bucket that exists but is RETIRED was already warned about above, and
+  # one that two buckets match was warned about as ambiguous; "no matching bucket exists"
+  # would be false about either.
+  if { [ -n "$NDECL" ] || [ -n "$ALIASES" ]; } && [ -z "$RETIRED_DECL" ] && [ -z "$DECL_L$ALIAS_L" ]; then
     DECL_DESC="$DECLARED"
     [ -z "$DECL_DESC" ] && DECL_DESC="$ALIASES"
     echo "bucket-match-warning: recipe declares '$DECL_DESC' but no matching bucket exists in any sync root"
@@ -616,7 +675,9 @@ echo "Identify the transport branch IN ORDER; take the FIRST that matches:"
 echo "  1 junction-into-repo => no-op (git already syncs it)"
 echo "  2 in-repo mirror + bootstrap script => bootstrap / mirror copy-back handles it"
 echo "  3 junction-to-out-of-band => OS auto-syncs"
-echo "  4 POSITIVE bucket-match (exact/declared/alias) => out-of-band bucket transport; use the recipe's declared command or read only its body range (RECIPE FILE above)."
+echo "  4 POSITIVE bucket-match (declared/exact/alias) => out-of-band bucket transport; use the recipe's declared command or read only its body range (RECIPE FILE above)."
+echo "    any bucket-match-warning line (an ambiguous tier, a declared bucket beside an exact-name one, a retired match) => run no bucket-sync; report it."
+echo "    bucket-sync.py takes --project <project-name> and checks it against the bucket's own .bucket-owner."
 echo "    bucket-match-lowconf (substring) is NOT branch 4 -- surface candidates + confirm with the user."
 echo "    bucket-retired (tombstoned) is NOT branch 4 -- never executed, never asked about."
 echo "  4b repo-is-transport: yes => the git-tracked memory dir IS the transport; it travels on the"

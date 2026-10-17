@@ -49,7 +49,7 @@ if hasattr(sys.stdout, "reconfigure"):
 HERE = Path(__file__).resolve().parent
 TASK_OUTPUT = HERE.parent.parent / "orchestrate" / "scripts" / "task-output.py"
 HEADER = ("== WORKFLOWS (runs in this project's scope that did not complete: report each FINISHED lane's "
-          "verdict; only the NO RESULT lanes need a re-run) ==")
+          "verdict; read each NO RESULT lane's cause line before any re-run) ==")
 
 COMPLETED = {"completed"}
 # Terminal and not completed: every lane without a result will never get one.
@@ -208,7 +208,7 @@ def report_run(to, path, journal, now):
         print("  ... %d of %d finished lane(s) listed above; the other %d: task-output.py --agents"
               % (MAX_LISTED, len(finished), len(finished) - MAX_LISTED))
     if dead and unrun:
-        print("  NO RESULT (only these need a re-run): "
+        print("  NO RESULT (read each cause below before any re-run): "
               + ", ".join("%s [%s]" % (label, e.get("state") or "no state") for label, e in unrun))
         for line in cause_lines(to, path, status, unrun):
             print(line)

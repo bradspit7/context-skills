@@ -105,14 +105,28 @@ class UndoFailed(Exception):
     """The commit failed and the main checkout could not be fully restored."""
 
 
+def tail_text(r, lines=30):
+    """The END of a failed git call's output (stdout, then stderr): its last `lines` lines, led by how many earlier
+    ones it leaves out. Never a head slice: git prints a child's output (a hook's, a filter's) first and its own
+    verdict last, and a hook prints its passing checks before its failing one, so a head slice keeps the passes and
+    cuts the failure. Measured on a 46-check hook: the first 400 characters were all `<label> ok` lines, the
+    failing check was cut off, and the last label shown read as the culprit."""
+    rows = []
+    for stream in (r.stdout, r.stderr):
+        rows += (stream or b"").decode("utf-8", "replace").strip().splitlines()
+    dropped = len(rows) - lines
+    if dropped > 0:
+        rows = ["... (%d earlier line%s not shown)" % (dropped, "" if dropped == 1 else "s")] + rows[-lines:]
+    return "\n  ".join(rows)
+
+
 def git(cwd, *args, check=True, data=None):
     """Run git with literal pathspecs; bytes out (`data`, when given, is its stdin). check=True raises Refused with
-    git's own message."""
+    the end of git's own output (tail_text)."""
     r = subprocess.run(["git", "--literal-pathspecs", "-C", str(cwd)] + [str(a) for a in args], input=data,
                        capture_output=True)
     if check and r.returncode:
-        raise Refused("git %s failed (rc %d): %s" % (" ".join(str(a) for a in args[:3]), r.returncode,
-                                                    r.stderr.decode("utf-8", "replace").strip()[:400]))
+        raise Refused("git %s failed (rc %d): %s" % (" ".join(str(a) for a in args[:3]), r.returncode, tail_text(r)))
     return r
 
 
@@ -410,7 +424,7 @@ def undo(p):
     if in_head:
         r = git(top, "restore", "--source=HEAD", "--staged", "--worktree", "--", *in_head, check=False)
         if r.returncode:
-            problems.append("restore: " + r.stderr.decode("utf-8", "replace").strip()[:200])
+            problems.append("restore: " + tail_text(r))
     if added:
         git(top, "rm", "-q", "--cached", "--ignore-unmatch", "--", *added, check=False)
         for x in added:
@@ -487,16 +501,16 @@ def land(p, a):
     if p["rec"]["locked"]:
         r = git(top, "worktree", "unlock", wt, check=False)
         if r.returncode:
-            raise Kept("could not unlock %s: %s" % (wt, r.stderr.decode("utf-8", "replace").strip()[:300]))
+            raise Kept("could not unlock %s: %s" % (wt, tail_text(r)))
     rm = git(top, "worktree", "remove", wt, check=False)
     if rm.returncode:
-        raise Kept("could not remove %s: %s" % (wt, rm.stderr.decode("utf-8", "replace").strip()[:300]))
+        raise Kept("could not remove %s: %s" % (wt, tail_text(rm)))
     now = out(git(top, "rev-parse", "--verify", "-q", "refs/heads/" + p["branch"], check=False))
     if now != tip:
         raise Kept("%s moved to %s after %s was landed: branch kept" % (p["branch"], now[:7] or "?", tip[:7]))
     br = git(top, "branch", "-D", p["branch"], check=False)
     if br.returncode:
-        raise Kept("could not delete %s: %s" % (p["branch"], br.stderr.decode("utf-8", "replace").strip()[:300]))
+        raise Kept("could not delete %s: %s" % (p["branch"], tail_text(br)))
     print("removed: worktree %s, branch %s" % (wt, p["branch"]))
 
     if not a.verify:

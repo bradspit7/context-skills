@@ -9,7 +9,8 @@ Data layout (probed live 2026-07-05 -- do not trust from memory, re-probe if thi
   ~/.claude/projects/<slug>/<session>/workflows/wf_<id>.json          run journal (result, logs, progress)
   ~/.claude/projects/<slug>/<session>/subagents/workflows/<runId>/agent-<agentId>.jsonl
                                                                       per-agent transcript; structured
-                                                                      output = last StructuredOutput tool_use
+                                                                      output = last ACCEPTED StructuredOutput
+                                                                      tool_use (no is_error tool_result)
 Usage:
   task-output.py                          newest run for this project: summary + result shape
   task-output.py --list                   recent runs (this project; --all-projects to widen)
@@ -21,8 +22,12 @@ Usage:
                                           `<agentId> cause: ...` line under each agent with NO result
                                           (schema rejections by field, API error, tool errors, or
                                           an explicit `unknown` / `no transcript`)
-  task-output.py wf_c502254a --agent a07e    one agent's structured output (id prefix or label)
-  task-output.py wf_c502254a --extract out.json   all agents' outputs -> JSON (fleet-resume step 1)
+  task-output.py wf_c502254a --agent a07e    one agent's structured output (id prefix or label); an agent
+                                          whose every StructuredOutput call was rejected prints a
+                                          `NOT ACCEPTED:` line and exits 1, never the rejected payload
+  task-output.py wf_c502254a --extract out.json   all agents' outputs -> JSON (fleet-resume step 1); such
+                                          an agent's record has output null, not_accepted true, and
+                                          the blob's top-level not_accepted lists every one
   task-output.py <path .json|.jsonl>      parse a journal / agent transcript file directly
 """
 import argparse
@@ -149,32 +154,86 @@ def agent_entries(journal):
     return [e for e in journal.get("workflowProgress") or [] if e.get("type") == "workflow_agent"]
 
 
-def agent_transcript_output(path):
-    """Last StructuredOutput tool_use input in the transcript; falls back to the last
-    assistant text block (agents without a schema return prose)."""
-    structured, text = None, None
-    with open(path, encoding="utf-8", errors="replace") as f:
+def transcript_events(path):
+    """Walk one agent transcript in order, yielding (kind, record, item) -- the ONE place a tool_result
+    with `is_error` is matched to the tool_use it answers (agent_death_cause() and agent_transcript_outcome()
+    both read this, so the two can never disagree about which call was rejected):
+      ("api_error", rec, message)                   an assistant record with isApiErrorMessage
+      ("tool_use", rec, block)                      any tool call; its id is remembered for the match
+      ("tool_error", rec, (tool, text, tool_use_id))  an error result, tool named via its call's id
+                                                    (a schema-rejection text with no matching call still
+                                                    reads as StructuredOutput)
+      ("text", rec, block)                          a text block"""
+    names = {}
+    with open(str(path), encoding="utf-8", errors="replace") as f:
         for line in f:
-            line = line.strip()
-            if not line:
-                continue
             try:
                 rec = json.loads(line)
             except (json.JSONDecodeError, ValueError):
                 continue
-            content = (rec.get("message") or {}).get("content")
+            if not isinstance(rec, dict):
+                continue
+            msg = rec.get("message") if isinstance(rec.get("message"), dict) else {}
+            if rec.get("isApiErrorMessage"):
+                yield "api_error", rec, msg
+            content = msg.get("content")
             if not isinstance(content, list):
                 continue
             for c in content:
                 if not isinstance(c, dict):
                     continue
-                if c.get("type") == "tool_use" and c.get("name") == "StructuredOutput":
-                    structured = c.get("input")
-                elif c.get("type") == "text" and rec.get("type") == "assistant":
-                    text = c.get("text")
-    if structured is not None:
-        return unwrap(structured)
-    return {"final_text": text} if text else None
+                if c.get("type") == "tool_use":
+                    names[c.get("id")] = c.get("name")
+                    yield "tool_use", rec, c
+                elif c.get("type") == "tool_result" and c.get("is_error"):
+                    text = _block_text(c.get("content")).strip()
+                    tool = names.get(c.get("tool_use_id")) or (
+                        "StructuredOutput" if text.startswith(SCHEMA_PREFIX) else "<unmatched tool_use_id>")
+                    yield "tool_error", rec, (tool, text, c.get("tool_use_id"))
+                elif c.get("type") == "text":
+                    yield "text", rec, c
+
+
+def agent_transcript_outcome(path):
+    """(output, rejected_calls) for one agent transcript.
+
+    output is the input of the LAST StructuredOutput call that did NOT get an error tool_result (unwrapped).
+    A rejected call's payload is never an output: when every StructuredOutput call was rejected, output is
+    None and rejected_calls says how many -- the agent is NOT ACCEPTED. Only an agent that made no
+    StructuredOutput call at all falls back to {"final_text": <its last assistant text>} (agents without a
+    schema return prose), else None. (Probed live 2026-10-17: 6,181 StructuredOutput calls in 6,778 agent
+    transcripts, every one with a tool_result -- 5,772 accepted, 409 rejected, none unanswered.)"""
+    calls, rejected_ids, text = [], set(), None
+    for kind, rec, item in transcript_events(path):
+        if kind == "tool_use" and item.get("name") == "StructuredOutput":
+            calls.append((item.get("id"), item.get("input")))
+        elif kind == "tool_error" and item[0] == "StructuredOutput":
+            rejected_ids.add(item[2])
+        elif kind == "text" and rec.get("type") == "assistant":
+            text = item.get("text")
+    rejected = sum(1 for tid, _ in calls if tid in rejected_ids)
+    accepted = [inp for tid, inp in calls if tid not in rejected_ids and inp is not None]
+    if accepted:
+        return unwrap(accepted[-1]), rejected
+    if rejected:
+        return None, rejected
+    return ({"final_text": text} if text else None), 0
+
+
+def agent_transcript_output(path):
+    """The agent's output: its last ACCEPTED StructuredOutput input, else (no StructuredOutput call at all) its
+    last assistant text as {"final_text": ...}, else None. None too when every StructuredOutput call was
+    rejected -- agent_transcript_outcome() says how many."""
+    return agent_transcript_outcome(path)[0]
+
+
+def not_accepted_line(who, rejected):
+    """The line --agent and the direct transcript path print for an agent whose every StructuredOutput call
+    the schema rejected, in place of the rejected payload."""
+    calls = ("1 StructuredOutput call and the schema rejected it" if rejected == 1
+             else "%d StructuredOutput calls and the schema rejected all %d" % (rejected, rejected))
+    return ("NOT ACCEPTED: %s made %s -- it has no accepted output, and a rejected payload is not shown "
+            "as one (--agents prints why it was rejected)" % (who, calls))
 
 
 def has_result(entry):
@@ -239,42 +298,24 @@ def agent_death_cause(path):
     an explicit 'unknown'. Every signal present is named, most specific first; it is never an empty string."""
     if not path or not os.path.isfile(str(path)):
         return "no transcript"
-    names, rejected, items, order = {}, 0, {}, []
+    rejected, items, order = 0, {}, []
     tool_errs, tool_order, api = {}, [], []
-    with open(str(path), encoding="utf-8", errors="replace") as f:
-        for line in f:
-            try:
-                rec = json.loads(line)
-            except (json.JSONDecodeError, ValueError):
-                continue
-            if not isinstance(rec, dict):
-                continue
-            msg = rec.get("message") if isinstance(rec.get("message"), dict) else {}
-            if rec.get("isApiErrorMessage"):
-                api.append(" ".join(str(x) for x in (rec.get("error"), rec.get("apiErrorStatus")) if x)
-                           + ": " + _clip(_block_text(msg.get("content")), 100))
-            content = msg.get("content")
-            if not isinstance(content, list):
-                continue
-            for c in content:
-                if not isinstance(c, dict):
-                    continue
-                if c.get("type") == "tool_use":
-                    names[c.get("id")] = c.get("name")
-                elif c.get("type") == "tool_result" and c.get("is_error"):
-                    text = _block_text(c.get("content")).strip()
-                    tool = names.get(c.get("tool_use_id")) or (
-                        "StructuredOutput" if text.startswith(SCHEMA_PREFIX) else "<unmatched tool_use_id>")
-                    if tool == "StructuredOutput":
-                        rejected += 1
-                        for it in _rejection_items(text):
-                            if it not in items:
-                                order.append(it)
-                            items[it] = items.get(it, 0) + 1
-                    else:
-                        if tool not in tool_errs:
-                            tool_order.append(tool)
-                        tool_errs[tool] = tool_errs.get(tool, 0) + 1
+    for kind, rec, item in transcript_events(path):
+        if kind == "api_error":
+            api.append(" ".join(str(x) for x in (rec.get("error"), rec.get("apiErrorStatus")) if x)
+                       + ": " + _clip(_block_text(item.get("content")), 100))
+        elif kind == "tool_error":
+            tool, text = item[0], item[1]
+            if tool == "StructuredOutput":
+                rejected += 1
+                for it in _rejection_items(text):
+                    if it not in items:
+                        order.append(it)
+                    items[it] = items.get(it, 0) + 1
+            else:
+                if tool not in tool_errs:
+                    tool_order.append(tool)
+                tool_errs[tool] = tool_errs.get(tool, 0) + 1
     parts = []
     if rejected:
         parts.append("StructuredOutput rejected %dx -- %s" % (rejected, _counted(items, order)))
@@ -361,7 +402,10 @@ def main():
     kind, path = resolve_target(args.target, args.all_projects)
 
     if kind == "agent-jsonl":
-        out = agent_transcript_output(path)
+        out, rejected = agent_transcript_outcome(path)
+        if out is None and rejected:
+            print(not_accepted_line(path, rejected))
+            sys.exit(1)
         if out is None:
             sys.exit("no StructuredOutput call and no assistant text in %s" % path)
         dump(out)
@@ -415,24 +459,38 @@ def main():
                 print("%d agents match; dumping the first. All matches:" % len(hits), file=sys.stderr)
                 for h in hits:
                     print("  " + os.path.basename(h), file=sys.stderr)
-            out = agent_transcript_output(hits[0])
+            out, rejected = agent_transcript_outcome(hits[0])
+            if out is None and rejected:
+                aid = os.path.basename(hits[0])[len("agent-"):-len(".jsonl")]
+                label = meta.get(aid, {}).get("label")
+                print(not_accepted_line("agent %s%s" % (aid, " (%s)" % label if label else ""), rejected))
+                sys.exit(1)
             dump(out if out is not None else {"error": "no output found", "file": hits[0]})
             return
-        # --extract: every agent -> one JSON blob (fleet-resume recipe, step 1)
-        agents = []
+        # --extract: every agent -> one JSON blob (fleet-resume recipe, step 1). An agent whose every
+        # StructuredOutput call was rejected gets output null and not_accepted true, never the rejected payload.
+        agents, not_accepted = [], []
         for f in files:
             aid = os.path.basename(f)[len("agent-"):-len(".jsonl")]
             m = meta.get(aid, {})
+            out, rejected = agent_transcript_outcome(f)
+            refused = out is None and rejected > 0
+            if refused:
+                not_accepted.append(aid)
             agents.append({"agentId": aid, "label": m.get("label"), "phase": m.get("phaseTitle"),
                            "model": m.get("model"), "state": m.get("state"),
-                           "output": agent_transcript_output(f)})
-        blob = {"runId": journal.get("runId"), "status": journal.get("status"), "agents": agents}
+                           "output": out, "not_accepted": refused, "rejected_calls": rejected})
+        blob = {"runId": journal.get("runId"), "status": journal.get("status"), "not_accepted": not_accepted,
+                "agents": agents}
         if args.extract == "-":
             dump(blob)
         else:
             with io.open(args.extract, "w", encoding="utf-8", newline="") as f:
                 json.dump(blob, f, indent=2, ensure_ascii=False)
-            print("wrote %d agent outputs -> %s" % (len(agents), args.extract))
+            print("wrote %d agent records -> %s%s" % (
+                len(agents), args.extract,
+                "; %d NOT ACCEPTED (every StructuredOutput call rejected; output null): %s"
+                % (len(not_accepted), ", ".join(not_accepted)) if not_accepted else ""))
         return
 
     # default: summary + result shape

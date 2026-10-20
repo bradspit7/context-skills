@@ -34,6 +34,7 @@ Read `references/taste-rubric.md` (bundled) before Step 1 — it drives the vari
     (`--selftest` runs its fixture battery.) The checker sees `<script>` tags only — if a variant wires reveal/animation JS through **inline handler attributes** (`onload=`, `onscroll=`, `onanimationstart=`), strip those too; they execute with no `<script>` tag, so the gate can't see them.
   - **Host cascade (web, inlined variants).** A variant that will be **inlined into a host container** (not replace a standalone page) looks clean in isolation but repaints on apply — host text rules at `(0,1,1)` beat bare BEM at `(0,1,0)` (a real bite: navy-on-navy, invisible). If the winner will be inlined, build the sandbox variant *inside a copy of the real host container + its stylesheet* so the preview reproduces the true cascade. (Apply-time hardening is Step 4.)
 - **Quality bar:** each variant must clear the rubric's bar (thesis legible in 3 seconds, internally consistent, craft floor met, design tokens respected unless the brief breaks them) before it earns a slot in the table.
+- **An external-model variant (optional).** If your setup can send a brief to another model that builds UI (and generates images), one of the N variants can be its: its own plain folder copy (not a repo worktree, since the tool writes files there), same thesis discipline, same quality bar, badge naming the model. Record whether the user picked it, so you learn whether it earns its slot.
 
 ## Step 3 — Self-critique, present, STOP
 

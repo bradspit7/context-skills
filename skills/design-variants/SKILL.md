@@ -22,7 +22,7 @@ Read `references/taste-rubric.md` (bundled) before Step 1 — it drives the vari
 
 ## Step 2 — Build variants in isolation
 
-- **Web mode** (static site / dev-server project): one sandbox copy of the surface per variant — sibling dirs or **separate `git worktree`s / clones (never an in-place branch checkout of the live tree — that edits production)** — served on separate localhost ports, or a single variants index page linking all of them. Never edit production files in this step.
+- **Web mode** (static site / dev-server project): one sandbox copy of the surface per variant — sibling dirs or **separate `git worktree`s / clones (never an in-place branch checkout of the live tree — that edits production)** — served on separate localhost ports, or a single variants index page linking all of them. Never edit production files in this step. A baseline / keep-as-is choice is served from a frozen copy of the pin — `git worktree add "$BASELINE_DIR" "$PINNED_COMMIT"` for a clean base (`BASELINE_DIR` = any dir outside the live tree), or the recorded `SNAPSHOT_DIR` for a dirty base — never from the live tree, which becomes the winner at Step 4 and would then show the winner under the baseline label.
 - **Non-web mode** (Godot, native UI, images): one scene/asset copy per variant; capture a same-viewpoint screenshot of each.
 - **Labels:** every variant carries a visible badge — its letter + thesis — built with a fixed greppable marker so stripping is mechanical: web wraps the badge in `<!-- dv-label -->…<!-- /dv-label -->` comments; Godot puts it in a node named `DVLabel`. "The second one" must never be ambiguous.
 - **Generators:** your existing design tools — a design-system skill, a frontend-design plugin's verbs, or the project's own component library — are the generators inside this step. Orchestrate them; never duplicate their guidance here.
@@ -57,7 +57,7 @@ Read `references/taste-rubric.md` (bundled) before Step 1 — it drives the vari
 ## Step 5 — Verify + clean up
 
 1. **Fresh evidence from PRODUCTION post-apply:** serve/screenshot the production page or scene — never the sandbox as proof (the sandbox already looked right; that proves nothing about the apply).
-2. Remove the sandboxes/ports/worktrees (unless the user asks to keep them for another round) **before** the no-label assertion — a still-present sandbox legitimately carries labels and would trip a surface-wide grep.
+2. Remove the sandboxes/ports/worktrees (unless the user asks to keep them for another round — a kept comparison keeps its baseline on the frozen pin from Step 2, never re-pointed at the live tree, which is now the winner) **before** the no-label assertion — a still-present sandbox legitimately carries labels and would trip a surface-wide grep.
 3. **No-label assertion (production surface only):** `grep -rn "dv-label" "${SURFACE[@]}"` and `grep -rn "DVLabel" "${SURFACE[@]}"` → zero hits. Scoped to `"${SURFACE[@]}"`, never a recursive walk that could reach a sandbox/worktree root.
 4. Commit per project law. **Never push** — deploy-on-push projects burn build minutes; push is the user's call. And if a commit in this repo can itself trigger a push (a post-commit auto-push hook), that too is the user's call: don't commit — leave it staged for them.
 

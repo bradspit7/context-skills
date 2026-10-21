@@ -418,17 +418,17 @@ fi
 #   newest-*    = the entry with the latest YYYY-MM-DD (ties: the later line) whose
 #                 FIRST direction marker is an arrival ("arrival", or "pulled ... down")
 #                 or a departure ("departure", or "pushed ... up"). A departure entry
-#                 that mentions "the next arrival" is still a departure. The calling
-#                 skill checks the command's direction anyway.
+#                 that mentions "the next arrival" is still a departure.
 #   sync-arrival: / sync-departure: = line-start declarations, printed verbatim (the
-#                 same convention as sync-bucket:). One saves the next run the search
-#                 for the command; the body is still read, since it states the guard.
+#                 same convention as sync-bucket:). Informational only: since 0a3a9c5
+#                 branch 4 runs bucket-sync.py, never a recipe's command, so nothing
+#                 asks for a missing one (the VERDICT below says the same).
 # LC_ALL=C makes length() count bytes; BINMODE=1 stops Windows gawk dropping the CR
 # of a CRLF line, which would under-count the body by one byte per line.
 recipe_shape() {
   local rf="$1" size
   size=$(wc -c < "$rf" 2>/dev/null | tr -d ' ')
-  LC_ALL=C awk -v BINMODE=1 -v size="${size:-0}" -v dir="$DIRECTION" '
+  LC_ALL=C awk -v BINMODE=1 -v size="${size:-0}" '
     function datekey(s) {
       if (match(s, /[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)) return substr(s, RSTART, 10)
       return ""
@@ -470,10 +470,7 @@ recipe_shape() {
       # sync-arrival:/sync-departure: is a quoted, possibly superseded command: history.
       if (low ~ /^sync-(arrival|departure):/) {
         if (logstart) stale++
-        else {
-          decl[++nd] = line
-          declared[(low ~ /^sync-arrival:/) ? "arrival" : "departure"] = 1
-        }
+        else decl[++nd] = line
       }
       is_update = (line ~ /^\*\*UPDATE [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/)
       is_loghead = (low ~ /^#+[ \t]/ && low ~ /(^|[^a-z])(history|log|updates|changelog)([^a-z]|$)/)
@@ -513,8 +510,6 @@ recipe_shape() {
         report("arrival")
         report("departure")
       }
-      if (!declared[dir])
-        printf "    -> add a line  sync-%s: <command>  to this file so the next %s takes the command from it instead of searching the note\n", dir, dir
     }
   ' "$rf" 2>/dev/null || echo "    shape: unknown (could not read the recipe file; read it with care)"
 }
@@ -675,7 +670,10 @@ echo "Identify the transport branch IN ORDER; take the FIRST that matches:"
 echo "  1 junction-into-repo => no-op (git already syncs it)"
 echo "  2 in-repo mirror + bootstrap script => bootstrap / mirror copy-back handles it"
 echo "  3 junction-to-out-of-band => OS auto-syncs"
-echo "  4 POSITIVE bucket-match (declared/exact/alias) => out-of-band bucket transport; use the recipe's declared command or read only its body range (RECIPE FILE above)."
+echo "  4 POSITIVE bucket-match (declared/exact/alias) => out-of-band bucket transport: run bucket-sync.py --direction $DIRECTION"
+echo "    --live <live-memory-dir> --bucket <bucket-match path> --project \"<project-name>\", the values from the lines above."
+echo "    For the recipe's own notes, read only its body range (RECIPE FILE above); its sync-arrival:/sync-departure: lines"
+echo "    and any copy command in it are informational and are never run."
 echo "    any bucket-match-warning line (an ambiguous tier, a declared bucket beside an exact-name one, a retired match) => run no bucket-sync; report it."
 echo "    bucket-sync.py takes --project <project-name> and checks it against the bucket's own .bucket-owner."
 echo "    bucket-match-lowconf (substring) is NOT branch 4 -- surface candidates + confirm with the user."

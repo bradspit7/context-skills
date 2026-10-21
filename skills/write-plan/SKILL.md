@@ -67,6 +67,10 @@ Where the house style isn't test-first (e.g., scene/asset work), steps 1-4 becom
 - Steps that say what without showing how
 - References to types/functions no task defines
 
+## Second opinion (start it before the self-review)
+
+For a plan of more than a couple of small tasks, if your setup has an external second-opinion tool (for example a script that sends the draft to another model): once the draft is saved, run it on the plan file in the background, then run the self-review below while it runs. Present once it returns, or after about 20 minutes with a note that it is still running (fold a late answer in as a follow-up line). Check each point it raises against the real files and the spec, fix the plan where it holds, and give the user one line per disagreement: `it said X; I kept|changed it because Y`. If your tool records whether a call changed anything, record it. If it is unavailable or refuses, say so in one line and hand off without it. Skip it for a plan of one or two small tasks.
+
 ## Self-review (run on the finished plan, fix inline)
 
 1. **Spec coverage** — every spec requirement maps to a task; gaps become tasks.

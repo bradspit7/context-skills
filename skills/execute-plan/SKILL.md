@@ -36,6 +36,8 @@ For each task, in order:
 
 **On failure:** verification fails twice on the same step → stop patching blind; route to `superpowers:systematic-debugging`, find the root cause, then resume the plan.
 
+**Second opinion on the root cause (optional).** If your setup has an external root-cause tool (for example a script that sends the evidence to another model), start it in the background at that same moment, beside the debugging. Give it the symptom, the expected behaviour, the exact reproduction (command and its output), the relevant logs, each fix attempted and what it did, and your current hypotheses labelled as hypotheses. Keep debugging while it runs; never wait on it. When it returns, run the experiment it proposes, or one that tells its explanation from yours, before believing either. If you have already proven a cause by then, a matching answer adds nothing and a different one still gets its experiment. If your tool records whether a call changed anything, record it. If it refuses, or stays busy with another call after a bounded number of retries, say so in one line and carry on without it.
+
 ## Step 3 — Close out
 
 1. Full-suite verification: run the project's whole verify loop once at the end, not just per-task checks — integration breaks live between tasks.

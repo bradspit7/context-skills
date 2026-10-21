@@ -115,6 +115,7 @@ CODEX_WAIT_MIN = 15.0
 CODEX_DIFF_MAX = 400000
 EXIT_CODEX_LOCKED = 6            # codex-ask: another Codex call holds its lock
 REVIEW_CHILD = "--codex-review-child"
+DETACHED_FLAGS = (subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW) if os.name == "nt" else 0
 # A held lock is retried up to its holder's own bound: the lock record's start + timeout_min, plus what codex-ask
 # may spend around the call (a fallback ping of up to 300 s and two account reads of up to 30 s each).
 LOCK_MARGIN_S = 360
@@ -479,13 +480,6 @@ def review_prompt(p, a):
     return "\n".join(head + ["The diff:", "", "```diff", diff.rstrip("\n"), "```"]) + "\n"
 
 
-def detached():
-    """Popen options that let the review outlive this process, and open no console window on Windows (G#85)."""
-    if os.name == "nt":
-        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
-    return {"start_new_session": True}
-
-
 def lock_deadline(run_dir, since):
     """When to stop waiting out a held lock: the holder's own bound (its lock record's start + timeout_min, read past
     byte 0, the byte the holder keeps locked) plus LOCK_MARGIN_S; with no readable record, LOCK_WAIT_FALLBACK_S after
@@ -559,9 +553,10 @@ def codex_start(p, a):
         prompt.write_bytes(review_prompt(p, a).encode("utf-8"))
         argv = [sys.executable, str(script), "--kind", "review", "--cwd", str(p["top"]), "--prompt-file", str(prompt)]
         (d / "review.json").write_text(json.dumps({"argv": argv, "run_dir": codex_run_dir(script)}), encoding="utf-8")
+        # Detached so it outlives this process, with no console window on Windows (G#85); bytes in, nothing decoded.
         proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), REVIEW_CHILD, str(d)],
                                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                cwd=str(p["top"]), **detached())
+                                cwd=str(p["top"]), creationflags=DETACHED_FLAGS, start_new_session=os.name != "nt")
     except Exception as e:  # the review is advisory: nothing about it may stop the landing
         print("CODEX REVIEW could not start (%s: %s) -- the landing goes on without a review" % (type(e).__name__, e))
         return None

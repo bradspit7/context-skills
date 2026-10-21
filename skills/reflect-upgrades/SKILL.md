@@ -221,6 +221,15 @@ A build started at the wrap is one the owner waits for, however it runs.
    branch's bytes, not its commits; the byte check is what licenses it). A harness
    worktree left under `.claude/worktrees/` is a second copy of every file the main checkout's tests
    scan. It exits with the verify's code; `--dry-run` prints the plan and changes nothing.
+   **If your setup has an external review script** (`~/.claude/codex-ask.py`; its contract is in
+   land-build.py's docstring), the build also gets a review: before the commit land-build starts it on
+   the branch's diff in the background (waiting out another call that holds the script's lock), and after
+   the verify prints `CODEX REVIEW RETURNED <call-id> answer=<path>` with the range it reviewed. Returned
+   is not adjudicated: check each point against the landed files, fix forward what holds, tell the user
+   one line per disagreement, then record the call's outcome. A refusal is one line and never blocks the
+   landing. Pass
+   `--no-codex-review` only for a trivial or mechanical diff, a diff already reviewed this session, or
+   content your project's rules keep out of an external prompt.
    The trailer is the record (a ledger can derive *built* from it, in the repo where it landed), so a
    delivered upgrade gets exactly one, on the commit that delivers it, and a test-only, review-fix or
    fix-up commit gets none. If the session ends first, the entry stays queued and the next session's

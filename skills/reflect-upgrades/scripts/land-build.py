@@ -10,7 +10,7 @@ was the only one run, so an estate lint its new test tripped stayed red; and the
   python land-build.py <worktree> --item "<queue title>" --subject "<commit subject>"
                        --upgrade "<one plain sentence>" (--verify "<command>" | --no-verify)
                        [--body-file F] [--trailer "Key: value" ...] [--queue FILE] [--repo <checkout>]
-                       [--dry-run]
+                       [--no-codex-review | --codex-wait-min N] [--dry-run]
 
 Run it from the main checkout (or name it with --repo). In order:
   1. resolves the worktree's branch and its main checkout (the first entry of `git worktree list`), and
@@ -49,8 +49,30 @@ mtime under a `PARENT CHECK WARNING` line, repeated after the verify. A helper t
 (a `../` path) leaves a file there that no `git status` sees, and removing the worktree removes the last link to
 this build. It warns and never refuses (other sessions write into the same parent), stats entries without
 opening or deleting any, changes no exit code, and prints `PARENT CHECK UNKNOWN` when it cannot run.
+Right before step 2 it starts an external review of the branch's diff against its merge-base, in the BACKGROUND,
+when your setup has a review script at `~/.claude/codex-ask.py` (no such script is one skipped line). The
+script's contract: `--kind review --cwd <main checkout> --prompt-file <the diff and what it delivers>`; stdout
+ending in `CODEX-ASK <call-id> <exit> answer=<path>` (or `... refused=<reason>`, its reason on stderr); exit 6
+when another call holds its lock, an OS lock on byte 0 of `<run dir>/lock` over a JSON record with `started` and
+`timeout_min`, `<run dir>` coming from a `codex_budget.py` beside it (`run_dir()`); an appended record in
+`<run dir>/calls.jsonl` per call; and `--outcome <call-id> changed|nothing-new` to record what a call changed.
+Its output goes to the folder the start line names. The prompt names the exact base and tip shas; the landing
+then commits exactly that tip, byte-checked (step 5). The review never gates the landing and never changes an
+exit code. A held lock (exit 6) is waited out in the background: retried whenever the call log changes (a call
+ended), or every few minutes, up to the holder's own bound (its record's start + timeout_min, read past byte 0,
+plus a margin), so a held lock costs a refusal record per call that ends, not one per poll. After the verify (or
+a landing that stopped) it waits up to --codex-wait-min minutes (default 15; the first three review calls took 6
+to 9) and prints `CODEX REVIEW RETURNED <call-id> answer=<path>` with the reviewed range and whether the landing
+committed it. Returned is not adjudicated: check each point against the landed files, fix forward what holds,
+tell the user in one line per disagreement, then record the outcome. A lock still held at its bound is one
+`CODEX REVIEW NOT RUN` line naming the command to run it by hand; any other refusal (a budget cap, a policy) is
+one `CODEX REVIEW REFUSED` line; a review still running at the bound is left running, and its line names the
+file its `CODEX-ASK` line will reach; script output without that line is `CODEX REVIEW UNKNOWN`, never a clean
+review. --no-codex-review skips it, for: a trivial or mechanical diff (a typo, a rename, a regenerated or reverted
+file) where a review has nothing to find; a diff already reviewed this session (a re-landing after a refused
+first try); or content your project's own rules keep out of an external prompt.
 --dry-run runs every step-1 check, prints the plan (paths, queue entry, partial files, commit message,
-the verify command) and changes nothing.
+the verify command, the review) and changes nothing: it starts no review.
 
 Exit: 0 landed and the verify passed (or --no-verify); the verify's own exit code when it failed AFTER
 the landing was committed and cleaned up (the output says so); 2 usage (an empty --upgrade or subject,
@@ -61,6 +83,8 @@ not run); 73 the commit failed AND restoring the main checkout did not complete 
 is left).
 """
 import argparse
+import importlib.util
+import json
 import os
 import re
 import shutil
@@ -81,6 +105,22 @@ PARTIAL_LEAD = "- **Partial:** "
 HEADING = re.compile(r"^## \d{4}-\d{2}-\d{2} · (.*)$")
 PARTIAL = re.compile(r"^(\S+\.patch) at ([0-9a-f]{7,40})$")
 TRAILER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*: \S.*$")
+
+# The optional external review script (see the docstring for its contract).
+CODEX_ASK = Path.home() / ".claude" / "codex-ask.py"
+# The script's last stdout line, per its contract.
+CODEX_ASK_LINE = re.compile(r"^CODEX-ASK (\S+) (\d+) (answer|refused)=(.*)$")
+CODEX_WAIT_MIN = 15.0
+# Past this the prompt names the changed paths instead of pasting the diff.
+CODEX_DIFF_MAX = 400000
+EXIT_CODEX_LOCKED = 6            # codex-ask: another Codex call holds its lock
+REVIEW_CHILD = "--codex-review-child"
+# A held lock is retried up to its holder's own bound: the lock record's start + timeout_min, plus what codex-ask
+# may spend around the call (a fallback ping of up to 300 s and two account reads of up to 30 s each).
+LOCK_MARGIN_S = 360
+LOCK_WAIT_FALLBACK_S = 50 * 60   # no readable lock record: codex-ask's default 45-minute call, and its margin
+LOCK_WAIT_CAP_S = 60 * 60
+LOCK_HEARTBEAT_S = 180           # retry at least this often while held, besides whenever the call log changes
 
 EXIT_USAGE = 2
 EXIT_REFUSED = 70
@@ -395,6 +435,202 @@ def repeat_parent(p):
         print(p["parent_note"])
 
 
+def knob(name, default):
+    """A number from the environment, honoured only with LAND_BUILD_TEST=1 (tests shorten the lock waits)."""
+    if os.environ.get("LAND_BUILD_TEST") == "1" and os.environ.get(name):
+        return float(os.environ[name])
+    return default
+
+
+def codex_ask_path():
+    """codex-ask.py, or the stand-in a test names (LAND_BUILD_CODEX_ASK, honoured only with LAND_BUILD_TEST=1)."""
+    if os.environ.get("LAND_BUILD_TEST") == "1" and os.environ.get("LAND_BUILD_CODEX_ASK"):
+        return Path(os.environ["LAND_BUILD_CODEX_ASK"])
+    return CODEX_ASK
+
+
+def codex_run_dir(script):
+    """codex-ask's run dir (its lock and call log), from the codex_budget module beside it, which codex-ask itself
+    imports for that path; ~/.claude/run/codex when there is none."""
+    try:
+        spec = importlib.util.spec_from_file_location("codex_budget_for_land_build", str(script.parent / "codex_budget.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return str(mod.run_dir())
+    except Exception:
+        return str(Path.home() / ".claude" / "run" / "codex")
+
+
+def review_prompt(p, a):
+    """What the review is asked about (codex-ask adds its own "Review." lead): what lands, then the branch's diff."""
+    top = p["top"]
+    diff = git(top, "diff", "--no-color", "--no-ext-diff", p["base"], p["tip"]).stdout.decode("utf-8", "replace")
+    head = ["A build is about to land on %s in this folder (%s): branch %s." % (p["main_branch"], top.name, p["branch"]),
+            "Reviewed revisions: base %s (the merge-base) and candidate %s (the branch tip; the landing commits "
+            "exactly its bytes and checks them)." % (p["base"], p["tip"]),
+            "Commit subject: " + a.subject.strip(),
+            "What it delivers: " + a.upgrade.strip(), ""]
+    if len(diff) > CODEX_DIFF_MAX:
+        stat = out(git(top, "diff", "--no-color", "--stat", p["base"], p["tip"]))
+        return "\n".join(head + [
+            "The diff is %d characters, too long to paste. The changed paths are below: once the landing commits they "
+            "hold the branch's bytes in this folder, and `git show %s:<path>` reads the base." % (len(diff), p["base"]),
+            "", stat]) + "\n"
+    return "\n".join(head + ["The diff:", "", "```diff", diff.rstrip("\n"), "```"]) + "\n"
+
+
+def detached():
+    """Popen options that let the review outlive this process, and open no console window on Windows (G#85)."""
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
+    return {"start_new_session": True}
+
+
+def lock_deadline(run_dir, since):
+    """When to stop waiting out a held lock: the holder's own bound (its lock record's start + timeout_min, read past
+    byte 0, the byte the holder keeps locked) plus LOCK_MARGIN_S; with no readable record, LOCK_WAIT_FALLBACK_S after
+    `since`. Never past LOCK_WAIT_CAP_S after `since`."""
+    cap = since + knob("LAND_BUILD_LOCK_CAP_S", LOCK_WAIT_CAP_S)
+    try:
+        with open(Path(run_dir) / "lock", "rb") as fh:
+            fh.seek(1)
+            rec = json.loads("{" + fh.read().decode("utf-8"))
+        end = float(rec["started"]) + float(rec["timeout_min"]) * 60 + knob("LAND_BUILD_LOCK_MARGIN_S", LOCK_MARGIN_S)
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        end = since + LOCK_WAIT_FALLBACK_S
+    return min(end, cap)
+
+
+def await_lock_change(run_dir, deadline):
+    """Sleep until codex-ask's call log changes (a holder ends by appending its record, then frees the lock), the
+    heartbeat passes, or the deadline does. Watching the log, not retrying on a timer, keeps a held lock from costing
+    a refusal record in the call log every few seconds."""
+    log = Path(run_dir) / "calls.jsonl"
+
+    def size():
+        try:
+            return log.stat().st_size
+        except OSError:
+            return -1
+    mark, until = size(), min(deadline, time.time() + knob("LAND_BUILD_LOCK_HEARTBEAT_S", LOCK_HEARTBEAT_S))
+    while time.time() < until:
+        time.sleep(1)
+        if size() != mark:
+            time.sleep(2)  # the holder appends its record just before it frees the lock
+            return
+
+
+def review_child(d):
+    """The detached review: run codex-ask, and while another Codex call holds its lock (exit 6), wait that call out
+    up to its own bound. Each attempt appends to codex-ask.out / .err, so the last CODEX-ASK line is the final one."""
+    d = Path(d)
+    try:
+        spec = json.loads((d / "review.json").read_text(encoding="utf-8"))
+        argv, run_dir = spec["argv"], spec["run_dir"]
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        with open(d / "codex-ask.err", "ab") as fe:
+            fe.write(("land-build review child: unreadable review.json (%s)\n" % e).encode("utf-8"))
+        return 1
+    since = time.time()
+    while True:
+        with open(d / "codex-ask.out", "ab") as fo, open(d / "codex-ask.err", "ab") as fe:
+            rc = subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=fo, stderr=fe).returncode
+        if rc != EXIT_CODEX_LOCKED:
+            return rc
+        deadline = lock_deadline(run_dir, since)
+        if time.time() >= deadline:
+            return rc
+        await_lock_change(run_dir, deadline)
+
+
+def codex_start(p, a):
+    """Start the Codex review in the background; None when none runs. It never raises: a review that cannot start
+    is one line, and the landing goes on."""
+    if a.no_codex_review:
+        print("NO CODEX REVIEW (--no-codex-review): this landing gets no Codex review")
+        return None
+    script = codex_ask_path()
+    if not script.is_file():
+        print("CODEX REVIEW skipped: no codex-ask.py at %s -- the landing goes on without a review" % script)
+        return None
+    try:
+        d = Path(tempfile.mkdtemp(prefix="land-build-codex-"))
+        prompt = d / "prompt.md"
+        prompt.write_bytes(review_prompt(p, a).encode("utf-8"))
+        argv = [sys.executable, str(script), "--kind", "review", "--cwd", str(p["top"]), "--prompt-file", str(prompt)]
+        (d / "review.json").write_text(json.dumps({"argv": argv, "run_dir": codex_run_dir(script)}), encoding="utf-8")
+        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), REVIEW_CHILD, str(d)],
+                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                                cwd=str(p["top"]), **detached())
+    except Exception as e:  # the review is advisory: nothing about it may stop the landing
+        print("CODEX REVIEW could not start (%s: %s) -- the landing goes on without a review" % (type(e).__name__, e))
+        return None
+    print("CODEX REVIEW started in the background (pid %d): codex-ask.py --kind review on %s..%s; its output goes "
+          "to %s" % (proc.pid, p["base"][:7], p["tip"][:7], d))
+    sys.stdout.flush()
+    return {"proc": proc, "dir": d, "out": d / "codex-ask.out", "err": d / "codex-ask.err", "script": script,
+            "prompt": prompt}
+
+
+def codex_lines(path):
+    """Every `CODEX-ASK ...` line in codex-ask's stdout (one per attempt), as matches."""
+    try:
+        rows = Path(path).read_bytes().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+    return [m for m in (CODEX_ASK_LINE.match(r.strip()) for r in rows) if m]
+
+
+def last_line(path):
+    try:
+        rows = [r.strip() for r in Path(path).read_bytes().decode("utf-8", "replace").splitlines() if r.strip()]
+    except OSError:
+        return ""
+    return rows[-1] if rows else ""
+
+
+def codex_finish(p, a):
+    """Wait up to --codex-wait-min for the review and print what the main thread needs to adjudicate it. Its
+    result never changes the exit code."""
+    c = p.get("codex")
+    if not c:
+        return
+    proc = c["proc"]
+    try:
+        proc.wait(timeout=a.codex_wait_min * 60)
+    except subprocess.TimeoutExpired:
+        print("CODEX REVIEW still running after %g min (pid %d; it may be waiting out another Codex call's lock), left "
+              "running in the background: when it ends, the last line of %s reads `CODEX-ASK <call-id> <exit> "
+              "answer=<path>`. Read that answer, check each point against the landed files, then record: python %s "
+              "--outcome <call-id> changed|nothing-new --note \"...\"" % (a.codex_wait_min, proc.pid, c["out"],
+                                                                       c["script"]))
+        return
+    lines = codex_lines(c["out"])
+    if not lines:
+        print("CODEX REVIEW UNKNOWN: codex-ask exited %d without its `CODEX-ASK` line, so nothing says whether a "
+              "review ran -- see %s and %s; the landing is unaffected" % (proc.returncode, c["out"], c["err"]))
+        return
+    m = lines[-1]
+    call_id, code, how, rest = m.group(1), int(m.group(2)), m.group(3), m.group(4).strip()
+    if how == "answer" and code == 0 and proc.returncode == 0:
+        landed = ("the tip this landing committed, byte for byte" if p.get("byte_checked") else
+                  "NOT what this landing committed (it stopped before its byte check passed)")
+        print("CODEX REVIEW RETURNED %s answer=%s" % (call_id, rest))
+        print("  reviewed %s..%s, %s. Returned is not adjudicated: check each point against the landed files, fix "
+              "forward what holds, tell the owner one line per disagreement, then: python %s --outcome %s "
+              "changed|nothing-new --note \"...\"" % (p["base"][:7], p["tip"][:7], landed, c["script"], call_id))
+    elif how == "refused" and code == EXIT_CODEX_LOCKED:
+        print("CODEX REVIEW NOT RUN: another Codex call held codex-ask's lock through %d attempt(s), up to that call's "
+              "own time bound -- this landing has no review; to run it by hand: python %s --kind review --cwd \"%s\" "
+              "--prompt-file \"%s\"" % (len(lines), c["script"], p["top"], c["prompt"]))
+    elif how == "refused":
+        print("CODEX REVIEW REFUSED (codex-ask exit %d): %s -- the landing is unaffected"
+              % (code, last_line(c["err"]) or rest.replace("_", " ")))
+    else:
+        print("CODEX REVIEW FAILED %s (codex-ask exit %d, process rc %d): no usable answer; see %s -- the landing is "
+              "unaffected" % (call_id, code, proc.returncode, c["err"]))
+
+
 def show(p, a):
     counts = {k: sum(1 for kk, _ in p["changes"] if kk[:1] == k) for k in "AMD"}
     print("DRY RUN -- nothing changed.")
@@ -412,6 +648,9 @@ def show(p, a):
         print("  | %s" % ln)
     print("then: remove the worktree %s, delete the branch %s, %s" % (
         p["wt"], p["branch"], "run the verify: %s" % a.verify if a.verify else "run NO verify (--no-verify)"))
+    print("codex review: %s" % ("none (--no-codex-review)" if a.no_codex_review else
+                                "%s --kind review on the branch's diff, started before the commit in the background, "
+                                "waited on up to %g min after the verify" % (codex_ask_path(), a.codex_wait_min)))
     return 0
 
 
@@ -489,6 +728,7 @@ def land(p, a):
         raise Mismatch("commit %s does not match %s (%s): %s -- the worktree %s and branch %s are kept; inspect "
                        "with git diff %s HEAD" % (commit[:7], p["branch"], tip[:7], "; ".join(problems), p["wt"],
                                                   p["branch"], tip[:7]))
+    p["byte_checked"] = True  # the commit holds exactly the tip the review was handed
     counts = {k: sum(1 for kk, _ in p["changes"] if kk[:1] == k) for k in "AMD"}
     print("LANDED %s as %s on %s: %d path(s), %d added, %d modified, %d deleted; queue entry %r removed%s" % (
         p["branch"], commit[:7], p["main_branch"], len(p["changes"]), counts["A"], counts["M"], counts["D"],
@@ -533,6 +773,9 @@ def land(p, a):
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == [REVIEW_CHILD] and len(argv) == 2:
+        return review_child(argv[1])
     ap = argparse.ArgumentParser(description="Land a build helper's branch on the main checkout in one command.")
     ap.add_argument("worktree", help="the build helper's linked worktree")
     ap.add_argument("--item", required=True, help="the queue entry's exact title (after '## YYYY-MM-DD · ')")
@@ -547,7 +790,16 @@ def main(argv=None):
                     % DEFAULT_QUEUE)
     ap.add_argument("--repo", help="the main checkout (default: the current directory)")
     ap.add_argument("--dry-run", action="store_true", help="check everything, print the plan, change nothing")
+    c = ap.add_mutually_exclusive_group()
+    c.add_argument("--no-codex-review", action="store_true",
+                   help="start no Codex review: for a trivial or mechanical diff, one Codex already reviewed this "
+                        "session, or content the project's rules keep out of an external prompt")
+    c.add_argument("--codex-wait-min", type=float, default=CODEX_WAIT_MIN, metavar="N",
+                   help="after the verify, wait up to N minutes for the review (default %g; 0 waits not at all)"
+                        % CODEX_WAIT_MIN)
     a = ap.parse_args(argv)
+    if a.codex_wait_min < 0:
+        ap.error("--codex-wait-min must be 0 or more")
     if not a.upgrade.strip() or "\n" in a.upgrade.strip():
         ap.error("--upgrade must be one non-empty line: the sentence the Upgrade: trailer records")
     if not a.subject.strip() or "\n" in a.subject.strip():
@@ -564,23 +816,30 @@ def main(argv=None):
             ap.error("--body-file: %s" % e)
         if re.search(r"^Upgrade:", body, re.M):
             ap.error("--body-file holds an Upgrade: line; the trailer comes from --upgrade, once")
+    p = {}
     try:
         p = plan(a)
         # Before anything changes: a warning, never a refusal, and no exit code of its own.
         p["parent_note"] = parent_check(p["wt"])
-        return show(p, a) if a.dry_run else land(p, a)
+        if a.dry_run:
+            return show(p, a)
+        # Before the commit, and never waited on here: the review never gates the landing.
+        p["codex"] = codex_start(p, a)
+        rc = land(p, a)
     except Refused as e:
         print("REFUSED: %s" % e)
-        return EXIT_REFUSED
+        rc = EXIT_REFUSED
     except Mismatch as e:
         print("MISMATCH: %s" % e)
-        return EXIT_MISMATCH
+        rc = EXIT_MISMATCH
     except Kept as e:
         print("KEPT: %s -- the landing is committed and byte-checked; remove it by hand, then run the verify" % e)
-        return EXIT_KEPT
+        rc = EXIT_KEPT
     except UndoFailed as e:
         print("UNDO FAILED: %s" % e)
-        return EXIT_UNDO_FAILED
+        rc = EXIT_UNDO_FAILED
+    codex_finish(p, a)
+    return rc
 
 
 if __name__ == "__main__":

@@ -19,7 +19,13 @@ signals miss the same class of damage:
     different line, git merges both lines without a conflict and the merged file
     states the fact two ways. The rule is that the later FACT date wins -- when the
     recorded event happened, not when a line or commit was written -- and each side's
-    NEW items survive.
+    NEW items survive;
+  * a SCRIPTED resolution that reads a file with universal newlines (Python's
+    read_text(), open() in text mode) and writes it back rewrites every CRLF to LF and
+    turns a lone CR (a CR not followed by LF) into a real line break -- a CRLF file
+    comes back as hundreds of changed lines, and a row holding a lone CR is split in
+    two. Every other check here reads lines the same universal way, so only a count
+    of the BYTES sees it.
 
 This tool compares the merge RESULT against both parents (and their merge base)
 and reports each of those as one line:
@@ -29,7 +35,27 @@ and reports each of those as one line:
 Kinds: conflict-marker, lost-test, shrunk-test, duplicate-def, duplicate-id,
 result-unparseable (a .py result that does not parse while both parents do --
 the orphaned fragment a line-range splice leaves behind), restated-fact,
-reverted-fact and lost-item.
+reverted-fact, lost-item, eol-drift and lone-cr-lost.
+
+eol-drift and lone-cr-lost are counted from each version's raw bytes: CRLF, bare LF (an
+LF not preceded by CR) and lone CR (a CR not followed by LF).
+
+  eol-drift     ours and theirs end most lines the same way (both CRLF or both LF) and
+                the result ends most lines the other way. Parents that disagree leave
+                nothing to drift from: a result matching either one is not a finding.
+  lone-cr-lost  both parents carry at least one lone CR and the result carries fewer
+                than the smaller parent count -- usually none, because each became a
+                line break.
+
+They compare paths present in ours, theirs and the result, and their own line names how
+many files they compared. In in-progress mode the working tree is not what the commit
+will store (under core.autocrlf=true an LF repository's files sit there as CRLF), so the
+result is compared as `git add` would store it: the paths are added to a throwaway COPY
+of the index. The real index is never touched; like the add that follows, this writes the
+blobs to the object store. A path that cannot be staged that way is reported as
+eol-unchecked (a check that could not run is not a clean one): commit the merge and
+re-run, which reads the committed blob. None of the three can be --accept'ed: fix the
+file (write it back as bytes) instead.
 
 restated-fact, reverted-fact and lost-item apply only to handoff/docket files:
 HANDOFF*.md, DOCKET*.md (not DOCKET-INBOX filings), roadmap*.md and context.md. A
@@ -114,8 +140,10 @@ import argparse
 import ast
 import os
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -146,10 +174,10 @@ class UsageError(Exception):
 
 # --------------------------------------------------------------------------- git
 
-def git(repo, *args, input_bytes=None):
+def git(repo, *args, input_bytes=None, env=None):
     """Run git; return (rc, stdout_bytes, stderr_text)."""
     proc = subprocess.run(["git", "-C", repo] + list(args),
-                          input=input_bytes, capture_output=True)
+                          input=input_bytes, capture_output=True, env=env)
     return proc.returncode, proc.stdout, proc.stderr.decode("utf-8", "replace")
 
 
@@ -677,6 +705,133 @@ def marker_lines(text):
     return sorted(edges + mids)
 
 
+# ------------------------------------------------------------------ line endings
+
+def eol_counts(data):
+    """(CRLF, bare LF, lone CR) in raw bytes: a bare LF is an LF not preceded by CR, a
+    lone CR is a CR not followed by LF. The definition is line-ending-profile.py's
+    (lone_cr_count, profile_bytes). This file ships on its own, so it carries a copy; a
+    selftest runs both on the same byte fixtures and asserts they agree."""
+    crlf = data.count(b"\r\n")
+    return crlf, data.count(b"\n") - crlf, data.count(b"\r") - crlf
+
+
+def dominant_eol(crlf, lf):
+    """'CRLF' or 'LF', whichever ends more lines; None on a tie or with no line ending.
+    (A lone CR ends no line here: lone-cr-lost counts it.)"""
+    if crlf > lf:
+        return "CRLF"
+    if lf > crlf:
+        return "LF"
+    return None
+
+
+def check_eol(path, ours, theirs, result):
+    """eol-drift and lone-cr-lost for one path, from the raw BYTES of each version.
+    Returns findings in check_file's shape: (kind, path, detail, None)."""
+    n = {"ours": eol_counts(ours), "theirs": eol_counts(theirs), "result": eol_counts(result)}
+    dom = {k: dominant_eol(c[0], c[1]) for k, c in n.items()}
+    findings = []
+    # Only parents that agree leave an ending the result can drift FROM (when they
+    # disagree, a result matching either one is a legitimate choice), and a result with
+    # no line ending at all has none to compare.
+    if (dom["ours"] is not None and dom["ours"] == dom["theirs"]
+            and n["result"][0] + n["result"][1] > 0 and dom["result"] != dom["ours"]):
+        findings.append((
+            "eol-drift", path,
+            "ours CRLF=%d/LF=%d, theirs CRLF=%d/LF=%d, result CRLF=%d/LF=%d (both parents end "
+            "most lines %s and the result does not: the resolution rewrote the line endings "
+            "-- write the file back as bytes)"
+            % (n["ours"][:2] + n["theirs"][:2] + n["result"][:2] + (dom["ours"],)), None))
+    lone = {k: c[2] for k, c in n.items()}
+    if lone["ours"] >= 1 and lone["theirs"] >= 1 and lone["result"] < min(lone["ours"],
+                                                                         lone["theirs"]):
+        findings.append((
+            "lone-cr-lost", path,
+            "ours lone CR=%d, theirs lone CR=%d, result lone CR=%d (a lone CR read with "
+            "universal newlines becomes a line break and splits its line -- write the file "
+            "back as bytes)" % (lone["ours"], lone["theirs"], lone["result"]), None))
+    return findings
+
+
+def one_line(err):
+    """git's stderr as one line, so a FINDING built from it stays one line."""
+    return "; ".join(l.strip() for l in err.splitlines() if l.strip())[:300]
+
+
+def staged_bytes(top, paths):
+    """In-progress mode: ({path: the bytes `git add` WOULD store, or None}, None), or
+    (None, reason) when no copy of the index could be staged.
+
+    The working tree is not what the commit will store. Under core.autocrlf=true (Git
+    for Windows' system default) an LF repository's files sit in the working tree as
+    CRLF, so comparing the raw working tree with the parents' blobs would report
+    eol-drift on every file. `git hash-object --path` applies that conversion but not
+    git's safe-autocrlf rule (a file whose index copy already holds a CR is stored as it
+    is; mid-merge git reads the 'ours' stage for that), so it turns a CRLF-committed
+    file's CRLF working copy into LF: a false eol-drift (measured, git 2.53). Only
+    `git add` applies both, so the paths are added to a throwaway COPY of the index. The
+    real index, and its conflict stages, are never touched."""
+    rc, out, err = git(top, "rev-parse", "--git-path", "index")
+    if rc != 0:
+        return None, "cannot locate the index: %s" % one_line(err)
+    index = os.path.join(top, out.decode("utf-8", "replace").strip())
+    tmp = tempfile.mkdtemp(prefix="merge-check-index-")
+    try:
+        copy = os.path.join(tmp, "index")
+        try:
+            shutil.copyfile(index, copy)
+        except OSError as e:
+            return None, "cannot copy the index: %s" % e
+        env = dict(os.environ, GIT_INDEX_FILE=copy, GIT_LITERAL_PATHSPECS="1")
+        # core.hooksPath -> the empty temp dir: `git add` runs a post-index-change hook,
+        # and a check must not fire the repository's hooks on a throwaway index.
+        rc, _, err = git(top, "-c", "core.safecrlf=false", "-c", "core.hooksPath=" + tmp,
+                         "add", "--pathspec-from-file=-", "--pathspec-file-nul",
+                         input_bytes="\0".join(paths).encode("utf-8"), env=env)
+        if rc != 0:
+            return None, "git add to a copy of the index failed: %s" % one_line(err)
+        staged = {}
+        for p in paths:
+            rc, data, _ = git(top, "cat-file", "blob", ":0:" + p, env=env)
+            staged[p] = data if rc == 0 else None
+        return staged, None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def eol_findings(top, in_progress, items):
+    """eol-drift / lone-cr-lost over items [(path, raw bytes per version)]: the paths
+    that passed run()'s binary and size skip. A binary file (a NUL byte in its first
+    8 KB) has no lines to end, and a file over 2 MB is never read, so neither reaches
+    here. Returns (findings, compared, not_compared)."""
+    # A path absent from ours, theirs or the result (deleted on one side, or by the
+    # resolution) has no line ending to compare: a modify/delete resolution keeps one
+    # side's file whole or removes it, so nothing was rewritten. The merge base is not
+    # needed -- a path both sides added is compared like any other.
+    todo = [(p, r) for p, r in items
+            if all(r[k] is not None for k in ("ours", "theirs", "result"))]
+    findings = []
+    if in_progress and todo:
+        stored, why = staged_bytes(top, [p for p, _ in todo])
+        staged = []
+        for p, r in todo:
+            data = stored.get(p) if stored is not None else None
+            if data is None:
+                # Never a silent pass: a check that could not run is not a clean one.
+                findings.append((
+                    "eol-unchecked", p,
+                    "line endings not compared (%s). Commit the merge and re-run "
+                    "merge-check: it then reads the committed blob"
+                    % (why or "git did not stage it"), None))
+            else:
+                staged.append((p, dict(r, result=data)))
+        todo = staged
+    for p, r in todo:
+        findings.extend(check_eol(p, r["ours"], r["theirs"], r["result"]))
+    return findings, len(todo), len(items) - len(todo)
+
+
 # ------------------------------------------------------------------ the checks
 
 def check_file(path, v):
@@ -812,7 +967,11 @@ def build_parser():
                     "one side added that the result dropped, including one side's row of "
                     "an id both sides minted (lost-item). Rotated archives (under an "
                     "archive directory, or dated names) are append-only: every appended "
-                    "row record must survive. The last line counts the new or changed "
+                    "row record must survive. From the raw bytes: a result whose line "
+                    "endings differ from both parents' (eol-drift: CRLF rewritten to LF or "
+                    "back) and lone CRs both parents carry that the result lost "
+                    "(lone-cr-lost: a universal-newline read turns each into a line "
+                    "break). The last line counts the new or changed "
                     "handoff/docket lines that state no single row id: the tool cannot "
                     "tell whether they restate a fact, so read them. Checks only files "
                     "changed on both sides since the merge base.",
@@ -940,6 +1099,7 @@ def run(argv):
     findings = []
     notes = []
     evidence = {}
+    eol_items = []
     checked = n_test = n_reg = n_handoff = skipped = n_unkeyed = 0
     unkeyed_known = True
     for path in both:
@@ -959,6 +1119,7 @@ def run(argv):
                 unkeyed_known = False  # its lines were never read: the count is unknown
             continue
         checked += 1
+        eol_items.append((path, raw))
         texts = {k: decode(d) for k, d in raw.items()}
         f, nt, is_test, is_reg = check_file(path, texts)
         findings.extend(f)
@@ -971,6 +1132,10 @@ def run(argv):
             findings.extend(hf)
             n_unkeyed += unkeyed
             evidence[path] = (ev, texts)
+
+    # Line endings are read from the BYTES: every check above reads universal newlines.
+    ef, n_eol, n_eol_not = eol_findings(top, st["result"] is None, eol_items)
+    findings.extend(ef)
 
     accepted, open_findings, used = [], [], set()
     for kind, path, detail, name in findings:
@@ -993,6 +1158,8 @@ def run(argv):
         print("ACCEPTED %s %s: %s" % (kind, path, name))
     for path, name in unused:
         print("UNUSED --accept %s::%s" % (path, name))
+    print("line endings compared in %d files (%d not compared: absent from ours, theirs or "
+          "the result, or not staged)" % (n_eol, n_eol_not))
     print("skipped %d files (binary or over 2 MB)" % skipped)
     print(DENOMINATOR_FMT % (checked, n_test, n_reg, n_handoff, len(open_findings),
                              n_unkeyed if unkeyed_known else "UNKNOWN"))

@@ -139,17 +139,53 @@ echo "== IN-REPO MEMORY MIRROR =="
 # TRACKED count, not just files-on-disk. The transport question is "does memory travel
 # on the push?", and only `git ls-files` answers it -- an untracked (or ignored) memory
 # dir is a local directory that looks identical on disk to one that syncs.
-MIR=""; TRACKED_MEM=0
+# Which dirs count is decided by EFFECT, not by a list of folder names. Measured on a
+# sibling project (2026-10-28): its memory lived in a git-tracked top-level memory/ (94
+# files) with the live dir junctioned into it, and this section, knowing only the two
+# mirror names below, printed "none", "repo-is-transport: no" and "nothing is carrying
+# them" -- all three false; the verdict came out right only because branch 1 matched
+# first. So the live dir's own physical target counts when it lies inside this repo,
+# whatever it is called, and so does a top-level memory/ in which git tracks markdown
+# (a fresh clone whose live dir is not junctioned yet still pushes that memory). A
+# memory/ holding no markdown is not memory: the name alone never counts.
+MIR=""; TRACKED_MEM=0; LIVE_REL=""; LIVE_REL_ROOT=""; LIVE_TRK=0; SEEN_MEM="
+"
+phys() { (cd "$1" 2>/dev/null && pwd -P); }
+fold() { case "$(uname -s 2>/dev/null)" in MINGW*|MSYS*|CYGWIN*) printf '%s' "$1" | tr 'A-Z' 'a-z' ;; *) printf '%s' "$1" ;; esac; }
+if [ -d "$LIVE_MEM" ] && git rev-parse --git-dir >/dev/null 2>&1; then
+  LIVE_P=$(phys "$LIVE_MEM")
+  for r in "$CUR_WT" "$MAIN_WT"; do
+    RP=$(phys "$r")
+    [ -n "$RP" ] && [ -n "$LIVE_P" ] || continue
+    case "$(fold "$LIVE_P")" in "$(fold "$RP")"/?*)
+      LIVE_REL="${LIVE_P:$(( ${#RP} + 1 ))}"; LIVE_REL_ROOT="$r"; break ;;
+    esac
+  done
+fi
+# mem_dir <repo root> <path relative to it> [note] -- list one dir and add its tracked count,
+# once per path: the live dir's target and a named candidate are often the same folder.
+mem_dir() {
+  local key n_disk n_trk
+  key=$(fold "$2")
+  case "$SEEN_MEM" in *"
+$key
+"*) return 0 ;; esac
+  SEEN_MEM="${SEEN_MEM}${key}
+"
+  MIR="yes"
+  n_disk=$(ls "$1/$2"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  n_trk=$(git -C "$1" ls-files -- "$2" 2>/dev/null | wc -l | tr -d ' ')
+  TRACKED_MEM=$(( TRACKED_MEM + n_trk ))
+  [ -n "${3:-}" ] && LIVE_TRK=$n_trk
+  echo "  $2 ($n_disk md files on disk, $n_trk git-tracked)${3:-}"
+}
+[ -n "$LIVE_REL" ] && mem_dir "$LIVE_REL_ROOT" "$LIVE_REL" " <- the live memory dir resolves here (the same files, not a mirror)"
 for d in claude-infra/memory continuation/memory; do
-  if [ -d "$d" ]; then
-    MIR="yes"
-    N_DISK=$(ls "$d"/*.md 2>/dev/null | wc -l | tr -d ' ')
-    N_TRK=$(git ls-files -- "$d" 2>/dev/null | wc -l | tr -d ' ')
-    TRACKED_MEM=$(( TRACKED_MEM + N_TRK ))
-    echo "  $d ($N_DISK md files on disk, $N_TRK git-tracked)"
-  fi
+  [ -d "$CUR_WT/$d" ] && mem_dir "$CUR_WT" "$d"
 done
-[ -z "$MIR" ] && echo "none (no claude-infra/memory or continuation/memory in repo)"
+N_TOP_MD=$(git -C "$CUR_WT" ls-files -- 'memory/*.md' 2>/dev/null | wc -l | tr -d ' ')
+[ "${N_TOP_MD:-0}" -gt 0 ] && mem_dir "$CUR_WT" memory
+[ -z "$MIR" ] && echo "none (the live memory dir does not resolve into this repo, and no claude-infra/memory, continuation/memory or markdown-tracking memory/ is in it)"
 # A capability must be probed by its EFFECT, never by an implementation marker. The
 # branch list used to require a BOOTSTRAP SCRIPT to credit an in-repo mirror -- but a
 # bootstrap script is one project's implementation of a live->mirror COPY step, i.e.
@@ -174,10 +210,15 @@ fi
 # out-of-repo MEMORY.md carries a deliberate "these two are NOT a mirror -- never point
 # a sync tool at the pair" warning: read at handoff time beside a single fused verdict,
 # that correct warning made the false negative MORE convincing, not less.
+# A live dir that resolves into the repo is not out of repo at all: when git tracks its
+# target, those ARE the files repo-is-transport counted, so there is no second fact to
+# print; when git tracks none of it (ignored, never added), nothing carries it.
 if [ -d "$LIVE_MEM" ]; then
   LIVE_N=$(ls "$LIVE_MEM"/*.md 2>/dev/null | wc -l | tr -d ' ')
   if [ "${LIVE_N:-0}" -gt 0 ]; then
-    if [ "$TRACKED_MEM" -gt 0 ]; then
+    if [ -n "$LIVE_REL" ]; then
+      [ "$LIVE_TRK" -gt 0 ] || echo "live memory dir: $LIVE_N md file(s) at $LIVE_MEM resolve into this repo at $LIVE_REL, but git tracks none of them (ignored or never added) -- NOT carried by the push; if these files matter across machines, nothing is carrying them"
+    elif [ "$TRACKED_MEM" -gt 0 ]; then
       echo "out-of-repo live memory dir: $LIVE_N md file(s) at $LIVE_MEM -- NOT carried by the push; a separate fact from repo-is-transport, and in scope only if this project's convention mirrors it"
     else
       echo "out-of-repo live memory dir: $LIVE_N md file(s) at $LIVE_MEM -- NOT carried by the push, and no tracked in-repo memory either; if these files matter across machines, nothing is carrying them"

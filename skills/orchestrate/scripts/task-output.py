@@ -20,8 +20,10 @@ Usage:
   task-output.py wf_c502254a --logs       the run's log() lines
   task-output.py wf_c502254a --agents     per-agent table (label, model, state, tokens), plus one
                                           `<agentId> cause: ...` line under each agent with NO result
-                                          (schema rejections by field, API error, tool errors, or
-                                          an explicit `unknown` / `no transcript`)
+                                          (the journal entry's own recorded error first, then its
+                                          transcript's schema rejections by field, API error, tool
+                                          errors; an explicit `unknown` / `no transcript` when
+                                          neither records anything)
   task-output.py wf_c502254a --agent a07e    one agent's structured output (id prefix or label); an agent
                                           whose every StructuredOutput call was rejected prints a
                                           `NOT ACCEPTED:` line and exits 1, never the rejected payload
@@ -77,6 +79,12 @@ AJV_KEYWORDS = [
     (re.compile(r'^must match pattern "'), "pattern", False),
     (re.compile(r"^must be ([a-z]+(?:,[a-z]+)*)$"), "type", True),
 ]
+# A journal entry's own `error` (probed 2026-10-29 over 7,811 agent entries in 240 run journals: 1,061 carry
+# one, always a one-line string, always on a `state: error` entry, 60-598 chars). The long ones append the
+# last rejection and the start of the rejected payload, so the cause shows the first JOURNAL_ERROR_CLIP chars:
+# enough for "StructuredOutput retry cap (5) exceeded ... could not be parsed as JSON", short enough that a
+# 400-char line (workflow-lanes.py's clip) still has room for the transcript's field-level detail after it.
+JOURNAL_ERROR_CLIP = 240
 
 
 def cwd_slug():
@@ -239,9 +247,22 @@ def not_accepted_line(who, rejected):
 def has_result(entry):
     """True when the run journal recorded a result for this agent. state 'done' coincides exactly with a
     `result` record in the run's journal.jsonl (3,608 of 3,608 agents, 0 disagreeing, probed 2026-10-14);
-    resultPreview is the second leg workflow-lanes.py's lane_summary() also accepts. Never decided from the
-    transcript: a dead agent's last StructuredOutput call is a REJECTED payload, not a result."""
+    a recorded resultPreview is the second leg. This is the ONE copy of the rule: --agents, the summary, and
+    workflow-lanes.py's lane_summary() all call this function. Never decided from the transcript: a dead
+    agent's last StructuredOutput call is a REJECTED payload, not a result."""
     return entry.get("state") == "done" or bool(entry.get("resultPreview"))
+
+
+def no_terminal_state_prefix(entry, run_status):
+    """What goes before the cause of an agent with no result: '' when its journal state is 'error' (it has a
+    terminal state), else '[no terminal state recorded: agent state=<state>, run status=<status>] '. In a
+    killed run such a lane was cut off, so its transcript's errors are incidental -- the prefix says what was
+    RECORDED rather than let them read as the reason. The one copy: --agents and workflow-lanes.py's WORKFLOWS
+    cause lines both call this."""
+    if entry.get("state") == "error":
+        return ""
+    return "[no terminal state recorded: agent state=%s, run status=%s] " % (
+        entry.get("state") or "none", run_status or "?")
 
 
 def _block_text(content):
@@ -292,11 +313,30 @@ def _counted(counter, order):
                      for k in sorted(counter, key=lambda k: (-counter[k], order.index(k))))
 
 
-def agent_death_cause(path):
-    """One line saying why an agent that has NO result died, read from its transcript: StructuredOutput
-    rejections by field path + schema keyword + count, API errors, other tools' errors by name + count, or
-    an explicit 'unknown'. Every signal present is named, most specific first; it is never an empty string."""
+def _first_line(s):
+    for ln in str(s or "").splitlines():
+        if ln.strip():
+            return ln.strip()
+    return ""
+
+
+def agent_death_cause(path, journal_error=None):
+    """One line saying why an agent that has NO result died. It is never an empty string.
+
+    journal_error is the agent's journal entry's own `error` field (the runtime's recorded reason it stopped,
+    e.g. 'StructuredOutput retry cap (5) exceeded'). When it is non-empty it LEADS as 'journal error: <first
+    line, clipped>', and the transcript's findings follow it: StructuredOutput rejections by field path +
+    schema keyword + count, API errors, other tools' errors by name + count. Both are shown, neither hides the
+    other -- the journal says why the lane stopped, only the transcript says which field to fix -- and the
+    recorded reason goes first so a line clip trims the detail, never the reason.
+    With no transcript file: the journal error plus 'transcript missing', or 'no transcript' when the journal
+    recorded none. With a transcript that shows no error: the journal error, or 'unknown' when there is none.
+    An empty or absent journal_error reads exactly as the transcript alone does."""
+    recorded = _first_line(journal_error)
+    head = ["journal error: " + _clip(recorded, JOURNAL_ERROR_CLIP)] if recorded else []
     if not path or not os.path.isfile(str(path)):
+        if head:
+            return head[0] + "; transcript missing"
         return "no transcript"
     rejected, items, order = 0, {}, []
     tool_errs, tool_order, api = {}, [], []
@@ -323,7 +363,7 @@ def agent_death_cause(path):
         parts.append("API error x%d -- %s" % (len(api), api[-1]))
     if tool_errs:
         parts.append("tool errors -- %s" % _counted(tool_errs, tool_order))
-    return "; ".join(parts) or "unknown -- no error tool result and no API error in the transcript"
+    return "; ".join(head + parts) or "unknown -- no error tool result and no API error in the transcript"
 
 
 def keypath_get(obj, keypath):
@@ -434,13 +474,9 @@ def main():
                 # printed for EVERY agent without a result, live or dead: a run whose session ended without
                 # recording an outcome still reads 'running', and skipping it would be silence for a dead lane
                 aid = e.get("agentId")
-                cause = agent_death_cause(adir / ("agent-%s.jsonl" % aid) if aid else None)
-                if e.get("state") != "error":
-                    # no terminal state: in a killed run the lane was cut off, so its transcript's errors are
-                    # incidental -- say what was RECORDED rather than let them read as the reason
-                    cause = "[no terminal state recorded: agent state=%s, run status=%s] %s" % (
-                        e.get("state") or "none", journal.get("status") or "?", cause)
-                print("%-19s cause: %s" % (aid or "?", cause))
+                cause = agent_death_cause(adir / ("agent-%s.jsonl" % aid) if aid else None,
+                                          journal_error=e.get("error"))
+                print("%-19s cause: %s%s" % (aid or "?", no_terminal_state_prefix(e, journal.get("status")), cause))
         return
     if args.agent or args.extract:
         adir = agents_dir_for(path)

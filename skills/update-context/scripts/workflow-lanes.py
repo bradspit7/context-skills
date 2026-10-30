@@ -8,12 +8,13 @@ project: two lanes had returned FAIL before the cut, and their verdicts sat unre
 
 For each in-scope run whose status is not `completed`, this prints every lane that has a result
 (label + verdict) and, on ONE line, only the lanes with no result. Under that line, one
-`    <label>: <cause>` line per lane says WHY it has none (StructuredOutput rejections by field,
-keyword and count; API errors; other tools' errors; `no transcript`; `unknown`), so a fleet killed
-by a schema cap does not read as lanes to re-run unchanged: a re-run with the same schema dies the
-same way. A run that is not terminal yet (`running`, or a status this script does not know) lists
-its finished lanes but never names a lane as needing a re-run. Prints NOTHING when no in-scope run
-is incomplete.
+`    <label>: <cause>` line per lane says WHY it has none (the journal entry's own recorded error,
+e.g. the StructuredOutput retry cap; then its transcript's StructuredOutput rejections by field,
+keyword and count, API errors, other tools' errors; `no transcript` / `unknown` when neither
+records one), so a fleet killed by a schema cap does not read as lanes to re-run unchanged: a
+re-run with the same schema dies the same way. A run that is not terminal yet (`running`, or a
+status this script does not know) lists its finished lanes but never names a lane as needing a
+re-run. Prints NOTHING when no in-scope run is incomplete.
 
 Scope -- never wider than the slug dirs it is handed:
   * journals are globbed ONLY under --projects-dir/<slug>/*/workflows/ for each --slug. It never
@@ -26,8 +27,8 @@ Scope -- never wider than the slug dirs it is handed:
 Parsing is task-output.py's (orchestrate/scripts, imported by path): load_json, agent_entries,
 agents_dir_for, agent_transcript_output, and has_result -- the has-result rule `--agents` uses, one
 copy of it. A missing or broken task-output.py, or one missing any of those, is reported, never
-silent. The cause is its agent_death_cause(); a task-output.py without that one still gets the
-NO RESULT ids, plus one `cause unavailable` line.
+silent. The cause is its agent_death_cause() behind its no_terminal_state_prefix(); a
+task-output.py without either still gets the NO RESULT ids, plus one `cause unavailable` line.
 
 usage: workflow-lanes.py --projects-dir DIR --slug SLUG [--slug SLUG ...] [--days 7] [--handoff-epoch N]
 Exit 0 always, unless the arguments are wrong (2).
@@ -153,24 +154,25 @@ def load_task_output():
 
 def cause_lines(to, journal_path, status, unrun):
     """One '    <label>: <cause>' line per lane with no result, from task-output.py's agent_death_cause() on
-    that lane's transcript. A task-output.py without it gets ONE line saying so (the ids are on the NO RESULT
-    line either way); a cause that raises is shown as unavailable for that lane only, never a crash."""
+    that lane's transcript and its journal entry's own `error`, behind task-output.py's
+    no_terminal_state_prefix() -- the same two calls --agents makes, so the two surfaces cannot word a lane
+    differently. A task-output.py without either gets ONE line saying so (the ids are on the NO RESULT line
+    either way); a cause that raises is shown as unavailable for that lane only, never a crash."""
     death_cause = getattr(to, "agent_death_cause", None)
     if not callable(death_cause):
         return ["    cause unavailable: task-output.py has no agent_death_cause()"]
+    prefix = getattr(to, "no_terminal_state_prefix", None)
+    if not callable(prefix):
+        return ["    cause unavailable: task-output.py has no no_terminal_state_prefix()"]
     adir = to.agents_dir_for(str(journal_path))
     lines = []
     for label, e in unrun:
         aid = e.get("agentId")
         try:
-            cause = death_cause(adir / ("agent-%s.jsonl" % aid) if aid else None)
+            cause = death_cause(adir / ("agent-%s.jsonl" % aid) if aid else None, journal_error=e.get("error"))
         except Exception as ex:  # one unreadable transcript never costs the section
             cause = "cause unavailable (%s: %s)" % (type(ex).__name__, clip(ex, 120))
-        if e.get("state") != "error":
-            # cut off with no terminal state (as --agents says): its transcript's errors are incidental
-            cause = "[no terminal state recorded: agent state=%s, run status=%s] %s" % (
-                e.get("state") or "none", status, cause)
-        lines.append("    %s: %s" % (label, clip(cause, 400)))
+        lines.append("    %s: %s" % (label, clip(prefix(e, status) + cause, 400)))
     return lines
 
 

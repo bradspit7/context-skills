@@ -106,6 +106,31 @@ HEADING = re.compile(r"^## \d{4}-\d{2}-\d{2} · (.*)$")
 PARTIAL = re.compile(r"^(\S+\.patch) at ([0-9a-f]{7,40})$")
 TRAILER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*: \S.*$")
 
+# Commit stamp: this helper's own commits carry a Claude-Session trailer naming the Claude Code session
+# that ran it (CLAUDE_CODE_SESSION_ID / CLAUDE_CODE_HOST_SESSION_ID), so a project can tell which session
+# made a commit. Kept byte-identical in land-build.py and park-worktree.py.
+SESSION_TRAILER_KEY = "Claude-Session"
+SESSION_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+
+
+def session_stamp(env=None):
+    """(config, trailer): git's `-c` arguments and the `--trailer` arguments that stamp a NEW
+    commit with this session's Claude-Session trailer, or ([], []) when there is no valid id.
+    The ids are CLAUDE_CODE_SESSION_ID (a UUID, required) and CLAUDE_CODE_HOST_SESSION_ID
+    (local_<UUID>, optional; a malformed one stamps nothing). With neither set, as when someone
+    runs the helper by hand, nothing is added. The per-key settings override any general
+    trailer.* config: the trailer lands at the end and replaces one the message already holds."""
+    env = os.environ if env is None else env
+    cli = env.get("CLAUDE_CODE_SESSION_ID") or ""
+    app = env.get("CLAUDE_CODE_HOST_SESSION_ID") or ""
+    if not re.fullmatch(SESSION_UUID, cli) or (
+            app and not re.fullmatch("local_" + SESSION_UUID, app)):
+        return [], []
+    k = SESSION_TRAILER_KEY
+    config = ["-c", "trailer.%s.where=end" % k, "-c", "trailer.%s.ifExists=replace" % k,
+              "-c", "trailer.%s.ifMissing=add" % k]
+    return config, ["--trailer", "%s: %s" % (k, cli + (" " + app if app else ""))]
+
 # The optional external review script (see the docstring for its contract).
 CODEX_ASK = Path.home() / ".claude" / "codex-ask.py"
 # The script's last stdout line, per its contract.
@@ -688,7 +713,9 @@ def land(p, a):
             if p["partial_paths"]:
                 git(top, "rm", "-q", "--", *p["partial_paths"])
             (top / p["queue_rel"]).write_bytes(p["queue_new"])
-            git(top, "commit", "-q", "-F", msgfile, "--", *p["paths"])
+            # Stamped at commit time, before the verify: a landing whose verify then fails keeps its owner.
+            config, trailer = session_stamp()
+            git(top, *config, "commit", "-q", "-F", msgfile, *trailer, "--", *p["paths"])
         except Refused as e:
             undo(p)
             raise Refused("the landing commit failed, and the main checkout was restored: %s" % e)

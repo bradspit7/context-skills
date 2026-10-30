@@ -55,6 +55,31 @@ SENTINEL = ".mutation-in-flight.json"
 DEFAULT_OUT = "upgrade-partials"
 PARTIAL_LEAD = "- **Partial:** "
 
+# Commit stamp: this helper's own commits carry a Claude-Session trailer naming the Claude Code session
+# that ran it (CLAUDE_CODE_SESSION_ID / CLAUDE_CODE_HOST_SESSION_ID), so a project can tell which session
+# made a commit. Kept byte-identical in land-build.py and park-worktree.py.
+SESSION_TRAILER_KEY = "Claude-Session"
+SESSION_UUID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
+
+
+def session_stamp(env=None):
+    """(config, trailer): git's `-c` arguments and the `--trailer` arguments that stamp a NEW
+    commit with this session's Claude-Session trailer, or ([], []) when there is no valid id.
+    The ids are CLAUDE_CODE_SESSION_ID (a UUID, required) and CLAUDE_CODE_HOST_SESSION_ID
+    (local_<UUID>, optional; a malformed one stamps nothing). With neither set, as when someone
+    runs the helper by hand, nothing is added. The per-key settings override any general
+    trailer.* config: the trailer lands at the end and replaces one the message already holds."""
+    env = os.environ if env is None else env
+    cli = env.get("CLAUDE_CODE_SESSION_ID") or ""
+    app = env.get("CLAUDE_CODE_HOST_SESSION_ID") or ""
+    if not re.fullmatch(SESSION_UUID, cli) or (
+            app and not re.fullmatch("local_" + SESSION_UUID, app)):
+        return [], []
+    k = SESSION_TRAILER_KEY
+    config = ["-c", "trailer.%s.where=end" % k, "-c", "trailer.%s.ifExists=replace" % k,
+              "-c", "trailer.%s.ifMissing=add" % k]
+    return config, ["--trailer", "%s: %s" % (k, cli + (" " + app if app else ""))]
+
 
 class Refused(Exception):
     """Nothing was written or committed; the message says why."""
@@ -264,7 +289,8 @@ def park(a):
             wt.name, base[:7], len(kinds), "yes" if at_head else "no")
         try:
             git(top, "add", "--", *paths)
-            git(top, "commit", "-q", "-m", msg, "--", *paths)
+            config, trailer = session_stamp()
+            git(top, *config, "commit", "-q", "-m", msg, *trailer, "--", *paths)
         except Refused:
             # Undo every write, so "refused" keeps meaning "nothing written": unstage, delete, restore.
             git(top, "reset", "-q", "--", *paths, check=False)

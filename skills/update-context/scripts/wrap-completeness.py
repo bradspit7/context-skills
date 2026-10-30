@@ -68,11 +68,26 @@ the same app id when both carry one, otherwise the same CLI id. The wrap declare
       v2 sources in every row); the session-wide gap. The window is selected with git's
       --since-as-filter (git 2.37+; an older git exits 2). Exit 0; 2 (INVALID) when no wrap is
       eligible.
+  python wrap-completeness.py --candidates [--session VALUE] [--tip REF] [--repo DIR]
+      The window a wrap made now would be scored on (update-context's Step 1). A pending wrap by
+      this session is placed on the tip (default HEAD) and bounded with scorer 2's own bound(),
+      so the window is the one `--wrap --scorer 2` will compute for a wrap committed there: since
+      this session's previous wrap; before its first one, since the last wrap before its first
+      commit; with no commit of its own at all, since the newest wrap below the tip. It lists the
+      OWN commits, the OTHER sessions (each by the id an Adopts-Session line takes) with their
+      counts and how many of those the checked-out branch's upstream already holds, and the
+      UNKNOWN and CONFLICT commits (subjects printed). The session is --session, else
+      CLAUDE_CODE_SESSION_ID plus " " + CLAUDE_CODE_HOST_SESSION_ID when that is set, built and
+      refused exactly as the session-trailer card builds its stamp: with no usable id it exits 2
+      and names what is missing, never guessing one. It always reads with scorer 2's rules;
+      --scorer does not change what it prints. Exit 0 (nothing to bound the window is printed,
+      not an error); 2 with no usable session id, or on a git failure.
 Every git call is bounded by GIT_TIMEOUT seconds; a call past it exits 2.
 """
 import argparse
 import hashlib
 import json
+import os
 import re
 import statistics
 import subprocess
@@ -1047,6 +1062,162 @@ def run_cohort_v2(repo, since, until, tip, json_path):
     return code
 
 
+# ==============================================================================================
+# --candidates: the window a wrap made now would be scored on, for update-context's Step 1
+# (design component 3: "the evidence step shows the OTHER sessions with commits in the candidate
+# interval, by id and count"). Read-only; always scorer 2's rules. Nothing above changes for it.
+# ==============================================================================================
+
+PENDING = "pending-wrap"  # the pending wrap's key in the graph; no git object name can equal it
+NO_SESSION = {
+    "no-session-id": "CLAUDE_CODE_SESSION_ID unset; pass --session",
+    "bad-session-id": "CLAUDE_CODE_SESSION_ID is not a session id (a UUID); pass --session",
+    "bad-host-id": ("CLAUDE_CODE_HOST_SESSION_ID is malformed, so the hook stamps nothing (bad-host-id); "
+                    "pass --session"),
+}
+
+
+def session_from_env(env=None):
+    """(value, None) for this session's Claude-Session value, or (None, reason): built from
+    CLAUDE_CODE_SESSION_ID and CLAUDE_CODE_HOST_SESSION_ID exactly as guard_cards.py's
+    session_value() builds the stamp the hook writes (the suite compares the two, G#415). The CLI
+    id must be a UUID; an app id, when set, must be local_<UUID>, and a malformed one is refused
+    (bad-host-id) the way the card then stamps nothing -- never the CLI id alone."""
+    env = os.environ if env is None else env
+    cli, app = env.get("CLAUDE_CODE_SESSION_ID"), env.get("CLAUDE_CODE_HOST_SESSION_ID")
+    if not cli:
+        return None, "no-session-id"
+    if not CLI_ID_RE.fullmatch(cli):
+        return None, "bad-session-id"
+    if not app:
+        return cli, None
+    if not APP_ID_RE.fullmatch(app):
+        return None, "bad-host-id"
+    return cli + " " + app, None
+
+
+def add_pending_wrap(g, tip, value):
+    """Place on g the wrap this session would commit at `tip` now: parent `tip`, Claude-Session
+    `value`, a `Session update` subject, no fold, adoption or workflow values, not a merge and not
+    HANDOFF-only. It goes first in g.order and g.wraps (it is the newest commit), so bound()
+    computes for it what score_v2() will compute for the real wrap, whose own stamp counts in
+    bound() the same way. Returns its key."""
+    p = PENDING
+    g.order.insert(0, p)
+    g.wraps.insert(0, p)
+    g.parents[p] = [tip]
+    g.date[p] = ""
+    g.subject[p] = WRAP_SUBJECT + ": (pending)"
+    g.values[p] = [value]
+    g.fold_values[p], g.adopts[p], g.workflow[p] = [], [], []
+    return p
+
+
+def candidates(repo, w_value, tip=None):
+    """The window a wrap by session `w_value` committed at `tip` (default HEAD) would be scored on,
+    classified the way score_v2() classifies I with no adoption. A dict: tip, W, bound, how
+    (bound()'s), carried (whether a commit below the tip carries the session), upstream (the
+    checked-out branch's, or None), window (its work commits, newest first; None when nothing
+    bounds it), classes and subjects by sha, own, other ([{id, shas, commits, on_upstream}], most
+    commits first; on_upstream None with no upstream), unknown, conflict ([{sha, ids, carries}]).
+    print_candidates() formats it. Raises Usage for an invalid value or a git failure."""
+    w = parse_session(w_value.strip())
+    if w is None:
+        raise Usage("%r is not a Claude-Session value (<uuid> or <uuid> local_<uuid>)" % (w_value,))
+    tip_sha = git(repo, "rev-parse", "--verify", (tip or "HEAD") + "^{commit}").stdout.strip()
+    up = git(repo, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", check=False)
+    upstream = up.stdout.strip() if up.returncode == 0 else ""
+    up_sha = git(repo, "rev-parse", "--verify", upstream + "^{commit}").stdout.strip() if upstream else None
+    # Read from the tip alone, as score_v2() reads it for the wrap: with another start (the
+    # upstream) git's --topo-order can order unrelated lines differently (measured on git 2.53),
+    # and bound() takes the first wrap in that order as the newest, so a wider read moves L.
+    g = Graph(repo, [tip_sha])
+    p = add_pending_wrap(g, tip_sha, show_value(w))
+
+    def match(i):
+        return same_session(i, w)
+    b, how = bound(g, p, match)
+    out = {"scorer": 2, "tip": tip_sha, "W": show_value(w), "bound": b, "how": how,
+           "carried": any(c != p and carries(g, c, match) for c in g.order),
+           "upstream": upstream or None, "window": None, "classes": {}, "subjects": {}, "own": [],
+           "other": [], "unknown": [], "conflict": []}
+    if b is None and how == "none":
+        return out
+    win = (g.ancestors(p) - g.ancestors(b) - {p}) if b is not None else frozenset()
+    work = [c for c in g.order if c in win and g.is_work(c)]
+    on_up = set()
+    if up_sha and work:
+        on_up = set(git(repo, "rev-list", up_sha, "^" + b, "--").stdout.split())
+    group = session_groups([g.ident(c)[1] for c in work if g.ident(c)[0] == ONE])
+    others = {}
+    for c in work:
+        kind, ident = g.ident(c)
+        cls = (OWN if same_session(ident, w) else OTHER) if kind == ONE else kind
+        out["classes"][c] = cls
+        out["subjects"][c] = g.subject[c]
+        if cls == OWN:
+            out["own"].append(c)
+        elif cls == OTHER:
+            others.setdefault(group(ident), []).append(c)
+        elif cls == UNKNOWN:
+            out["unknown"].append(c)
+        else:
+            out["conflict"].append({"sha": c, "ids": sorted(set(v[1] or v[0] for v in ident)),
+                                    "carries": any(same_session(v, w) for v in ident)})
+    out["window"] = work
+    out["other"] = [{"id": k, "shas": v, "commits": len(v),
+                     "on_upstream": sum(1 for c in v if c in on_up) if up_sha else None}
+                    for k, v in sorted(others.items(), key=lambda kv: (-len(kv[1]), kv[0]))]
+    return out
+
+
+def print_candidates(c):
+    print("candidates for a wrap at %s; session %s; scorer 2" % (c["tip"][:9], c["W"]))
+    if c["window"] is None:
+        print("  bound: NOTHING (no earlier wrap; the wrap will read ineligible no-bound)")
+        return 0
+    if c["bound"] is None:
+        print("  bound: - (no commit carries this session)")
+    else:
+        what = ("this session's previous wrap" if c["how"] == "previous" else
+                "the last wrap before its first commit" if c["carried"] else "the last wrap before this point")
+        print("  bound: %s (%s)" % (c["bound"][:9], what))
+    n = dict((k, sum(1 for v in c["classes"].values() if v == k)) for k in (OWN, OTHER, UNKNOWN, CONFLICT))
+    print("  window: %d work commit(s): OWN %d · OTHER %d · UNKNOWN %d · CONFLICT %d"
+          % (len(c["window"]), n[OWN], n[OTHER], n[UNKNOWN], n[CONFLICT]))
+    print("  OWN (cite each one as you write): %d" % len(c["own"]))
+    for sha in c["own"]:
+        print("    OWN        %s  %s" % (sha[:9], c["subjects"][sha]))
+    print("  OTHER sessions (adopt only a session this session started, or whose unpublished work it merged, "
+          "fast-forwarded or cherry-picked here): %d" % len(c["other"]))
+    for o in c["other"]:
+        where = "%d already on %s" % (o["on_upstream"], c["upstream"]) if c["upstream"] else "no upstream"
+        print("    %s  %d commit(s), %s" % (o["id"], o["commits"], where))
+    print("  UNKNOWN (no stamp; write one up only if this session made it): %d" % len(c["unknown"]))
+    for sha in c["unknown"]:
+        print("    UNKNOWN    %s  %s" % (sha[:9], c["subjects"][sha]))
+    print("  CONFLICT: %d" % len(c["conflict"]))
+    for e in c["conflict"]:
+        print("    CONFLICT   %s  %s  (valid ids: %s; carries this session: %s)" % (
+            e["sha"][:9], c["subjects"][e["sha"]], ", ".join(e["ids"]) or "none", "yes" if e["carries"] else "no"))
+    return 0
+
+
+def run_candidates(a):
+    """--candidates from the parsed arguments: the view printed, exit 0; Usage (exit 2) otherwise."""
+    if a.wrap or a.since:
+        raise Usage("--candidates cannot be combined with --wrap or --since")
+    if a.until or a.json:
+        raise Usage("--until and --json apply to --since only")
+    if a.session is not None:
+        value = a.session
+    else:
+        value, why = session_from_env()
+        if value is None:
+            raise Usage(NO_SESSION[why])
+    return print_candidates(candidates(a.repo, value, a.tip))
+
+
 def build_parser():
     ap = argparse.ArgumentParser(description="How much of a session's work did its wrap write down?")
     ap.add_argument("--repo", default=".")
@@ -1059,12 +1230,18 @@ def build_parser():
     ap.add_argument("--json", metavar="PATH")
     ap.add_argument("--scorer", type=int, choices=(1, 2), default=1)
     ap.add_argument("--tip", metavar="REF")
+    ap.add_argument("--candidates", action="store_true")
+    ap.add_argument("--session", metavar="VALUE")
     return ap
 
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
     try:
+        if a.candidates:
+            return run_candidates(a)
+        if a.session is not None:
+            raise Usage("--session applies to --candidates only")
         if bool(a.wrap) == bool(a.since):
             raise Usage("give exactly one of --wrap or --since")
         if a.scorer == 1 and a.tip is not None:

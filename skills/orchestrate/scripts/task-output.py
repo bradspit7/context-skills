@@ -26,11 +26,17 @@ Usage:
                                           neither records anything)
   task-output.py wf_c502254a --agent a07e    one agent's structured output (id prefix or label); an agent
                                           whose every StructuredOutput call was rejected prints a
-                                          `NOT ACCEPTED:` line and exits 1, never the rejected payload
+                                          `NOT ACCEPTED:` line and exits 1, never the rejected payload;
+                                          an agent with no output at all (no prose, or its last turn an
+                                          API error, whose synthetic message is not an answer) prints a
+                                          `NO RESULT: ... cause: <the --agents cause>` line and exits 1
   task-output.py wf_c502254a --extract out.json   all agents' outputs -> JSON (fleet-resume step 1); such
                                           an agent's record has output null, not_accepted true, and
-                                          the blob's top-level not_accepted lists every one
-  task-output.py <path .json|.jsonl>      parse a journal / agent transcript file directly
+                                          the blob's top-level not_accepted lists every one; every record
+                                          with output null carries `cause`, and top-level no_output lists
+                                          the no-output ones that are not not_accepted
+  task-output.py <path .json|.jsonl>      parse a journal / agent transcript file directly (an agent
+                                          transcript with no output prints NOT ACCEPTED / NO RESULT, exit 1)
 """
 import argparse
 import glob
@@ -210,14 +216,22 @@ def agent_transcript_outcome(path):
     None and rejected_calls says how many -- the agent is NOT ACCEPTED. Only an agent that made no
     StructuredOutput call at all falls back to {"final_text": <its last assistant text>} (agents without a
     schema return prose), else None. (Probed live 2026-10-17: 6,181 StructuredOutput calls in 6,778 agent
-    transcripts, every one with a tool_result -- 5,772 accepted, 409 rejected, none unanswered.)"""
-    calls, rejected_ids, text = [], set(), None
+    transcripts, every one with a tool_result -- 5,772 accepted, 409 rejected, none unanswered.)
+    That fallback never takes an API-error record's text, wherever the record sits: it is the runtime's
+    synthetic message ("You've hit your session limit"), not the agent's answer (Codex 20261030-093310-490849:
+    an API error, then a tool call, then nothing, had read it as final_text). And it is None when the agent's
+    LAST TURN was an API error, since any prose before it was interim. (Probed 2026-10-30 over 4,439 agent
+    transcripts: 50 hold an API-error record, and in all 50 it is the last record, carrying a `<synthetic>`
+    text block; 49 had read as final_text.)"""
+    calls, rejected_ids, text, last_turn_api_error = [], set(), None, False
     for kind, rec, item in transcript_events(path):
+        if kind == "api_error" or rec.get("type") == "assistant":
+            last_turn_api_error = bool(rec.get("isApiErrorMessage"))
         if kind == "tool_use" and item.get("name") == "StructuredOutput":
             calls.append((item.get("id"), item.get("input")))
         elif kind == "tool_error" and item[0] == "StructuredOutput":
             rejected_ids.add(item[2])
-        elif kind == "text" and rec.get("type") == "assistant":
+        elif kind == "text" and rec.get("type") == "assistant" and not rec.get("isApiErrorMessage"):
             text = item.get("text")
     rejected = sum(1 for tid, _ in calls if tid in rejected_ids)
     accepted = [inp for tid, inp in calls if tid not in rejected_ids and inp is not None]
@@ -225,7 +239,7 @@ def agent_transcript_outcome(path):
         return unwrap(accepted[-1]), rejected
     if rejected:
         return None, rejected
-    return ({"final_text": text} if text else None), 0
+    return ({"final_text": text} if text and not last_turn_api_error else None), 0
 
 
 def agent_transcript_output(path):
@@ -242,6 +256,14 @@ def not_accepted_line(who, rejected):
              else "%d StructuredOutput calls and the schema rejected all %d" % (rejected, rejected))
     return ("NOT ACCEPTED: %s made %s -- it has no accepted output, and a rejected payload is not shown "
             "as one (--agents prints why it was rejected)" % (who, calls))
+
+
+def no_result_line(who, cause):
+    """The line --agent and the direct transcript path print, in place of an output, for an agent with NO
+    output and no rejected StructuredOutput call: no prose either, or its last turn was an API error. On the
+    --agent path cause is lane_cause()'s, the same words --agents prints for that lane; the direct transcript
+    path has no journal, so its cause is agent_death_cause() alone."""
+    return "NO RESULT: %s has no output -- cause: %s" % (who, cause)
 
 
 def has_result(entry):
@@ -366,6 +388,21 @@ def agent_death_cause(path, journal_error=None):
     return "; ".join(head + parts) or "unknown -- no error tool result and no API error in the transcript"
 
 
+def lane_cause(entry, transcript_path, run_status):
+    """The cause of one agent with no result, worded the one way --agents, --agent and --extract all print it:
+    no_terminal_state_prefix() then agent_death_cause() on its transcript with its journal entry's own error.
+    entry is {} for a transcript the journal lists no entry for. --agents asks only about agents with no
+    recorded result; --agent and --extract also reach one the journal says RETURNED (has_result()) whose
+    transcript yields no output, e.g. an accepted StructuredOutput input of {"result": null}. That agent did
+    not die, so it gets what was recorded, never a death cause behind "no terminal state recorded" (Codex
+    20261030-093310-490849)."""
+    if has_result(entry):
+        return ("the journal recorded a result (state=%s), but no output could be extracted from its transcript"
+                % (entry.get("state") or "none"))
+    return no_terminal_state_prefix(entry, run_status) + agent_death_cause(
+        transcript_path, journal_error=entry.get("error"))
+
+
 def keypath_get(obj, keypath):
     node = obj
     for part in keypath.split("."):
@@ -447,7 +484,8 @@ def main():
             print(not_accepted_line(path, rejected))
             sys.exit(1)
         if out is None:
-            sys.exit("no StructuredOutput call and no assistant text in %s" % path)
+            print(no_result_line(path, agent_death_cause(path)))
+            sys.exit(1)
         dump(out)
         return
 
@@ -474,9 +512,8 @@ def main():
                 # printed for EVERY agent without a result, live or dead: a run whose session ended without
                 # recording an outcome still reads 'running', and skipping it would be silence for a dead lane
                 aid = e.get("agentId")
-                cause = agent_death_cause(adir / ("agent-%s.jsonl" % aid) if aid else None,
-                                          journal_error=e.get("error"))
-                print("%-19s cause: %s%s" % (aid or "?", no_terminal_state_prefix(e, journal.get("status")), cause))
+                cause = lane_cause(e, adir / ("agent-%s.jsonl" % aid) if aid else None, journal.get("status"))
+                print("%-19s cause: %s" % (aid or "?", cause))
         return
     if args.agent or args.extract:
         adir = agents_dir_for(path)
@@ -496,16 +533,22 @@ def main():
                 for h in hits:
                     print("  " + os.path.basename(h), file=sys.stderr)
             out, rejected = agent_transcript_outcome(hits[0])
+            aid = os.path.basename(hits[0])[len("agent-"):-len(".jsonl")]
+            label = meta.get(aid, {}).get("label")
+            who = "agent %s%s" % (aid, " (%s)" % label if label else "")
             if out is None and rejected:
-                aid = os.path.basename(hits[0])[len("agent-"):-len(".jsonl")]
-                label = meta.get(aid, {}).get("label")
-                print(not_accepted_line("agent %s%s" % (aid, " (%s)" % label if label else ""), rejected))
+                print(not_accepted_line(who, rejected))
                 sys.exit(1)
-            dump(out if out is not None else {"error": "no output found", "file": hits[0]})
+            if out is None:
+                print(no_result_line(who, lane_cause(meta.get(aid, {}), hits[0], journal.get("status"))))
+                sys.exit(1)
+            dump(out)
             return
         # --extract: every agent -> one JSON blob (fleet-resume recipe, step 1). An agent whose every
-        # StructuredOutput call was rejected gets output null and not_accepted true, never the rejected payload.
-        agents, not_accepted = [], []
+        # StructuredOutput call was rejected gets output null and not_accepted true, never the rejected payload;
+        # any agent with output null carries its cause (the --agents text), and the top-level no_output lists
+        # the ones that are not not_accepted (no prose, or a last turn that was an API error).
+        agents, not_accepted, no_output = [], [], []
         for f in files:
             aid = os.path.basename(f)[len("agent-"):-len(".jsonl")]
             m = meta.get(aid, {})
@@ -513,20 +556,25 @@ def main():
             refused = out is None and rejected > 0
             if refused:
                 not_accepted.append(aid)
+            elif out is None:
+                no_output.append(aid)
             agents.append({"agentId": aid, "label": m.get("label"), "phase": m.get("phaseTitle"),
                            "model": m.get("model"), "state": m.get("state"),
-                           "output": out, "not_accepted": refused, "rejected_calls": rejected})
+                           "output": out, "not_accepted": refused, "rejected_calls": rejected,
+                           "cause": lane_cause(m, f, journal.get("status")) if out is None else None})
         blob = {"runId": journal.get("runId"), "status": journal.get("status"), "not_accepted": not_accepted,
-                "agents": agents}
+                "no_output": no_output, "agents": agents}
         if args.extract == "-":
             dump(blob)
         else:
             with io.open(args.extract, "w", encoding="utf-8", newline="") as f:
                 json.dump(blob, f, indent=2, ensure_ascii=False)
-            print("wrote %d agent records -> %s%s" % (
+            print("wrote %d agent records -> %s%s%s" % (
                 len(agents), args.extract,
                 "; %d NOT ACCEPTED (every StructuredOutput call rejected; output null): %s"
-                % (len(not_accepted), ", ".join(not_accepted)) if not_accepted else ""))
+                % (len(not_accepted), ", ".join(not_accepted)) if not_accepted else "",
+                "; %d NO RESULT (no output; each record's cause says why): %s"
+                % (len(no_output), ", ".join(no_output)) if no_output else ""))
         return
 
     # default: summary + result shape

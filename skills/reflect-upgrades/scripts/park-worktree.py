@@ -23,8 +23,9 @@ PARK (default):  python park-worktree.py <worktree> [--repo <checkout>] [--out D
   - with --item, adds (or replaces) `- **Partial:** <patch> at <base7>` in the UPGRADE-QUEUE.md entry
     whose `## ` heading contains TITLE, in the same commit when the queue file had no other edits;
   - removes the worktree only once the commit provably holds the patch (the committed blobs equal the
-    written bytes). --snapshot keeps it: a plain wrap does not stop or wait for a running helper, so it
-    commits the snapshot and leaves the helper working.
+    written bytes). --snapshot keeps it: a wrap in closing mode stops a running helper first, and
+    snapshots instead of parking when the stop is not confirmed or the worktree's ignored files are
+    unresolved, so nothing is removed under a writer that may still be running.
   Park only a worktree THIS session's helper used; another session's worktree is its own business.
 
 UNPARK:  python park-worktree.py --unpark <patch> --into <new worktree dir> --branch <name> [--repo <checkout>]
@@ -321,7 +322,8 @@ def park(a):
         if held.returncode or held.stdout != data:
             raise Kept("the commit does not hold %s byte for byte: %s kept" % (rel, wt))
     if a.snapshot:
-        print("worktree kept (--snapshot): %s -- a running helper keeps working there" % wt)
+        print("worktree kept (--snapshot): %s -- name its unconfirmed stop or unresolved ignored files "
+              "in the report" % wt)
         return 0
     rm = git(top, "worktree", "remove", "--force", "--force", wt, check=False)
     if rm.returncode:
@@ -373,7 +375,8 @@ def main(argv=None):
     ap.add_argument("--item", help="a substring of the UPGRADE-QUEUE.md heading whose entry gets the Partial bullet")
     ap.add_argument("--queue", help="the queue file, relative to the checkout (default: UPGRADE-QUEUE.md)")
     ap.add_argument("--snapshot", "--keep", dest="snapshot", action="store_true",
-                    help="commit the patch but keep the worktree (a plain wrap: the helper keeps running)")
+                    help="commit the patch but keep the worktree (the helper's stop is unconfirmed "
+                         "or its ignored files are unresolved)")
     ap.add_argument("--unpark", metavar="PATCH", help="apply a parked patch at its base in a new worktree")
     ap.add_argument("--into", help="with --unpark: the new worktree's directory")
     ap.add_argument("--branch", help="with --unpark: the new worktree's branch")

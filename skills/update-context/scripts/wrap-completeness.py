@@ -82,6 +82,29 @@ the same app id when both carry one, otherwise the same CLI id. The wrap declare
       and names what is missing, never guessing one. It always reads with scorer 2's rules;
       --scorer does not change what it prints. Exit 0 (nothing to bound the window is printed,
       not an error); 2 with no usable session id, or on a git failure.
+  python wrap-completeness.py --sessions TOKEN [TOKEN ...] [--folder TOKEN=PATH ...] [--repo DIR]
+      Where the work of the sessions this session started sits (update-context's Steps 1 and 7,
+      device-handoff's Step 1; docs/superpowers/specs/2026-10-30-closing-mode-design.md, C4). A
+      TOKEN is one id exactly as an `Adopts-Session:` line takes it, a CLI uuid or local_<uuid>; a
+      `<cli> <app>` pair is a usage error. A commit counts for a token exactly when scorer 2 counts
+      it ADOPTED under `Adopts-Session: TOKEN` -- in_adopted(), the function score_v2 classifies
+      ADOPTED with, never same_session() -- so what it reports and what that line covers cannot
+      differ. It reads HEAD, every local branch and every other worktree's HEAD. Per token: the
+      matching commits HEAD reaches (short sha, subject); those HEAD does not reach, grouped by
+      branch or by detached worktree HEAD, with counts; for a local_ token, each CLI id seen paired
+      with it in stamps whose commits stamped with that CLI id alone the line does not cover,
+      listed with the extra `Adopts-Session: <cli>` line that would (a CLI id seen with two app ids
+      is reported ambiguous and never resolved); for each --folder of the token, its uncommitted-
+      change count (git status --porcelain, untracked files included), whether it is a linked
+      worktree, and its branch; and, with no match, "no matching stamped commits found" -- never
+      "no commits": unstamped writers (a PowerShell commit, for one) are outside the record. Then
+      one line per linked worktree with uncommitted changes that no --folder and not the checkout
+      it runs in claims: `unassigned worktree: PATH (BRANCH), N uncommitted`; stamps attribute
+      commits, never uncommitted work. One repository per run; it always reads with scorer 2's
+      identity rules, and --scorer does not change what it prints. Integration is "reachable from
+      HEAD": a squash or a cherry-pick shows as not on HEAD. Exit 0 with the report, unintegrated
+      work included; 2 on a usage error, or when a ref or worktree could not be read: it names
+      each as `inspection incomplete: WHAT` and never reports as absent what it could not read.
 Every git call is bounded by GIT_TIMEOUT seconds; a call past it exits 2.
 """
 import argparse
@@ -1218,6 +1241,278 @@ def run_candidates(a):
     return print_candidates(candidates(a.repo, value, a.tip))
 
 
+# ==============================================================================================
+# --sessions: where the work of the sessions this session started sits, for update-context's
+# Steps 1 and 7 and device-handoff's Step 1 (docs/superpowers/specs/2026-10-30-closing-mode-
+# design.md, component C4). Read-only. A commit counts for a token exactly when scorer 2 counts it
+# ADOPTED for that Adopts-Session line. Nothing above changes for it.
+# ==============================================================================================
+
+INCOMPLETE = "inspection incomplete"
+
+
+def session_token(raw):
+    """One id exactly as an `Adopts-Session:` line takes it (adoption()'s grammar: a CLI uuid or
+    local_<uuid>), lowercased as adoption() lowercases it. A `<cli> <app>` Claude-Session pair, or
+    anything else, is a Usage error."""
+    tok = raw.strip()
+    if CLI_ID_RE.fullmatch(tok) or APP_ID_RE.fullmatch(tok):
+        return tok.lower()
+    if parse_session(tok) is not None:
+        raise Usage("%r is a <cli> <app> pair: --sessions takes one id per token, the CLI id or the app id, as an "
+                    "Adopts-Session line does" % raw)
+    raise Usage("%r is not a session id: a token is a CLI uuid or local_<uuid>, as an Adopts-Session line takes it"
+                % raw)
+
+
+def adopts(g, c, token):
+    """Whether `Adopts-Session: <token>` covers commit c: scorer 2 counts it ADOPTED under that line
+    exactly when c carries one valid stamp whose CLI id or app id is the token -- in_adopted(), the
+    function score_v2's classify() and its adopted-session match both call. Never same_session():
+    an app-id line does not cover that session's CLI id stamped alone."""
+    kind, ident = g.ident(c)
+    return kind == ONE and in_adopted(ident, {token})
+
+
+def worktree_list(repo):
+    """Every worktree of the repository (`git worktree list --porcelain -z`), the main one first:
+    dicts with path, head (the sha git printed, or None), branch (refs/heads/..., or None),
+    detached, prunable, bare and main."""
+    out = git(repo, "worktree", "list", "--porcelain", "-z").stdout
+    entries, cur = [], None
+    for field in out.split("\x00"):
+        if not field:
+            if cur is not None:
+                entries.append(cur)
+            cur = None
+            continue
+        key, _, val = field.partition(" ")
+        if key == "worktree":
+            if cur is not None:
+                entries.append(cur)
+            cur = {"path": val, "head": None, "branch": None, "detached": False, "prunable": False, "bare": False}
+        elif cur is None:
+            raise Usage("%s: could not parse git worktree list's output" % INCOMPLETE)
+        elif key == "HEAD":
+            cur["head"] = val
+        elif key == "branch":
+            cur["branch"] = val
+        elif key in ("detached", "prunable", "bare"):
+            cur[key] = True
+    if cur is not None:
+        entries.append(cur)
+    for i, e in enumerate(entries):
+        e["main"] = i == 0
+    return entries
+
+
+def norm_path(p):
+    return os.path.normcase(os.path.realpath(p))
+
+
+def branch_label(e):
+    if e["branch"]:
+        return e["branch"][len("refs/heads/"):] if e["branch"].startswith("refs/heads/") else e["branch"]
+    return "detached HEAD" if e["detached"] else "HEAD unreadable"
+
+
+def uncommitted(path):
+    """The uncommitted changes in the worktree at path: `git status --porcelain` entries, tracked
+    changes and untracked files (every one, whatever status.showUntrackedFiles says); ignored files
+    are not counted. Raises Usage when git cannot read it."""
+    out = git(path, "status", "--porcelain", "--untracked-files=all").stdout
+    return sum(1 for ln in out.split("\n") if ln.strip())
+
+
+def sessions(repo, tokens, folders=()):
+    """The --sessions report as a structure (print_sessions() formats it). tokens: session_token()
+    ids; folders: [(token, path)]. What cannot be read is listed in `incomplete`, never read as
+    absent; Usage when HEAD, the branch list or the worktree list cannot be read at all."""
+    head = git(repo, "rev-parse", "--verify", "HEAD^{commit}", check=False)
+    if head.returncode != 0:
+        raise Usage("%s: HEAD (%s)" % (INCOMPLETE, head.stderr.strip() or "unreadable"))
+    head_sha = head.stdout.strip()
+    top = git(repo, "rev-parse", "--show-toplevel").stdout.strip()
+    sym = git(repo, "symbolic-ref", "-q", "--short", "HEAD", check=False)
+    incomplete = []
+    # git for-each-ref skips a ref it cannot parse with only a warning on stderr: any stderr is a
+    # ref it did not list, so the inspection is incomplete.
+    refs = git(repo, "for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads/", check=False)
+    if refs.returncode != 0:
+        raise Usage("%s: the local branches (%s)" % (INCOMPLETE, refs.stderr.strip()))
+    for ln in refs.stderr.splitlines():
+        if ln.strip():
+            incomplete.append("the local branches: git for-each-ref: %s" % ln.strip())
+    branches = [tuple(ln.split("\x00", 1)) for ln in refs.stdout.splitlines() if "\x00" in ln]
+    wts = worktree_list(repo)
+    here = norm_path(top)
+    others = [e for e in wts if not e["bare"] and norm_path(e["path"]) != here]
+    # Every tip must name a readable commit; one that does not is named, never skipped.
+    sources = []
+    for name, sha in branches:
+        if git(repo, "rev-parse", "--verify", "-q", sha + "^{commit}", check=False).returncode != 0:
+            incomplete.append("%s: its object %s is missing or is not a commit" % (name, sha))
+            continue
+        sources.append(("branch " + (name[len("refs/heads/"):] if name.startswith("refs/heads/") else name), sha))
+    # Every readable linked-worktree HEAD is a tip too, attached or detached: the worktrees are listed
+    # after the branches, so a commit a started session makes on its branch in between is on its
+    # worktree's HEAD alone (Codex 20261030-145300-aa3f76). A commit a branch already reaches is
+    # reported under the branch only (labels()).
+    wt_sources = []
+    for e in others:
+        sha = e["head"] or ""
+        if not _SHA_RE.fullmatch(sha) or set(sha) == {"0"} or git(
+                repo, "rev-parse", "--verify", "-q", sha + "^{commit}", check=False).returncode != 0:
+            incomplete.append("worktree %s: its HEAD cannot be read" % e["path"])
+            continue
+        wt_sources.append(("worktree %s (%s%s)" % (e["path"], "branch " if e["branch"] else "", branch_label(e)), sha))
+    try:
+        g = Graph(repo, list(dict.fromkeys([head_sha] + [sha for _label, sha in sources + wt_sources])))
+    except Usage as ex:
+        raise Usage("%s: the history of the refs read (%s)" % (INCOMPLETE, ex))
+    head_anc = g.ancestors(head_sha)
+    apps_of = {}
+    for c in g.order:
+        kind, ident = g.ident(c)
+        if kind == ONE and ident[1]:
+            apps_of.setdefault(ident[0], set()).add(ident[1])
+
+    def labels(c):
+        """The tips that reach c, HEAD aside: every local branch that does, else every linked-worktree
+        HEAD that does (a commit the branch listing covers is never listed twice)."""
+        return ([label for label, sha in sources if c in g.ancestors(sha)]
+                or [label for label, sha in wt_sources if c in g.ancestors(sha)])
+
+    def where(c):
+        if c in head_anc:
+            return "on HEAD"
+        return ", ".join(labels(c)) or "unknown"
+
+    out_tokens = []
+    for tok in tokens:
+        matched = [c for c in g.order if adopts(g, c, tok)]
+        on_head = [c for c in matched if c in head_anc]
+        elsewhere = []
+        for label, _sha in sources + wt_sources:
+            got = [c for c in matched if c not in head_anc and label in labels(c)]
+            if got:
+                elsewhere.append({"label": label, "shas": got})
+        pairs = []
+        if tok.startswith("local_"):
+            for cli in sorted(c for c, apps in apps_of.items() if tok in apps):
+                alone = [c for c in g.order if g.ident(c) == (ONE, (cli, None))]
+                if alone:
+                    pairs.append({"cli": cli, "apps": sorted(apps_of[cli]), "alone": alone,
+                                  "where": [where(c) for c in alone], "ambiguous": len(apps_of[cli]) > 1})
+        out_tokens.append({"token": tok, "on_head": on_head, "elsewhere": elsewhere, "pairs": pairs, "folders": []})
+    by_token = dict((t["token"], t) for t in out_tokens)
+    claimed = {here}
+    for tok, path in folders:
+        f = {"path": path, "where": None, "uncommitted": None, "branch": None}
+        try:
+            ftop = git(path, "rev-parse", "--show-toplevel").stdout.strip()
+        except Usage as ex:
+            incomplete.append("folder %s=%s: %s" % (tok, path, ex))
+            continue
+        hit = [e for e in wts if norm_path(e["path"]) == norm_path(ftop)]
+        if not hit:
+            f["where"] = "not a worktree of this repository"
+        else:
+            claimed.add(norm_path(ftop))
+            try:
+                f["uncommitted"] = uncommitted(ftop)
+            except Usage as ex:
+                incomplete.append("folder %s=%s: %s" % (tok, path, ex))
+                continue
+            f["where"] = "the main worktree" if hit[0]["main"] else "linked worktree"
+            f["branch"] = ("branch " if hit[0]["branch"] else "") + branch_label(hit[0])
+        by_token[tok]["folders"].append(f)
+    unassigned = []
+    for e in others:
+        if e["main"] or norm_path(e["path"]) in claimed:
+            continue
+        if not os.path.isdir(e["path"]):
+            if not e["prunable"]:
+                incomplete.append("worktree %s: its folder is missing" % e["path"])
+            continue  # git lists it prunable: no working tree, so nothing uncommitted can be there
+        try:
+            n = uncommitted(e["path"])
+        except Usage as ex:
+            incomplete.append("worktree %s: %s" % (e["path"], ex))
+            continue
+        if n:
+            unassigned.append({"path": e["path"], "branch": branch_label(e), "uncommitted": n})
+    return {"repo": top, "head": head_sha, "head_branch": sym.stdout.strip() if sym.returncode == 0 else None,
+            "branches": len(branches), "worktrees": len(others), "incomplete": list(dict.fromkeys(incomplete)),
+            "tokens": out_tokens, "unassigned": unassigned, "subjects": g.subject}
+
+
+def print_sessions(s):
+    """The report; exit 0, or 2 when something could not be read."""
+    subj = s["subjects"]
+    none_left = " in the refs read (%s)" % INCOMPLETE if s["incomplete"] else ""
+    print("sessions in %s at HEAD %s (%s); read: HEAD, %d local branch(es), %d other worktree(s)" % (
+        s["repo"], s["head"][:9], s["head_branch"] or "detached", s["branches"], s["worktrees"]))
+    for what in s["incomplete"]:
+        print("%s: %s" % (INCOMPLETE, what))
+    for t in s["tokens"]:
+        print("session %s:" % t["token"])
+        if not t["on_head"] and not t["elsewhere"]:
+            print("  no matching stamped commits found%s" % none_left)
+        else:
+            print("  on HEAD: %d commit(s)" % len(t["on_head"]))
+            for c in t["on_head"]:
+                print("    %s  %s" % (c[:9], subj[c]))
+            if t["elsewhere"]:
+                n = len(set(c for grp in t["elsewhere"] for c in grp["shas"]))
+                print("  elsewhere: %d commit(s) HEAD does not reach" % n)
+                for grp in t["elsewhere"]:
+                    print("    %s: %d commit(s)" % (grp["label"], len(grp["shas"])))
+                    for c in grp["shas"]:
+                        print("      %s  %s" % (c[:9], subj[c]))
+            else:
+                print("  elsewhere: none%s" % none_left)
+        for p in t["pairs"]:
+            if p["ambiguous"]:
+                print("  paired CLI id %s: ambiguous, seen with %d app ids (%s); its %d commit(s) stamped with it alone "
+                      "are not attributed, never resolved" % (p["cli"], len(p["apps"]), ", ".join(p["apps"]),
+                                                              len(p["alone"])))
+                continue
+            print("  paired CLI id %s: %d commit(s) stamped with it alone, which Adopts-Session: %s does not cover"
+                  % (p["cli"], len(p["alone"]), t["token"]))
+            for c, w in zip(p["alone"], p["where"]):
+                print("    %s  %s  (%s)" % (c[:9], subj[c], w))
+            print("    extra line that covers them: Adopts-Session: %s" % p["cli"])
+        for f in t["folders"]:
+            if f["uncommitted"] is None:
+                print("  folder %s: %s" % (f["path"], f["where"]))
+            else:
+                print("  folder %s: %d uncommitted; %s; %s" % (f["path"], f["uncommitted"], f["where"], f["branch"]))
+    for u in s["unassigned"]:
+        print("unassigned worktree: %s (%s), %d uncommitted" % (u["path"], u["branch"], u["uncommitted"]))
+    return 2 if s["incomplete"] else 0
+
+
+def run_sessions(a):
+    """--sessions from the parsed arguments: the report printed (exit 0, or 2 when something could
+    not be read); Usage (exit 2) otherwise."""
+    if a.wrap or a.since or a.candidates:
+        raise Usage("--sessions cannot be combined with --wrap, --since or --candidates")
+    if a.until or a.json or a.tip or a.session is not None:
+        raise Usage("--until, --json, --tip and --session do not apply to --sessions")
+    tokens = list(dict.fromkeys(session_token(t) for t in a.sessions))
+    folders = []
+    for f in a.folder or ():
+        tok, sep, path = f.partition("=")
+        if not sep or not tok or not path:
+            raise Usage("--folder takes TOKEN=PATH, not %r" % f)
+        tok = session_token(tok)
+        if tok not in tokens:
+            raise Usage("--folder names %s, which is not one of the --sessions tokens" % tok)
+        folders.append((tok, path))
+    return print_sessions(sessions(a.repo, tokens, folders))
+
+
 def build_parser():
     ap = argparse.ArgumentParser(description="How much of a session's work did its wrap write down?")
     ap.add_argument("--repo", default=".")
@@ -1232,12 +1527,18 @@ def build_parser():
     ap.add_argument("--tip", metavar="REF")
     ap.add_argument("--candidates", action="store_true")
     ap.add_argument("--session", metavar="VALUE")
+    ap.add_argument("--sessions", nargs="+", metavar="TOKEN")
+    ap.add_argument("--folder", action="append", metavar="TOKEN=PATH")
     return ap
 
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
     try:
+        if a.sessions is not None:
+            return run_sessions(a)
+        if a.folder:
+            raise Usage("--folder applies to --sessions only")
         if a.candidates:
             return run_candidates(a)
         if a.session is not None:

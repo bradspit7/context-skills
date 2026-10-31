@@ -64,10 +64,14 @@ plus a margin), so a held lock costs a refusal record per call that ends, not on
 a landing that stopped) it waits up to --codex-wait-min minutes (default 15; the first three review calls took 6
 to 9) and prints `CODEX REVIEW RETURNED <call-id> answer=<path>` with the reviewed range and whether the landing
 committed it. Returned is not adjudicated: check each point against the landed files, fix forward what holds,
-tell the user in one line per disagreement, then record the outcome. A lock still held at its bound is one
+tell the user in one line per disagreement, then record the outcome. That holds outside closing mode only: in
+closing mode (a wrap or departure has been requested; from then on a late result supplies information and never
+authorizes new work) the next line asks to record the call id and the answer path only, with no adjudication,
+fix, landing or new run. A lock still held at its bound is one
 `CODEX REVIEW NOT RUN` line naming the command to run it by hand; any other refusal (a budget cap, a policy) is
 one `CODEX REVIEW REFUSED` line; a review still running at the bound is left running, and its line names the
-file its `CODEX-ASK` line will reach; script output without that line is `CODEX REVIEW UNKNOWN`, never a clean
+file its `CODEX-ASK` line will reach (in closing mode it is recorded as running, never stopped or adjudicated);
+script output without that line is `CODEX REVIEW UNKNOWN`, never a clean
 review. --no-codex-review skips it, for: a trivial or mechanical diff (a typo, a rename, a regenerated or reverted
 file) where a review has nothing to find; a diff already reviewed this session (a re-landing after a refused
 first try); or content your project's own rules keep out of an external prompt.
@@ -621,9 +625,12 @@ def codex_finish(p, a):
     except subprocess.TimeoutExpired:
         print("CODEX REVIEW still running after %g min (pid %d; it may be waiting out another Codex call's lock), left "
               "running in the background: when it ends, the last line of %s reads `CODEX-ASK <call-id> <exit> "
-              "answer=<path>`. Read that answer, check each point against the landed files, then record: python %s "
-              "--outcome <call-id> changed|nothing-new --note \"...\"" % (a.codex_wait_min, proc.pid, c["out"],
-                                                                       c["script"]))
+              "answer=<path>`. Outside closing mode, read that answer, check each point against the landed files, then "
+              "record: python %s --outcome <call-id> changed|nothing-new --note \"...\"" % (
+                  a.codex_wait_min, proc.pid, c["out"], c["script"]))
+        print("  in closing mode (a wrap or departure has been requested): record it as still running (pid %d, its "
+              "line goes to %s) and only that -- it is not stopped, and nothing is adjudicated for it now"
+              % (proc.pid, c["out"]))
         return
     lines = codex_lines(c["out"])
     if not lines:
@@ -636,7 +643,13 @@ def codex_finish(p, a):
         landed = ("the tip this landing committed, byte for byte" if p.get("byte_checked") else
                   "NOT what this landing committed (it stopped before its byte check passed)")
         print("CODEX REVIEW RETURNED %s answer=%s" % (call_id, rest))
-        print("  reviewed %s..%s, %s. Returned is not adjudicated: check each point against the landed files, fix "
+        # Closing mode (once a wrap or departure has been requested, the session finishes it and starts no new
+        # work): a late result supplies information and never authorizes development, so in closing mode it is
+        # recorded, not adjudicated.
+        print("  in closing mode (a wrap or departure has been requested): record the call id %s and the answer path %s "
+              "only -- no adjudication, fix, landing or new run for it now" % (call_id, rest))
+        print("  reviewed %s..%s, %s. Returned is not adjudicated: outside closing mode, check each point against "
+              "the landed files, fix "
               "forward what holds, tell the owner one line per disagreement, then: python %s --outcome %s "
               "changed|nothing-new --note \"...\"" % (p["base"][:7], p["tip"][:7], landed, c["script"], call_id))
     elif how == "refused" and code == EXIT_CODEX_LOCKED:

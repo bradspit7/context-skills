@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-11.2 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-30.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -202,9 +202,9 @@ A build started at the wrap is one the owner waits for, however it runs.
    checkout saw each source file twice.) The session's own context is too large to build in.
 4. **Never wait for it.** Go on with the owner's work. (Measured: most builds take 4 to 18 minutes,
    but one whose acceptance includes a serial mutation battery can take far longer -- one battery alone
-   ran about 100 minutes -- so time its first rows before giving an ETA.) When the helper returns,
-   **land it on the main thread with one command**, then run the propagation a wrap would run for those
-   files (for a skill, `update-context`'s Step 7 probe):
+   ran about 100 minutes -- so time its first rows before giving an ETA.) When the helper returns
+   **outside closing mode**, **land it on the main thread with one command**, then run the propagation
+   a wrap would run for those files (for a skill, `update-context`'s Step 7 probe):
    `python ~/.claude/skills/reflect-upgrades/scripts/land-build.py <worktree> --item "<queue title>" --subject "<subject>" --upgrade "<one plain sentence>" --verify "<the project's quick verify loop>"`
    (for example `--verify "bash run-tests.sh --quick"`, whatever the project's own quick test command
    is). **Pass the project's quick verify loop, not
@@ -226,23 +226,29 @@ A build started at the wrap is one the owner waits for, however it runs.
    the branch's diff in the background (waiting out another call that holds the script's lock), and after
    the verify prints `CODEX REVIEW RETURNED <call-id> answer=<path>` with the range it reviewed. Returned
    is not adjudicated: check each point against the landed files, fix forward what holds, tell the user
-   one line per disagreement, then record the call's outcome. A refusal is one line and never blocks the
+   one line per disagreement, then record the call's outcome. In closing mode that line, like any late
+   event, is recorded only: its call id and answer path. A refusal is one line and never blocks the
    landing. Pass
    `--no-codex-review` only for a trivial or mechanical diff, a diff already reviewed this session, or
    content your project's rules keep out of an external prompt.
    The trailer is the record (a ledger can derive *built* from it, in the repo where it landed), so a
    delivered upgrade gets exactly one, on the commit that delivers it, and a test-only, review-fix or
    fix-up commit gets none. If the session ends first, the entry stays queued and the next session's
-   start builds it. **A build still running at a wrap is not waited for:** the wrap reports
-   "Done — safe to close." and says closing loses nothing (the lesson stays queued); a departure stops
-   it before the push. **Its partial diff is parked, never left in a worktree no step names** (stopped
-   unreported, it sits there untracked and machine-local; measured once, a restart stranded a 9-file
-   diff that was saved by hand): the wrap snapshots it without stopping the helper
-   (`park-worktree.py <worktree> --snapshot --item "<queue title>"`, update-context Step 5), and a
-   departure stops the helper and parks it (`park-worktree.py <worktree> --item "<queue title>"`,
-   device-handoff Step 1). Either commits the patch, its base sha and the entry's
-   `- **Partial:** <patch> at <base>` bullet; without `--snapshot` it then removes the worktree. It
-   refuses a worktree holding a mutation battery's sentinel, an emptied one, or one with nothing to park.
+   start builds it. **In closing mode** (from a wrap or departure request on: `update-context`'s
+   *Closing mode*, where the session finishes the wrap and starts no new work), **a returned helper is
+   recorded only, never landed, and a wrap stops and parks a running build, as a departure does.** Its
+   partial diff is parked, never left in a worktree no step names (stopped unreported, it sits there
+   untracked and machine-local; measured once, a restart stranded a 9-file diff that was saved by
+   hand): stop the helper and confirm the stop (its task notification reads stopped or killed);
+   classify the worktree's ignored files
+   (`git -C <worktree> ls-files --others --ignored --exclude-standard`; the patch leaves them out, so
+   copy a valuable one out or name it in the handoff); then park it
+   (`park-worktree.py <worktree> --item "<queue title>"`, update-context Step 5, device-handoff Step 1).
+   A returned helper's worktree is parked the same way. Parking commits the patch, its base sha and the
+   entry's `- **Partial:** <patch> at <base>` bullet, then removes the worktree; when the stop cannot be
+   confirmed or an ignored file is unresolved, `--snapshot` commits the same and keeps the worktree,
+   and the report names what is unresolved. It refuses a worktree holding a mutation battery's
+   sentinel, an emptied one, or one with nothing to park.
    **Park only a worktree this session's helper used;** the briefing's and wrap's `WORKTREES` lines
    name every other one, and those are reported, never parked. When the build lands, its commit
    removes the queue entry **and** the partial's `.patch` and `.base` files (`land-build.py` does both).
@@ -314,7 +320,8 @@ means going back and recording it before finishing — the user should never hav
 ## Do NOT
 - Build more than one upgrade per session, build on the main thread, or start a build at a wrap or a
   departure.
-- Hold a wrap open for a build, or report a wrap as anything but done because a build is still running.
+- Hold a wrap open for a build, leave one running at a wrap, or land one in closing mode: a wrap stops
+  and parks a running build, as a departure does, and records a returned one (Step 5 item 4).
 - Edit a live-write project's forbidden files (Step 5 item 6).
 - Manufacture lessons to seem productive — Step 3 is the gate.
 - Emit an unlabeled row, or re-propose something Step 2 found.
@@ -329,8 +336,8 @@ write, or a `git commit`), it injects a one-line non-blocking nudge to run this 
 default 3; `UPGRADE_NUDGE_DISABLE=1` to silence). Pure stdlib, ASCII-only, fails open.
 
 ## Related
-- `update-context` — invokes this at every wrap (Steps 1-4 and 6; a wrap never runs Step 5); its
-  shipped / learned / decided signal feeds Step 1.
+- `update-context` — invokes this at every wrap (Steps 1-4 and 6; a wrap starts no build, and stops
+  and parks a running one per Step 5 item 4); its shipped / learned / decided signal feeds Step 1.
 - `hooks/upgrade-reflection-nudge.py` — the once-per-session `UserPromptSubmit` nudge (above).
 - `analyze-context` — prints each project's pending inbox filings, upgrade queue and recent `Upgrade:`
   trailers in every briefing, so nothing here waits on anyone remembering it; a non-empty queue there

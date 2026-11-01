@@ -120,7 +120,7 @@ emit_docket_bound() {   # $1 = the pickup doc
 # carry line at all, so the RULED OUT section printed and then fell out of the one briefing a
 # next-morning resume on the same machine gets -- the exact case the rulings exist for.
 emit_carry_line() {
-  echo "   Carry the UPGRADES, CI, RULED OUT and DEPLOY PARITY sections this report printed, verbatim (whichever"
+  echo "   Carry the UPGRADES, CI, RULED OUT, DEPLOY PARITY and SITE TOOLS sections this report printed, verbatim (whichever"
   echo "   were printed; on the no-git path they come after this block)."
   # Only when the IDENTITY section printed (under MACHINE, above): the short paths skip the reads
   # where a throwaway identity would otherwise surface, so the one line has to be carried by name.

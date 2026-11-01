@@ -49,7 +49,35 @@ serve     Validate, freeze the base, probe the port and REFUSE if anything alrea
           when a folder choice's page carries one. A url choice's frame points straight at its
           own server (Choice kinds). The helper
           waits for fonts, then scrolls `at=<selector>` to the middle with window.scrollTo (never
-          scrollIntoView, which also scrolls the comparison page around the frame). Ctrl-C (or
+          scrollIntoView, which also scrolls the comparison page around the frame).
+          A PREVIEW NEVER SENDS (a preview frame can hold a live form that posts to
+          production). Every frame carries sandbox="allow-scripts allow-same-origin"
+          (FRAME_SANDBOX; no allow-forms, so no form in a preview submits, a url choice's
+          included), and every HTML page this server serves for a choice or from the base,
+          whatever asked for it (Sec-Fetch-Dest iframe, document or none), gets the WRITE GUARD at
+          its start, before any script of its own: every submit cancelled, a script's
+          form.submit() a no-op, every non-GET fetch / XMLHttpRequest and every sendBeacon
+          refused, the method judged as the browser derives it (fetch: new Request(input,
+          init).method, so an explicit null is the method "null", never GET). The guard goes just
+          after the page's <head> start tag when its prolog holds one, else after <html>, else
+          after the doctype, else at the start (guard_offset reads only the prolog, so a "<head>"
+          in a title's text is never taken for the tag). The guard is what holds where the
+          sandbox does not: a script's writes inside a frame, and a choice page in a tab of its
+          own (the browser's "Open frame in new tab"), wherever a root-absolute link leads from
+          there. "Open this in its own tab" opens /own/<decision>/<choice>?p=<page index>, a page
+          of this server's own (no guard: like the comparison page it holds no form and sends
+          nothing) whose one frame fills the window and frames the choice exactly as the
+          comparison page does (FRAME_SANDBOX, the same frame URL), never the choice's page itself:
+          a url choice's form stays off there too. Only an existing decision / choice / page index
+          is claimed, and never for a frame; any other /own/ path is served from the base. The
+          guard cannot reach a url choice's page (served by its dev server as is: there only its
+          forms are off, which the page and its own tab say), a worker's own fetch, or a
+          third-party iframe inside a page (that iframe inherits the sandbox, so its forms are
+          off, but not its scripts' writes). allow-same-origin keeps a frame's page same-origin
+          with the comparison page, so a page script COULD reach up and lift its own sandbox: this
+          stops accidents, not a hostile page. The comparison page itself is brand-neutral (greys
+          and one blue, light or dark as the system is set) so it sits beside any project's pages,
+          and so is a choice's own tab. Ctrl-C (or
           Ctrl-Break / SIGTERM) stops it and removes the frozen copy. Serve it from a process that
           outlives the turn (a Terminal-panel tab), since the user clicks after the turn ends.
 check     Validate the manifest against the frozen base and exit. --live also starts the server
@@ -67,10 +95,10 @@ THE MANIFEST (JSON). Relative paths resolve against the manifest's own folder.
 
   {
     "title": "Header and forms: two choices",        page heading and the "Copy picks" prefix
-    "lede": "...",                                     optional; default: a standard lede
-    "id": "lx-106",                                    localStorage key for the picks
-    "base": {"repo": "C:/path/to/repo",              the BASE: a pinned commit ...
-             "pin": "151d641bc5fe",                    a commit sha (never HEAD or a branch)
+    "lede": "...",                                     optional; default: a plain how-to-pick line
+    "id": "site-header",                               localStorage key for the picks
+    "base": {"repo": "C:/path/to/site-repo",           the BASE: a pinned commit ...
+             "pin": "0123abcd4567",                    a commit sha (never HEAD or a branch)
              "site_root": "site"},                     the served dir inside the repo
             (or {"snapshot_dir": "path/to/base-snapshot"}: design-variants' dirty-base case;
              omit "base" only when every choice is served by a url)
@@ -86,8 +114,8 @@ THE MANIFEST (JSON). Relative paths resolve against the manifest's own folder.
                                      to 660 up to 600 px wide, 900 above
        "choices": [
          {"c": "1", "kind": "keep", "name": "Keep as is", "text": "No change."},
-         {"c": "2", "kind": "css", "name": "Gold outline", "text": "One plain line.",
-          "css": "html body .field input{border-color:#C9A96E}", "recommended": true},
+         {"c": "2", "kind": "css", "name": "Darker outline", "text": "One plain line.",
+          "css": "html body .field input{border-color:#5C6570}", "recommended": true},
          {"c": "3", "kind": "fragment", "name": "New form", "text": "...",
           "fragment_file": "form.html", "replace_id": "booking-form"},
          {"c": "4", "kind": "url", "name": "Dev build", "text": "...",
@@ -114,7 +142,9 @@ choice served from the base whose page does that.
 `url`: the frame points straight at a running server. `url` is an http://127.0.0.1:<port>/ or
 http://localhost:<port>/ origin (anything else, a non-loopback host above all, is refused) and each
 page path of the decision is appended to it; nothing is proxied or injected (no helper either, so
-`at=` does not scroll it). It is how a dev-server project shows its sandboxes: a build step, or a
+`at=` does not scroll it, and no write guard: its frame's sandbox switches its forms off, in its own
+tab too, but its own scripts can still send, and the page says so). It is how a dev-server project
+shows its sandboxes: a build step, or a
 /src/main.tsx module entry that this static server would hand back as raw TSX, needs the
 project's own dev server, one per sandbox. The keep choice of such a project carries a `url` too:
 the baseline dev server, run from a frozen `git worktree add "$BASELINE_DIR" "$PINNED_COMMIT"`,
@@ -201,8 +231,7 @@ DEFAULT_WIDTHS = [{"name": "Phone", "w": 392}, {"name": "Small phone", "w": 362}
                   {"name": "Desktop", "w": 1440}]
 DEFAULT_LEDE = ("Each frame is the real page with that choice applied. Choice 1 always keeps things "
                 "as they are. Click a choice to flip between them, scroll inside the frame to look "
-                "around, then press This one. Your picks collect in the bar at the bottom. Please "
-                "don't send the forms in these frames.")
+                "around, then press This one. Your picks collect in the bar at the bottom.")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 SHA_RE = re.compile(r"^[0-9a-fA-F]{7,64}$")
 CALL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -305,6 +334,65 @@ def referrer_strippers(text):
 CSS_OPEN = '<style id="compare-choices-css">'
 HELPER_START = "<!-- compare-choices helper -->"
 HELPER_END = "<!-- /compare-choices helper -->"
+GUARD_START = "<!-- compare-choices guard -->"
+GUARD_END = "<!-- /compare-choices guard -->"
+# Every preview frame's sandbox. allow-scripts: the page's own scripts and the helper's at= scroll
+# run. allow-same-origin: the page keeps its origin, which a module script's load, localStorage and
+# a folder choice's Referer routing need (an opaque origin sends a cross-origin, path-less Referer).
+# NOT allow-forms: a form in a preview never submits, a url choice's included, whatever its page
+# does. Nor allow-popups, allow-modals, allow-top-navigation: a preview opens no window, no dialog,
+# and never navigates the comparison page away.
+FRAME_SANDBOX = "allow-scripts allow-same-origin"
+FORMS_OFF = "Forms and sending are switched off in these previews, here and in their own tabs."
+DEV_CAVEAT = "A dev-server preview switches off only its forms: its own scripts can still send."
+# What a choice's own tab says (it frames the choice with FRAME_SANDBOX, as the comparison page does).
+OWN_NOTE = "Forms and sending are switched off in this preview."
+OWN_DEV_NOTE = "A dev server's page: its forms are switched off, but its own scripts can still send."
+# The write guard: injected at the start of every HTML page this server serves for a choice or from
+# the base, whatever asked for it, so it runs before the page's own scripts can keep a native fetch.
+# It covers what the sandbox lets through (a script's writes) and a choice page that ends up in a tab
+# of its own (the browser's "Open frame in new tab", and wherever a root-absolute link leads from
+# there), where there is no frame and so no sandbox. It cannot reach a url choice (a dev server's page
+# is served as is), a worker's own fetch, or a third-party iframe inside the page. It sets
+# window.__ccGuard once installed (the tests read it inside the frame).
+GUARD_JS = """(function () {
+  /* compare-choices: a preview never sends. Every form submit is cancelled (a script's form.submit()
+     too) and every non-GET fetch, XMLHttpRequest and sendBeacon is refused. */
+  var NOTE = "compare-choices: sending is switched off in previews";
+  function say(what) { try { console.warn(NOTE + " (" + what + " refused)"); } catch (x) {} }
+  /* `m` is the method the request will carry, already converted the way the browser converts it (an
+     explicit null is the method "null", never GET) */
+  function reads(m) { m = String(m).toUpperCase(); return m === "GET" || m === "HEAD"; }
+  addEventListener("submit", function (e) { e.preventDefault(); e.stopImmediatePropagation(); say("a form"); }, true);
+  if (window.HTMLFormElement) HTMLFormElement.prototype.submit = function () { say("form.submit()"); };
+  var fetch0 = window.fetch, Request0 = window.Request;
+  if (fetch0) window.fetch = function (input, init) {
+    /* The arguments become ONE Request, and that Request is what is checked and what is sent: its
+       method is the one Fetch itself derives, and nothing single-use in them (a headers iterator, a
+       body stream) is read twice. Never replay the original arguments: building the Request has
+       already used such an iterator up, so a POST whose iterator threw would go out as a valid POST
+       with no headers, and a GET's iterator headers would vanish. Arguments that cannot become a
+       Request reject with that error, and nothing is sent. With no Request at all, or no arguments
+       (the native fetch's own error), the arguments go as they are. */
+    if (!Request0 || !arguments.length) return fetch0.apply(this, arguments);
+    var r;
+    try { r = new Request0(input, init); } catch (x) { return Promise.reject(x); }
+    if (!reads(r.method)) { say("fetch " + r.method); return Promise.reject(new TypeError(NOTE)); }
+    return fetch0.call(this, r);
+  };
+  var XP = window.XMLHttpRequest && XMLHttpRequest.prototype;
+  if (XP) {
+    var open0 = XP.open, send0 = XP.send;
+    XP.open = function (m) { this.__ccRead = reads(m); return open0.apply(this, arguments); };
+    XP.send = function () {
+      if (this.__ccRead === false) { say("XMLHttpRequest"); throw new DOMException(NOTE, "NetworkError"); }
+      return send0.apply(this, arguments);
+    };
+  }
+  if (window.Navigator && Navigator.prototype.sendBeacon)
+    Navigator.prototype.sendBeacon = function () { say("sendBeacon"); return false; };
+  window.__ccGuard = true;
+})();"""
 HELPER_JS = """(function () {
   var q = new URLSearchParams(location.search);
   function go() {
@@ -483,9 +571,101 @@ def _escape_close(code, tag):
     return re.sub(r"</(%s)" % tag, r"<\\/\1", code, flags=re.I)
 
 
+HTML_WS = "\t\n\f\r "
+
+
+def _start_tag_end(text, i):
+    """The offset just past the start tag whose name ends at `i`, read the way a browser's tokenizer
+    reads it (a quoted attribute value may hold '>'), or -1 when the tag never closes."""
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if ch in HTML_WS or ch == "/":
+            i += 1
+        elif ch == ">":
+            return i + 1
+        else:
+            # An attribute name (a leading '=' belongs to it), then an optional value.
+            i += 1
+            while i < n and text[i] not in HTML_WS and text[i] not in "/>=":
+                i += 1
+            j = i
+            while j < n and text[j] in HTML_WS:
+                j += 1
+            if j < n and text[j] == "=":
+                j += 1
+                while j < n and text[j] in HTML_WS:
+                    j += 1
+                if j < n and text[j] in "\"'":
+                    k = text.find(text[j], j + 1)
+                    if k < 0:
+                        return -1
+                    i = k + 1
+                else:
+                    while j < n and text[j] not in HTML_WS and text[j] != ">":
+                        j += 1
+                    i = j
+    return -1
+
+
+def guard_offset(text):
+    """Where the write guard goes: the earliest point of the page, where a browser runs it before
+    any script of the page's own. Only the PROLOG is read: a BOM, whitespace, comments, the doctype
+    (or a bogus comment, <?xml ...?>), and <html> and <head> start tags. The scan stops at the first
+    token that is anything else (another element, an end tag, text), so it never reads inside a
+    <title>, <textarea>, <script> or <style>, where "<head>" is TEXT (Codex 20261101-143130-551496 #3:
+    html.parser reported a title's "<head>" as the tag, and the guard landed in the title's text, where
+    no browser runs it; a regex over the whole page would do the same, G#426). The guard goes just
+    after a <head> start tag the prolog holds, else after its last <html> start tag, else after its
+    doctype, else at the start (after a BOM). Never before a doctype: that would put the page in quirks
+    mode. Wherever it lands, a browser parses a <script> there into the head and runs it first."""
+    at = 1 if text.startswith("\ufeff") else 0
+    i, n = at, len(text)
+    while i < n:
+        if text[i] in HTML_WS:
+            i += 1
+        elif text.startswith("<!--", i):
+            if text.startswith(">", i + 4) or text.startswith("->", i + 4):      # <!--> and <!---> are whole
+                i += 5 if text.startswith(">", i + 4) else 6
+                continue
+            ends = [k for k in (text.find("-->", i + 4), text.find("--!>", i + 4)) if k >= 0]
+            if not ends:
+                break                   # an unclosed comment: the rest of the page is that comment
+            k = min(ends)
+            i = k + (3 if text.startswith("-->", k) else 4)
+        elif text.startswith("<!", i) or text.startswith("<?", i):
+            k = text.find(">", i + 2)  # the doctype, or a bogus comment, ends at its first '>'
+            if k < 0:
+                break
+            if text[i + 2:i + 9].lower() == "doctype":
+                at = k + 1
+            i = k + 1
+        elif text.startswith("<", i) and i + 1 < n and text[i + 1].isascii() and text[i + 1].isalpha():
+            j = i + 1
+            while j < n and text[j] not in HTML_WS and text[j] not in "/>":
+                j += 1
+            name = text[i + 1:j].lower()
+            end = _start_tag_end(text, j) if name in ("html", "head") else -1
+            if end < 0:
+                break                   # another element (or a tag that never closes): content began
+            at = i = end
+            if name == "head":
+                break
+        else:
+            break                       # an end tag, or text: the page's content has begun
+    return at
+
+
+def inject_guard(text):
+    """The page with the write guard at its start (guard_offset), before any script of its own."""
+    i = guard_offset(text)
+    return text[:i] + GUARD_START + "<script>" + GUARD_JS + "</script>" + GUARD_END + text[i:]
+
+
 def inject(text, css=None, js=None):
-    """The page with `css` in a <style> before the first </head> and the helper (plus `js`) before
-    the last </body>. Keep pages get the helper only."""
+    """The page with the write guard first in its <head>, `css` in a <style> before the first
+    </head>, and the helper (plus `js`) before the last </body>. Keep pages get the guard and the
+    helper only."""
     if css:
         block = CSS_OPEN + _escape_close(css, "style") + "</style>"
         m = re.search(r"</head\s*>", text, re.I) or re.search(r"<body[\s>]", text, re.I)
@@ -498,7 +678,7 @@ def inject(text, css=None, js=None):
     block = HELPER_START + script + HELPER_END
     ends = list(re.finditer(r"</body\s*>", text, re.I))
     i = ends[-1].start() if ends else len(text)
-    return text[:i] + block + text[i:]
+    return inject_guard(text[:i] + block + text[i:])
 
 
 class _Scripts(html.parser.HTMLParser):
@@ -1214,6 +1394,15 @@ class Plan(object):
     def page(self):
         return build_page(self.m, self.frame_url).encode("utf-8")
 
+    def own_page(self, did, cid, p):
+        """The own-tab page (build_own_page) for /own/<did>/<cid>?p=<p>, or None when the manifest has
+        no such decision, choice or page index (the path is then served from the base like any other)."""
+        d, c = self.decision(did), self.choice(did, cid)
+        if d is None or c is None or not re.match(r"^\d{1,4}$", p) or int(p) >= len(d["pages"]):
+            return None
+        page = d["pages"][int(p)]
+        return build_own_page(self.m, d, c, page, self.frame_url(d, c, page)).encode("utf-8")
+
 
 def _ctype(t):
     if t.startswith("text/") or t in ("application/javascript", "application/json", "image/svg+xml"):
@@ -1223,44 +1412,56 @@ def _ctype(t):
 
 # --------------------------------------------------------------------------- the comparison page
 
-PAGE_CSS = """
-  :root { --bg:#121212; --panel:#181818; --ink:#F5F3EE; --muted:#B9B4A8; --lbl:#8F8A80; --accent:#C9A96E;
-          --accent-light:#E8D5B0; --dark:#0D0D0D; --line:rgba(201,169,110,.28); }
-  * { box-sizing:border-box; margin:0; padding:0; }
+# Brand-neutral: greys plus one plain blue for the selected state, links and the focus ring, light or
+# dark as the owner's system is set. It sits beside any project's pages and wears none of them.
+# Every text pair is WCAG AA or better in both themes (tests/test-compare-choices.py computes them).
+# THEME_CSS is the one copy of the palette: the comparison page and a choice's own tab both start with it.
+THEME_CSS = """
+  :root { color-scheme:light;
+          --bg:#FFFFFF; --panel:#F3F4F6; --ink:#1A1D21; --muted:#4B535C; --lbl:#5C6570; --edge:#8A929C;
+          --line:#D5D9DE; --accent:#1F5BD6; --on-accent:#FFFFFF; --bar:#F3F4F6; --stage:#E5E7EB; }
+  @media (prefers-color-scheme: dark) {
+    :root { color-scheme:dark;
+            --bg:#16181B; --panel:#202328; --ink:#E7E9EC; --muted:#AEB5BD; --lbl:#9BA3AC; --edge:#6C747E;
+            --line:#33383F; --accent:#86AEF5; --on-accent:#0E1116; --bar:#0F1114; --stage:#0B0C0E; }
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }"""
+PAGE_CSS = THEME_CSS + """
   body { background:var(--bg); color:var(--ink); padding-bottom:96px;
          font:15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
   header.top { padding:28px 20px 8px; max-width:1180px; margin:0 auto; }
   h1 { font-weight:400; font-size:28px; color:var(--ink); }
   .lede { color:var(--muted); margin-top:8px; max-width:760px; }
+  .note { color:var(--muted); margin-top:6px; max-width:760px; font-size:14px; }
   section.dec { max-width:1180px; margin:28px auto 0; padding:22px 20px 26px; border-top:1px solid var(--line);
                 display:grid; grid-template-columns:minmax(0,1fr) auto; gap:28px; align-items:start; }
   section.dec.wide { grid-template-columns:minmax(0,1fr); }
-  h2 { font-weight:500; font-size:21px; color:var(--accent-light); }
+  h2 { font-weight:500; font-size:21px; color:var(--ink); }
   h2 span.n { color:var(--accent); margin-right:10px; }
   .why { color:var(--muted); margin-top:6px; }
   .row { display:flex; gap:8px; flex-wrap:wrap; margin-top:14px; align-items:center; }
   .lbl { color:var(--lbl); font-size:11px; letter-spacing:.14em; text-transform:uppercase; width:70px; }
   button { font:inherit; font-size:14px; cursor:pointer; background:transparent; color:var(--ink);
-           border:1px solid var(--line); border-radius:3px; padding:8px 13px; }
+           border:1px solid var(--edge); border-radius:3px; padding:8px 13px; }
   button:hover { border-color:var(--accent); }
-  button[aria-pressed="true"] { background:var(--accent); color:var(--dark); border-color:var(--accent); font-weight:600; }
-  button:focus-visible { outline:2px solid var(--accent-light); outline-offset:2px; }
+  button[aria-pressed="true"] { background:var(--accent); color:var(--on-accent); border-color:var(--accent); font-weight:600; }
+  button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
   .tag { display:inline-block; margin-left:6px; padding:0 6px; border-radius:9px; font-size:11px; font-weight:600;
          letter-spacing:.06em; text-transform:uppercase; border:1px solid currentColor; }
   .desc { margin-top:16px; padding:14px 16px; background:var(--panel); border-left:2px solid var(--accent); }
-  .desc b { color:#fff; font-weight:600; }
+  .desc b { color:var(--ink); font-weight:600; }
   .pick { margin-top:12px; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  .pick button { border-color:var(--accent); color:var(--accent-light); }
+  .pick button { border-color:var(--accent); color:var(--accent); }
   .picked { color:var(--accent); font-weight:600; }
-  .stage { position:relative; border:1px solid var(--line); border-radius:18px; overflow:hidden; background:#000;
+  .stage { position:relative; border:1px solid var(--line); border-radius:18px; overflow:hidden; background:var(--stage);
            justify-self:center; }
   section.dec.wide .stage { justify-self:start; border-radius:6px; }
   .stage iframe { position:absolute; top:0; left:0; border:0; background:#fff; visibility:hidden; transform-origin:0 0; }
   .stage iframe.on { visibility:visible; }
   a.open { display:inline-block; margin-top:10px; font-size:13px; color:var(--accent); }
-  footer.bar { position:fixed; left:0; right:0; bottom:0; background:var(--dark); border-top:1px solid var(--accent);
+  footer.bar { position:fixed; left:0; right:0; bottom:0; background:var(--bar); border-top:1px solid var(--accent);
                padding:12px 20px; display:flex; gap:14px; align-items:center; flex-wrap:wrap; z-index:5; }
-  footer.bar b { color:var(--accent-light); font-weight:600; }
+  footer.bar b { color:var(--ink); font-weight:600; }
   #picks { font-variant-numeric:tabular-nums; }
   #copied { user-select:all; }
   @media (max-width:900px) { section.dec { grid-template-columns:minmax(0,1fr); } }
@@ -1284,6 +1485,10 @@ PAGE_JS = r"""
   }
   /* the server computes each frame URL: a directory page in its slash form, a url choice on its own server */
   function src(ch, i) { return ch.src[i]; }
+  /* "Open this in its own tab" opens this server's own page framing the choice with the same sandbox,
+     never the choice's page itself (in a tab of its own no sandbox applies, and a url choice's page
+     carries no guard) */
+  function own(ch, i) { return ch.own[i]; }
   function tags(parent, ch) {
     if (ch.codex) parent.appendChild(el("span", { "class": "tag" }, "Codex"));
     if (ch.recommended) parent.appendChild(el("span", { "class": "tag" }, "Recommended"));
@@ -1336,7 +1541,8 @@ PAGE_JS = r"""
     function load() {
       stage.innerHTML = ""; frames = {};
       d.choices.forEach(function (ch) {
-        var f = el("iframe", { title: "Choice " + ch.c + ": " + ch.name, loading: "lazy", src: src(ch, st.p) });
+        /* the sandbox before src, so the frame's first load is already sandboxed (no allow-forms) */
+        var f = el("iframe", { title: "Choice " + ch.c + ": " + ch.name, loading: "lazy", sandbox: M.sandbox, src: src(ch, st.p) });
         frames[ch.c] = f; stage.appendChild(f);
       });
       fit(); paint();
@@ -1352,7 +1558,7 @@ PAGE_JS = r"""
       tags(desc, ch);
       Object.keys(frames).forEach(function (k) { frames[k].classList.toggle("on", k === st.c); });
       pickTxt.textContent = picks[d.id] ? "You picked Choice " + picks[d.id] + "." : "";
-      open.href = src(ch, st.p);
+      open.href = own(ch, st.p);
     }
     d.choices.forEach(function (ch) {
       var b = el("button", { type: "button" }, ch.c + " \u00b7 " + ch.name); b.dataset.v = ch.c;
@@ -1386,10 +1592,18 @@ PAGE_JS = r"""
 """
 
 
+OWN_PATH = re.compile(r"^/own/([^/]+)/([^/]+)/?$")
+
+
+def own_url(d, c, i):
+    """The URL "Open this in its own tab" opens for choice c on page i of decision d."""
+    return "/own/%s/%s?p=%d" % (urllib.parse.quote(d["id"]), urllib.parse.quote(c["c"]), i)
+
+
 def page_data(m, src):
     """What the page script needs: no file paths, no CSS, no file names; what the user reads, and
-    each choice's frame URL per page (`src(d, c, p)`, Plan.frame_url)."""
-    out = {"title": m["title"], "id": m["id"], "decisions": []}
+    each choice's frame URL per page (`src(d, c, p)`, Plan.frame_url) and own-tab URL per page."""
+    out = {"title": m["title"], "id": m["id"], "sandbox": FRAME_SANDBOX, "decisions": []}
     for n, d in enumerate(m["decisions"], 1):
         out["decisions"].append({
             "id": d["id"], "n": n, "title": d["title"], "why": d["why"],
@@ -1397,25 +1611,61 @@ def page_data(m, src):
             "widths": d["widths"],
             "choices": [{"c": c["c"], "name": c["name"], "text": c["text"],
                          "recommended": c.get("recommended") is True, "codex": "codex_call" in c,
-                         "src": [src(d, c, p) for p in d["pages"]]}
+                         "src": [src(d, c, p) for p in d["pages"]],
+                         "own": [own_url(d, c, i) for i in range(len(d["pages"]))]}
                         for c in d["choices"]],
         })
     return out
+
+
+# A choice's own tab: a slim bar naming the choice, then the frame filling the rest of the window.
+OWN_CSS = THEME_CSS + """
+  html, body { height:100%; }
+  body { display:flex; flex-direction:column; background:var(--bg); color:var(--ink);
+         font:14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  header.own { flex:none; display:flex; flex-wrap:wrap; gap:4px 16px; align-items:baseline; padding:9px 16px;
+               border-bottom:1px solid var(--line); }
+  header.own b { font-weight:600; }
+  header.own .note { color:var(--muted); font-size:13px; }
+  iframe.own { flex:1 1 auto; display:block; width:100%; min-height:0; border:0; background:#fff; }
+"""
+
+
+def build_own_page(m, d, c, p, src):
+    """"Open this in its own tab": choice c on page p, framed exactly as the comparison page frames it
+    (FRAME_SANDBOX, the same frame URL `src`) and filling the window, so a form in it never submits
+    and a served choice's guard runs as in its frame. Never the choice's page itself: a page in a tab
+    of its own has no sandbox, and a url choice's page carries no guard (Codex 20261101-143130-551496
+    #1). Like the comparison page it carries no write guard: it holds no form and sends nothing."""
+    name = "Choice %s: %s" % (c["c"], c["name"])
+    note = OWN_DEV_NOTE if url_served(c) else OWN_NOTE
+    return ("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
+            "<title>%s &middot; %s &middot; %s</title>\n<style>%s</style>\n</head>\n<body>\n"
+            "<header class=\"own\"><b>%s</b><span>%s: %s</span><span class=\"note\">%s</span></header>\n"
+            "<iframe class=\"own\" title=\"%s\" sandbox=\"%s\" src=\"%s\"></iframe>\n</body>\n</html>\n"
+            % (html.escape(name), html.escape(p["name"]), html.escape(m["title"]), OWN_CSS,
+               html.escape(name), html.escape(d["title"]), html.escape(p["name"]), html.escape(note),
+               html.escape(name), FRAME_SANDBOX, html.escape(src)))
 
 
 def build_page(m, src):
     data = json.dumps(page_data(m, src), ensure_ascii=True).replace("</", "<\\/")
     title = html.escape(m["title"])
     lede = html.escape(m.get("lede") or DEFAULT_LEDE)
+    # Always said, whatever the lede: and a url choice's page is its dev server's, which the write
+    # guard cannot reach, so the line says what is left there.
+    dev = any(url_served(c) for d in m["decisions"] for c in d["choices"])
+    note = html.escape(FORMS_OFF + (" " + DEV_CAVEAT if dev else ""))
     return ("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n"
             "<title>%s</title>\n<style>%s</style>\n</head>\n<body>\n"
-            "<header class=\"top\">\n  <h1>%s</h1>\n  <p class=\"lede\">%s</p>\n</header>\n"
+            "<header class=\"top\">\n  <h1>%s</h1>\n  <p class=\"lede\">%s</p>\n  <p class=\"note\">%s</p>\n</header>\n"
             "<div id=\"decisions\"></div>\n"
             "<footer class=\"bar\">\n  <b>Your picks:</b> <span id=\"picks\"></span>\n"
             "  <button type=\"button\" id=\"copy\">Copy picks</button> <span id=\"copied\" class=\"picked\"></span>\n"
             "</footer>\n<script type=\"application/json\" id=\"cc-data\">%s</script>\n"
-            "<script>%s</script>\n</body>\n</html>\n" % (title, PAGE_CSS, title, lede, data, PAGE_JS))
+            "<script>%s</script>\n</body>\n</html>\n" % (title, PAGE_CSS, title, lede, note, data, PAGE_JS))
 
 
 # --------------------------------------------------------------------------- the server
@@ -1470,8 +1720,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if routed is not None:
                     return self.redirect(REDIRECT_CHOICE, "/v/%s/%s%s" % (routed[0], routed[1], u.path), u.query)
             # A frame that navigates to / (a logo link) gets the site's home page, not the picker.
-            if u.path in ("/", "/index.html") and self.headers.get("Sec-Fetch-Dest", "").lower() != "iframe":
+            framed = self.headers.get("Sec-Fetch-Dest", "").lower() == "iframe"
+            if u.path in ("/", "/index.html") and not framed:
                 return self.send(200, self.server.page, "text/html; charset=utf-8", "comparison page")
+            # "Open this in its own tab": the choice framed as the comparison page frames it. Only an
+            # existing decision / choice / page index, and never for a frame (no frame in a frame).
+            own = OWN_PATH.match(u.path)
+            if own and not framed:
+                q = urllib.parse.parse_qs(u.query).get("p", ["0"])[0]
+                body = plan.own_page(urllib.parse.unquote(own.group(1)), urllib.parse.unquote(own.group(2)), q)
+                if body is not None:
+                    return self.send(200, body, "text/html; charset=utf-8", "own tab")
             parts = u.path.split("/", 4)
             if len(parts) >= 4 and parts[1] == "v" and parts[2] and parts[3]:
                 if len(parts) == 4:                     # /v/<decision>/<choice> without its slash
@@ -1486,6 +1745,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if f is None:
                 return self.send(404, b"not found", "text/plain; charset=utf-8")
             ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
+            if ctype == "text/html":
+                # Every page this server serves is guarded, whatever asked for it: a preview frame that
+                # followed a root-absolute link out of /v/ (a keep, css or fragment choice's links are
+                # not rewritten), and a choice page in a tab of its own (the browser's "Open frame in
+                # new tab") that did, where the navigation is top-level (Sec-Fetch-Dest: document) and
+                # no sandbox applies (Codex 20261101-143130-551496 #2).
+                return self.send(200, to_bytes(inject_guard(read_text(f))), _ctype(ctype), "base + guard")
             return self.send(200, f.read_bytes(), _ctype(ctype), "base")
         except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
             return None
@@ -1747,7 +2013,25 @@ def selftest():
         code, body, _t, _w = pl.serve_choice("d", "1", "/")
         t = body.decode("utf-8")
         i, j = t.find(HELPER_START), t.find(HELPER_END)
-        ok(code == 200 and t[:i] + t[j + len(HELPER_END):] == page, "keep = the base bytes plus the helper")
+        t = t[:i] + t[j + len(HELPER_END):]
+        g, h = t.find(GUARD_START), t.find(GUARD_END)
+        ok(code == 200 and 0 < g < h and t[:g] + t[h + len(GUARD_END):] == page
+           and t[:g].endswith("<head>"), "keep = the base bytes plus the helper, and the write guard first in <head>")
+        ok(guard_offset('<!-- <head> --><!doctype html><html lang="en"><head id="h"><script>var s="<head>"</script>')
+           == len('<!-- <head> --><!doctype html><html lang="en"><head id="h">')
+           and guard_offset("<!doctype html><html><title>t</title>") == len("<!doctype html><html>")
+           and guard_offset("<!DOCTYPE html><p>x") == len("<!DOCTYPE html>") and guard_offset("<p>x") == 0,
+           "the guard goes after <head> (not a commented or quoted one), else <html>, else the doctype")
+        ok(guard_offset("<!doctype html><html><title>A <head> example</title><script>x</script>")
+           == len("<!doctype html><html>")
+           and guard_offset("<html><textarea><head></textarea>") == len("<html>")
+           and guard_offset("<!doctype html><script>var s = '<head>';</script>") == len("<!doctype html>")
+           and guard_offset('<html data-x="a>b" lang=en><head>') == len('<html data-x="a>b" lang=en><head>')
+           and guard_offset("\ufeff<!-- c --><!doctype html>\n<head>") == len("\ufeff<!-- c --><!doctype html>\n<head>")
+           and guard_offset("<!--><head>") == len("<!--><head>") and guard_offset("\ufeff<p>") == 1
+           and guard_offset("<!-- c --><p><head>") == 0,
+           "a <head> in a title's or textarea's text, or in a script, is no start tag; a quoted '>' is no tag "
+           "end; never before a doctype or a BOM")
         code, body, _t, _w = pl.serve_choice("d", "2", "/")
         ok(b"p{x:1}" in body and CSS_OPEN.encode() in body, "css choice carries its style")
         code, body, _t, _w = pl.serve_choice("d", "3", "/")

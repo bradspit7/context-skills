@@ -26,16 +26,28 @@ serve     Validate, freeze the base, probe the port and REFUSE if anything alrea
           (/x -> x.html, /d/ -> d/index.html), so root-absolute assets and links work. A path that
           names a directory without its trailing slash (/v/d/1/docs, /docs, /v/d/1) answers 301
           to the same path plus "/", choice prefix and query kept, so the directory page's
-          RELATIVE references resolve inside it; the comparison page's frames already use the
-          slash form. A root-absolute request outside /v/ whose Referer is a FOLDER choice's page
-          (/v/<decision>/<choice>/...) answers 307 to the same path inside that choice (folder
-          first, then base, as a prefixed request), so the folder's JavaScript (import "/js/x.js",
-          import(), new Worker("/w.js")) loads the folder's files and not the base's, at any
-          import depth: the redirected module's own URL is inside the choice, so its imports are
-          routed too. No JavaScript is parsed. A page that sets referrerpolicy="no-referrer"
-          ("origin" and "strict-origin" too, as an attribute or a <meta name="referrer">) sends no
-          path in its Referer and DEFEATS this; `check` warns when a folder choice's page carries
-          one. A url choice's frame points straight at its own server (Choice kinds). The helper
+          RELATIVE references resolve inside it; a folder choice's map entry naming that
+          directory's own index ({"/docs": "docs/index.html"}) is redirected the same way; the
+          comparison page's frames already use the slash form. A folder choice's JavaScript stays
+          inside the choice too: in every .js / .mjs file it serves and in its pages' inline
+          scripts, the root-absolute specifier of a static import or re-export at a statement
+          start (import "/js/x.js", import {a} from "/js/x.js", export * from "/js/x.js") and of a
+          string-literal dynamic import (import("/js/x.js")) is rewritten into the choice's prefix,
+          the way its HTML and CSS references are. That is what keeps ONE module one module: a
+          browser keys a module by the URL it REQUESTED, so a state.js imported as "./state.js"
+          and as "/js/state.js" must be requested at one URL, or it runs twice (two state objects,
+          two inits). The rewrite is a pattern match, not a parser: import-shaped text at a line
+          start inside a template literal or a block comment is rewritten as well. What it cannot
+          see (a computed specifier, import(`/js/${n}.js`), new Worker("/w.js"), fetch("/x"), an
+          import map's targets) is routed by its Referer: a root-absolute request outside /v/
+          whose Referer is a FOLDER choice's page (/v/<decision>/<choice>/...) answers 307 to the
+          same path inside that choice (folder first, then base, as a prefixed request), so it
+          loads the folder's file and not the base's, at any import depth. A module reached both
+          that way and by a rewritten path is still two instances. A page that sets
+          referrerpolicy="no-referrer" ("origin" and "strict-origin" too, as an attribute or a
+          <meta name="referrer">) sends no path in its Referer and DEFEATS the 307; `check` warns
+          when a folder choice's page carries one. A url choice's frame points straight at its
+          own server (Choice kinds). The helper
           waits for fonts, then scrolls `at=<selector>` to the middle with window.scrollTo (never
           scrollIntoView, which also scrolls the comparison page around the frame). Ctrl-C (or
           Ctrl-Break / SIGTERM) stops it and removes the frozen copy. Serve it from a process that
@@ -44,8 +56,12 @@ check     Validate the manifest against the frozen base and exit. --live also st
           in-process on a free port, GETs the comparison page and every choice x page frame URL
           (a url choice's on its own server), following redirects, and prints one row each
           (status, bytes, what was applied, URL); every row must answer 200. A url choice whose
-          response forbids framing (X-Frame-Options, CSP frame-ancestors) is a WARNING: the frame
-          would be blank though the row says 200.
+          response forbids framing on the comparison page's origin (http://127.0.0.1:<port>, the
+          manifest's port) is a WARNING that the frame would be blank though the row says 200:
+          X-Frame-Options DENY / SAMEORIGIN, or a Content-Security-Policy frame-ancestors whose
+          source list does not allow that origin ('none'; 'self', another origin; a host or port
+          that is not it; every enforced policy must allow it). A source this check cannot
+          evaluate warns that the frame MAY be refused, to be checked on the page.
 
 THE MANIFEST (JSON). Relative paths resolve against the manifest's own folder.
 
@@ -90,7 +106,11 @@ through its matching end tag, found with html.parser tracking same-name depth) o
 choice's pages resolve inside `folder` first (`map` sends a page path to a file in the folder),
 everything else falls back to the base; the root-absolute src/href/srcset/url() references of
 what it serves are rewritten to stay inside the choice, so a stylesheet the folder changed is the
-one the page loads. A plain folder copy of a page another model built is a folder choice.
+one the page loads. A plain folder copy of a page another model built is a folder choice (a
+static site's; a dev-server project's Codex variant is a url choice carrying its codex_call). A
+folder choice is static files: a page it serves whose script entry is a .ts / .tsx / .jsx / .mts /
+.cts file is refused (this server hands it back as source, never as JavaScript), and so is any
+choice served from the base whose page does that.
 `url`: the frame points straight at a running server. `url` is an http://127.0.0.1:<port>/ or
 http://localhost:<port>/ origin (anything else, a non-loopback host above all, is refused) and each
 page path of the decision is appended to it; nothing is proxied or injected (no helper either, so
@@ -107,7 +127,8 @@ Codex choice comes last, and the page tags it "Codex". `text` is ONE plain line 
 
 Refusals (exit 2, one `COMPARE-CHOICES REFUSED <what>` line each; never a page missing a
 choice). First the SHAPE: a container of the wrong shape (the top level, base, decisions, a
-decision, pages, a page, choices, a choice, widths, a width, map) or a field of the wrong type
+decision, pages, a page, choices, a choice, widths, a width, map; an explicit null is a wrong
+shape, while an ABSENT decisions / pages / choices is the ordinary refusal) or a field of the wrong type
 (every supplied field is type-checked before anything else reads it, the refusal naming the field:
 a replace_id of 123 would otherwise pass check and answer 409, a js object 500). Every schema
 refusal is reported, then the run STOPS, before the base is frozen or any file is read. Then:
@@ -115,7 +136,8 @@ no decisions; a decision whose first choice is not kind keep; more than one keep
 keep not named "Keep as is"; a codex_call on a choice with no page source (a keep, a missing
 folder, a missing fragment file, no css); a Codex choice that is not last; a missing file (a
 css/js/fragment file, a folder, a map target, the snapshot dir, a page the base lacks); a
-replace_id / replace_text matching zero or more than one time; a pin that is not a commit sha or
+replace_id / replace_text matching zero or more than one time; a page whose script entry is a
+.ts / .tsx / .jsx / .mts / .cts file (a dev-server project: url choices); a pin that is not a commit sha or
 does not resolve; a site_root the pin lacks; duplicate decision or choice ids; a choice text
 over 60 words; more than one recommended choice; an unknown key (a typo would otherwise apply
 nothing and look like Keep as is); a url that is not an http loopback origin with a port; a url on
@@ -166,6 +188,15 @@ REDIRECT_CHOICE = 307
 REFERER_CHOICE = re.compile(r"^/v/([^/]+)/([^/]+)/")
 # Referrer policies that send no PATH for a same-origin request, which the Referer routing needs.
 PATH_STRIPPING = ("no-referrer", "origin", "strict-origin")
+# A script entry this static server never serves as JavaScript (a .tsx goes out as
+# application/octet-stream, the source as written): only a project's dev server transpiles it.
+UNTRANSPILED = (".ts", ".tsx", ".jsx", ".mts", ".cts")
+# The <script type> values a browser runs as JavaScript ("" is no type). Any other type (text/babel,
+# importmap, application/json) is data the page's own code reads, so its src is no entry.
+JS_SCRIPT_TYPES = ("", "module", "text/javascript", "application/javascript", "application/ecmascript",
+                   "application/x-javascript", "application/x-ecmascript", "text/ecmascript",
+                   "text/x-javascript", "text/x-ecmascript", "text/jscript", "text/livescript")
+JS_TYPES = ("text/javascript", "application/javascript")
 DEFAULT_WIDTHS = [{"name": "Phone", "w": 392}, {"name": "Small phone", "w": 362},
                   {"name": "Desktop", "w": 1440}]
 DEFAULT_LEDE = ("Each frame is the real page with that choice applied. Choice 1 always keeps things "
@@ -470,14 +501,104 @@ def inject(text, css=None, js=None):
     return text[:i] + block + text[i:]
 
 
+class _Scripts(html.parser.HTMLParser):
+    """Every <script> element of a page: [its attributes, content start offset, content end offset
+    (None while unclosed)]. html.parser reads a script's content as text, so a "<script" inside a
+    comment or a string is never taken for a tag, as a regex over the page would take it (G#426)."""
+
+    def __init__(self, text):
+        super().__init__(convert_charrefs=True)
+        self.lines = [0]
+        for i, ch in enumerate(text):
+            if ch == "\n":
+                self.lines.append(i + 1)
+        self.found = []
+        self.open = None             # index into found of the script being read
+
+    def _off(self):
+        line, col = self.getpos()
+        return self.lines[line - 1] + col
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "script":
+            self.found.append([dict(attrs), self._off() + len(self.get_starttag_text() or ""), None])
+            self.open = len(self.found) - 1
+
+    def handle_startendtag(self, tag, attrs):
+        if tag == "script":
+            end = self._off() + len(self.get_starttag_text() or "")
+            self.found.append([dict(attrs), end, end])
+
+    def handle_endtag(self, tag):
+        if tag == "script" and self.open is not None:
+            self.found[self.open][2] = self._off()
+            self.open = None
+
+
+def scripts(text):
+    p = _Scripts(text)
+    try:
+        p.feed(text)
+        p.close()
+    except Exception:  # noqa: BLE001
+        pass
+    return p.found
+
+
+def runs_as_js(attrs):
+    """Does a browser run this <script> as JavaScript (no type, a JavaScript type, or module)?"""
+    return (attrs.get("type") or "").split(";")[0].strip().lower() in JS_SCRIPT_TYPES
+
+
+def untranspiled_entries(text):
+    """The src of every same-origin script a browser runs as JavaScript whose file is a .ts / .tsx /
+    .jsx / .mts / .cts entry, which only a dev server serves as JavaScript. Another origin's src is
+    left alone (esm.sh serves a .tsx as JavaScript), and so is a typed data script (text/babel)."""
+    out = []
+    for attrs, _start, _end in scripts(text):
+        src = (attrs.get("src") or "").strip()
+        if not src or not runs_as_js(attrs):
+            continue
+        try:
+            u = urllib.parse.urlsplit(src)
+        except ValueError:
+            continue
+        if not u.scheme and not u.netloc and urllib.parse.unquote(u.path).lower().endswith(UNTRANSPILED):
+            out.append(src)
+    return out
+
+
 ATTR_URL = re.compile(r"""(\s(?:src|href|poster)\s*=\s*)(["']?)/(?![/\\])""", re.I)
 SRCSET = re.compile(r"""(\ssrcset\s*=\s*)(["'])(.*?)\2""", re.I | re.S)
 CSS_URL = re.compile(r"""(url\(\s*["']?)/(?![/\\])""", re.I)
 CSS_IMPORT = re.compile(r"""(@import\s+["'])/(?![/\\])""", re.I)
+# A root-absolute import specifier: a static import or re-export at a statement start (a line
+# start, after ; { } or a block comment: import "/a.js"; import {x} from "/a.js"; export * from
+# "/a.js"; minified import{x}from"/a.js" too) and a string-literal dynamic import anywhere
+# (import("/a.js"), never obj.import("/a.js")). The span between the keyword and `from` stops at a
+# quote, a backtick or a semicolon, so `var s = "x from '/a'"` is left alone. A computed specifier
+# (a template literal, a variable) is not matched; the Referer 307 routes those.
+JS_FROM = re.compile(r"""((?:^|[;{}]|\*/)\s*(?:import|export)\b[^;'"`]*?\bfrom\s*)(["'])/(?![/\\])""", re.M)
+JS_BARE = re.compile(r"""((?:^|[;{}]|\*/)\s*import\s*)(["'])/(?![/\\])""", re.M)
+JS_DYNAMIC = re.compile(r"""((?<![\w$.])import\s*\(\s*)(["'])/(?![/\\])""")
+
+
+def rewrite_js(text, prefix):
+    """A folder choice's root-absolute import specifiers kept inside it: "/js/a.js" ->
+    "<prefix>js/a.js". A browser keys a module by the URL it requested, so this is what makes
+    "./state.js" (relative to a module already inside the choice) and "/js/state.js" ONE module;
+    redirecting "/js/state.js" to the same file would still instantiate it twice."""
+    for rx in (JS_FROM, JS_BARE, JS_DYNAMIC):
+        text = rx.sub(lambda m: m.group(1) + m.group(2) + prefix, text)
+    return text
 
 
 def rewrite_html(text, prefix):
-    """Root-absolute references kept inside a folder choice: /css/a.css -> <prefix>css/a.css."""
+    """Root-absolute references kept inside a folder choice: /css/a.css -> <prefix>css/a.css, and
+    the import specifiers of its inline scripts (rewrite_js)."""
+    for attrs, start, end in reversed(scripts(text)):
+        if end is not None and end > start and not attrs.get("src") and runs_as_js(attrs):
+            text = text[:start] + rewrite_js(text[start:end], prefix) + text[end:]
     text = ATTR_URL.sub(lambda m: m.group(1) + m.group(2) + prefix, text)
 
     def srcset(m):
@@ -591,11 +712,14 @@ class Plan(object):
                     set(base) <= BASE_KEYS[0] and {"repo", "pin"} <= set(base) or set(base) == BASE_KEYS[1]):
                 self.refuse("'base' must be {\"repo\", \"pin\", \"site_root\"} or {\"snapshot_dir\"}")
         decisions = m.get("decisions")
-        if decisions is None or decisions == []:
-            self.refuse("no decisions: the manifest needs at least one decision")
-            return
-        if not isinstance(decisions, list):
+        # A SUPPLIED container of the wrong shape, an explicit null included, is a shape refusal
+        # (validate() stops before the base is frozen); only an ABSENT key, or an empty list, is
+        # the ordinary "no decisions".
+        if "decisions" in m and not isinstance(decisions, list):
             self.shape("'decisions' must be a list of decisions, not %s" % type_name(decisions))
+            return
+        if not decisions:
+            self.refuse("no decisions: the manifest needs at least one decision")
             return
         seen = set()
         for i, d in enumerate(decisions):
@@ -627,7 +751,7 @@ class Plan(object):
 
     def _pages(self, d, where):
         pages = d.get("pages")
-        if pages is not None and not isinstance(pages, list):
+        if "pages" in d and not isinstance(pages, list):       # null included; absent is below
             self.shape("%s: 'pages' must be a list of pages, not %s" % (where, type_name(pages)))
             d["pages"] = []
             return
@@ -689,7 +813,7 @@ class Plan(object):
 
     def _choices(self, d, where):
         chs = d.get("choices")
-        if chs is not None and not isinstance(chs, list):
+        if "choices" in d and not isinstance(chs, list):       # null included; absent is below
             self.shape("%s: 'choices' must be a list of choices, not %s" % (where, type_name(chs)))
             d["choices"] = []
             return
@@ -934,6 +1058,21 @@ class Plan(object):
                                 "%s: page %s carries %s, so its root-absolute JavaScript requests (import "
                                 "\"/x.js\", import(), workers) send no path in their Referer and load the "
                                 "BASE's files, not this choice's" % (cw, path, found))
+        # A dev-server project's page (a /src/main.tsx entry) served from static files: the browser
+        # gets the .tsx source, not JavaScript, and runs nothing, and the frame looks like a blank
+        # variant. A folder choice (another model's folder copy) is where this used to pass. A
+        # folder choice with no folder was refused above; locate() needs one.
+        if kind in KINDS and not url_served(c) and (kind != "folder" or (
+                isinstance(c.get("folder"), str) and self.abs(c["folder"]).is_dir())):
+            for path in base_pages:
+                f, _origin, _slashless = self.locate(c, path)
+                if f is None or f.suffix.lower() not in (".html", ".htm"):
+                    continue
+                for src in untranspiled_entries(read_text(f)):
+                    self.refuse("%s: page %s (%s) loads the script entry %s, which this static server "
+                                "hands back as source, never as JavaScript, so the frame runs nothing: a "
+                                "dev-server project's choices are `url` choices, each on its own dev server"
+                                % (cw, path, f, src))
         call = c.get("codex_call")
         if call is not None:
             if not isinstance(call, str) or not CALL_RE.match(call):
@@ -987,6 +1126,13 @@ class Plan(object):
             if norm_page(url_path) in mp:
                 f = inside(folder, mp[norm_page(url_path)])
                 f = f if (f is not None and f.is_file()) else None
+                # A map entry naming the directory's own index ({"/docs": "docs/index.html"}) is that
+                # directory's page: served at /docs its relative references resolve one level up,
+                # so it gets the redirect resolve_ex() gives the unmapped directory.
+                rel = urllib.parse.unquote(url_path).strip("/")
+                if (f is not None and rel and not url_path.endswith("/")
+                        and f.name.lower() in ("index.html", "index.htm") and f.parent == inside(folder, rel)):
+                    slashless = True
             if f is None:
                 f, slashless = resolve_ex(folder, url_path)
             if f is not None:
@@ -1039,6 +1185,10 @@ class Plan(object):
             ctype = mimetypes.guess_type(f.name)[0] or "application/octet-stream"
             if kind == "folder" and ctype == "text/css":
                 body = to_bytes(rewrite_css(body.decode("utf-8", "surrogateescape"), prefix))
+            elif kind == "folder" and ctype in JS_TYPES:
+                # Its imports requested inside the choice, at the same URL a relative import of the
+                # same module reaches (rewrite_js): one module, one instance.
+                body = to_bytes(rewrite_js(body.decode("utf-8", "surrogateescape"), prefix))
             return 200, body, _ctype(ctype), "%s asset" % origin
         text = read_text(f)
         if kind == "fragment":
@@ -1312,10 +1462,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         u = urllib.parse.urlsplit(self.path)
         try:
             if not u.path.startswith("/v/"):
-                # A folder choice's JavaScript asks for a root-absolute path (import "/js/theme.js",
-                # import(), new Worker): HTML and CSS were rewritten, JavaScript is not, so send it
-                # into the choice. A redirect, not the bytes in place: the module's own URL is then
-                # inside the choice, so ITS root-absolute and relative imports are routed too.
+                # A folder choice's page or JavaScript asks for a root-absolute path the rewrite
+                # could not see (a computed import(), new Worker("/w.js"), fetch, an import map's
+                # target): send it into the choice. A redirect, not the bytes in place: the
+                # module's own URL is then inside the choice, so ITS imports resolve there too.
                 routed = self.referer_choice(plan)
                 if routed is not None:
                     return self.redirect(REDIRECT_CHOICE, "/v/%s/%s%s" % (routed[0], routed[1], u.path), u.query)
@@ -1386,15 +1536,86 @@ def cmd_check(args):
         plan.cleanup()
 
 
-def framing_refused(headers):
-    """Why a response may not be shown in the comparison page's frame (another origin), or ''."""
+CSP_SCHEME_SOURCE = re.compile(r"^([a-z][a-z0-9+.-]*):$", re.I)
+CSP_HOST_SOURCE = re.compile(r"^(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?(?P<host>\*|(?:\*\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)*)"
+                             r"(?::(?P<port>\d+|\*))?(?P<path>/\S*)?$", re.I)
+DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def origin_text(o):
+    return "%s://%s:%s" % (o[0], o[1], o[2] if o[2] is not None else "<port>")
+
+
+def _scheme_ok(source_scheme, scheme):
+    """CSP scheme matching: a source's http also allows an https ancestor."""
+    return source_scheme == scheme or (source_scheme == "http" and scheme == "https")
+
+
+def ancestor_allowed(source, ancestor, resource):
+    """Does one frame-ancestors source allow the ancestor origin (scheme, host, port), the framed
+    response being from `resource` (its origin, for 'self' and a scheme-less source)? True / False,
+    or None when this check cannot evaluate it: a keyword frame-ancestors has no use for, an IPv6
+    host, a path, a port it cannot know (serve picks one when the manifest's port is 0)."""
+    s = source.lower()
+    if s == "*":
+        return ancestor[0] in ("http", "https")
+    if s == "'self'":
+        return ancestor == resource if ancestor[2] is not None or ancestor[1] != resource[1] else None
+    if s.startswith("'"):
+        return None
+    m = CSP_SCHEME_SOURCE.match(s)
+    if m:
+        return _scheme_ok(m.group(1), ancestor[0])
+    m = CSP_HOST_SOURCE.match(s)
+    if not m or (m.group("path") or "/") != "/":
+        return None
+    scheme, host, port = m.group("scheme"), m.group("host"), m.group("port")
+    if not _scheme_ok(scheme or resource[0], ancestor[0]):
+        return False
+    if host != "*" and host != ancestor[1] and not (host.startswith("*.") and ancestor[1].endswith(host[1:])):
+        return False
+    if port == "*":
+        return True
+    if ancestor[2] is None:
+        return None
+    return ancestor[2] == (int(port) if port else DEFAULT_PORTS.get(ancestor[0]))
+
+
+def frame_ancestors(headers):
+    """The source list of each enforced policy's frame-ancestors directive (its first one): every
+    Content-Security-Policy header, each comma-separated policy in it. Report-Only enforces nothing."""
+    get_all = getattr(headers, "get_all", None)
+    values = (get_all("Content-Security-Policy") if get_all else [headers.get("Content-Security-Policy")]) or []
+    out = []
+    for value in values:
+        for policy in (value or "").split(","):
+            for directive in policy.split(";"):
+                parts = directive.split()
+                if parts and parts[0].lower() == "frame-ancestors":
+                    out.append(parts[1:])
+                    break
+    return out
+
+
+def framing_refused(headers, ancestor, resource):
+    """(refused, unsure) for a url choice's response, framed on the comparison page whose origin is
+    `ancestor`: what forbids the frame (it would be blank), or ''; else what this check cannot
+    evaluate (the frame MAY be refused), or ''. Every enforced policy must allow the ancestor; a
+    source list of 'none' (or none at all) allows nothing."""
     xfo = (headers.get("X-Frame-Options") or "").strip().lower()
     if xfo in ("deny", "sameorigin"):
-        return "X-Frame-Options: %s" % xfo.upper()
-    csp = headers.get("Content-Security-Policy") or ""
-    if "frame-ancestors" in csp.lower():
-        return "a Content-Security-Policy frame-ancestors rule"
-    return ""
+        return "X-Frame-Options: %s" % xfo.upper(), ""
+    unsure = ""
+    for sources in frame_ancestors(headers):
+        rule = "a Content-Security-Policy frame-ancestors %s" % (" ".join(sources) or "(no source)")
+        verdicts = [ancestor_allowed(x, ancestor, resource) for x in sources if x.lower() != "'none'"]
+        if True in verdicts:
+            continue
+        if None in verdicts:
+            unsure = unsure or rule
+            continue
+        return "%s, which does not allow %s" % (rule, origin_text(ancestor)), ""
+    return "", unsure
 
 
 def live(plan, urls):
@@ -1405,25 +1626,35 @@ def live(plan, urls):
     t.start()
     rows = [("comparison page", "/")] + [("%s/%s %s" % (d["id"], c["c"], c["kind"]), u) for d, c, p, u in urls]
     good, warnings = 0, []
+    # The origin the user's comparison page will have: `serve` on the manifest's port (port 0:
+    # one serve picks, unknown here), not this check's own throwaway port.
+    ancestor = ("http", "127.0.0.1", plan.m.get("port", DEFAULT_PORT) or None)
     try:
         emit("LIVE", "GET each URL on %s, following redirects; a url choice's on its own server "
                      "(status, bytes, applied, url)" % origin)
         for label, u in rows:
             full = u if u.startswith("http://") else origin + u
-            final, blocked = full, ""
+            final, blocked, unsure = full, "", ""
             try:
                 with urllib.request.urlopen(full, timeout=30) as r:
                     status, body, what, final = r.status, r.read(), r.headers.get("X-Compare-Choices", ""), r.geturl()
                     if u.startswith("http://"):
-                        blocked = framing_refused(r.headers)
+                        fu = urllib.parse.urlsplit(final)
+                        scheme = fu.scheme.lower()
+                        resource = (scheme, (fu.hostname or "").lower(), fu.port or DEFAULT_PORTS.get(scheme))
+                        blocked, unsure = framing_refused(r.headers, ancestor, resource)
             except urllib.error.HTTPError as e:
                 status, body, what = e.code, e.read(), ""
             except OSError as e:
                 status, body, what = 0, b"", str(e)
             good += status == 200
             if blocked:
-                warnings.append("%s answers 200 but carries %s: its frame on the comparison page would be "
-                                "blank" % (u, blocked))
+                warnings.append("%s answers 200 but carries %s: its frame on the comparison page (%s) would "
+                                "be blank" % (u, blocked, origin_text(ancestor)))
+            elif unsure:
+                warnings.append("%s answers 200 but carries %s, which this check cannot evaluate: its frame on "
+                                "the comparison page (%s) MAY be refused; open the page and check that frame"
+                                % (u, unsure, origin_text(ancestor)))
             shown = u if final == full else "%s -> %s" % (u, final[len(origin):] if final.startswith(origin) else final)
             print("  %3d  %8d  %-22s %s" % (status, len(body), what or label, shown), flush=True)
     finally:
@@ -1558,6 +1789,34 @@ def selftest():
         pb = plan_for(bad)
         ok(pb.halt and any("'replace_id' must be a string" in p for p in pb.problems),
            "a field of the wrong type is refused by name, and halts")
+        bad = json.loads(json.dumps(man))
+        bad["decisions"] = None
+        pb = plan_for(bad)
+        ok(pb.halt and pb.base is None and any("'decisions' must be a list" in p for p in pb.problems),
+           "an explicit null container halts before the base is frozen")
+        (tmp / "fold" / "docs").mkdir(parents=True)
+        (tmp / "fold" / "docs" / "index.html").write_text(page, encoding="utf-8", newline="")
+        fc = {"kind": "folder", "folder": str(tmp / "fold"), "map": {"/docs": "docs/index.html"}}
+        ok(pl.locate(fc, "/docs")[2] is True and pl.locate(fc, "/docs/")[2] is False,
+           "a map entry naming a directory's index is flagged for the slash redirect")
+        ok(rewrite_js('import a from "/x.js";\nimport("/y.js");\nimport "./z.js";\nvar s = "/w.js";', "/v/d/2/")
+           == 'import a from "/v/d/2/x.js";\nimport("/v/d/2/y.js");\nimport "./z.js";\nvar s = "/w.js";',
+           "rewrite_js: root-absolute import specifiers into the choice; relative ones and strings stay")
+        ok(untranspiled_entries('<script type="module" src="/src/main.tsx"></script><script type="text/babel" '
+                                'src="a.jsx"></script><script src="/a.js"></script>') == ["/src/main.tsx"],
+           "a .tsx module entry is found; a text/babel script and a .js entry are not")
+        anc, res = ("http", "127.0.0.1", 8790), ("http", "127.0.0.1", 5173)
+
+        def framed(policy):
+            return framing_refused({"Content-Security-Policy": policy}, anc, res)
+        ok(framed("frame-ancestors 'none'")[0] and framed("frame-ancestors 'self'")[0]
+           and framed("frame-ancestors http://127.0.0.1:*") == ("", "") and framed("frame-ancestors *") == ("", "")
+           and framed("frame-ancestors http://127.0.0.1:8790") == ("", "")
+           and framed("frame-ancestors http://127.0.0.1:8791")[0]
+           and framed("frame-ancestors 'unsafe-eval'") == ("", framed("frame-ancestors 'unsafe-eval'")[1])
+           and framed("frame-ancestors 'unsafe-eval'")[1],
+           "frame-ancestors: 'none', 'self' and another port refuse; 127.0.0.1:*, * and the port allow; "
+           "an unknown keyword is unsure")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     for good_, label in results:

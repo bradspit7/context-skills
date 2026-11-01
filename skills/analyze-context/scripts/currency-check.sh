@@ -632,6 +632,30 @@ elif compgen -G "$CUR_WT/.github/workflows/*.yml" >/dev/null \
   echo "CI: could not check - ci-verdict-line.sh is missing beside currency-check.sh"
 fi
 
+# Shared tools installed centrally (~/.claude/site-tools/): when the install exists, its own line
+# script decides, and it prints nothing for a project it does not list that has no
+# site-tools.json. A project that declares site-tools.json with nothing installed is LOUD.
+STL="$HOME/.claude/site-tools/site-tools-line.py"
+if [ -f "$STL" ]; then
+  STL_PY=""
+  for c in python py python3; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+      STL_PY="$c"; break
+    fi
+  done
+  if [ -n "$STL_PY" ]; then
+    "$STL_PY" "$STL" --root "$CUR_WT" || true
+  elif [ -f "$CUR_WT/site-tools.json" ]; then
+    echo
+    echo "== SITE TOOLS =="
+    echo "SITE TOOLS: could not check -- no Python 3.9+ on PATH"
+  fi
+elif [ -f "$CUR_WT/site-tools.json" ]; then
+  echo
+  echo "== SITE TOOLS =="
+  echo "SITE TOOLS: could not check -- this project declares site-tools.json but ~/.claude/site-tools/ is not installed (run bootstrap in the central repo)"
+fi
+
 emit_upgrade_status
 emit_rulings
 }

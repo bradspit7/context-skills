@@ -7,10 +7,16 @@ was the only one run, so an estate lint its new test tripped stayed red; and the
 `git diff --quiet <branch> -- <paths>` exits 1 on IDENTICAL bytes while the new files are not yet added
 (git reads an untracked path as deleted). This does the whole step and checks against the COMMIT.
 
-  python land-build.py <worktree> --item "<queue title>" --subject "<commit subject>"
-                       --upgrade "<one plain sentence>" (--verify "<command>" | --no-verify)
+  python land-build.py <worktree> (--item "<queue title>" | --no-item "<why there is no queue entry>")
+                       --subject "<commit subject>" [--upgrade "<one plain sentence>"]
+                       (--verify "<command>" | --no-verify)
                        [--body-file F] [--trailer "Key: value" ...] [--queue FILE] [--repo <checkout>]
                        [--no-codex-review | --codex-wait-min N] [--dry-run]
+
+--item takes the entry's title (the text after `## YYYY-MM-DD · `) or that whole heading as written,
+`YYYY-MM-DD · <title>`; either must match exactly ONE heading, and --upgrade is required with it. --no-item lands
+a branch that has no queue entry (a fix-forward of a landed build, a design build): no queue edit, no `Upgrade:`
+trailer (--upgrade is refused with it), and every other check below kept; its one-line reason is printed.
 
 Run it from the main checkout (or name it with --repo). In order:
   1. resolves the worktree's branch and its main checkout (the first entry of `git worktree list`), and
@@ -18,25 +24,57 @@ Run it from the main checkout (or name it with --repo). In order:
      registered linked worktree with a branch, or holds uncommitted or untracked files (removing it would
      lose them); the branch holds nothing main's HEAD lacks; a path the branch changed (against the
      merge-base with HEAD) was also changed on main since that merge-base (overlap: the paths are named);
-     the main checkout has uncommitted or untracked changes in any path the landing touches; the queue
-     file does not hold exactly ONE heading `## YYYY-MM-DD · <item>` (an exact title, not a substring);
-     or the branch edits the queue or the entry's partial files itself. A main that moved on OTHER files
-     is fine; a sibling session's staged work in other paths stays staged and out of the commit;
+     the main checkout has uncommitted or untracked changes in any path the landing touches; with --item,
+     the queue file does not hold exactly ONE heading `## YYYY-MM-DD · <item>` (an exact title or whole
+     heading, not a substring); or the branch edits the queue or the entry's partial files itself. The one
+     queue edit a branch may carry is the landing's own: the --item entry deleted exactly as cutting it from
+     the queue at the branch's base would (and the Partial files that entry names, deleted); that edit is
+     left to the landing, which cuts the entry from main's current queue once (a helper did this "as earlier
+     builds did", measured 2026-11-01). With --no-item any queue edit on the branch refuses. A main that
+     moved on OTHER files is fine; a sibling session's staged work in other paths stays staged and out of
+     the commit;
   2. brings the branch's added, modified and deleted paths over from the branch's COMMITTED tree
      (`git restore --source=<tip> --staged --worktree`, `git rm` for deletions; renames are a deletion
      plus an addition);
-  3. removes the queue entry byte-level (line endings untouched); when it carries a
+  3. removes the queue entry byte-level (line endings untouched) and stages it; when it carries a
      `- **Partial:** <patch> at <base>` bullet (park-worktree.py), removes that patch and its .base too;
-  4. commits with a pathspec (`git commit -F <msg> -- <paths>`, never a bare commit): the subject, the
-     optional body, a blank line, `Upgrade: <sentence>`, then each --trailer line. A commit a hook refuses
-     undoes every write and counts as a refusal;
+  4. commits a TEMPORARY index (GIT_INDEX_FILE): main's HEAD as step 1 read it, plus each landed path exactly as
+     the tip's tree holds it, mode included, minus the deleted and Partial paths, plus the staged queue; never the
+     real index, so a sibling's staged work stays out, and never a pathspec commit, which re-reads the working tree
+     and under core.filemode=false (Windows) lands a branch's 100755 file as 100644 (measured 2026-10-30).
+     The commit is made with plumbing bound to that one HEAD: `git commit-tree -p <it>`, then `git update-ref HEAD
+     <new> <it>`, a compare-and-swap. A main another session moved since step 1 is refused (exit 70) with nothing
+     landed; run it again, and step 1 checks the branch against the new main. (`git commit` took HEAD as the parent
+     when IT started, so a sibling's commit after the snapshot got a landing commit holding the snapshot's tree, which
+     undid the sibling's change: Codex 2026-11-02.) What `git commit` gave is kept, in its order: the pre-commit hook
+     on the temporary index (the tree is written after it, so a hook's own `git add` is committed), the session
+     stamp's --trailer, prepare-commit-msg (`<file> message`) and commit-msg on the message file, -F's whitespace
+     cleanup, author and committer from the usual config, signing when commit.gpgsign is true, the reflog entry
+     `commit: <subject>`, then post-commit (its exit code ignored, as git does). Hooks run through `git hook run`
+     (git 2.36 or later). What differs: the hooks get a temp message file, not .git/COMMIT_EDITMSG (which a
+     sibling's commit would share); commit.cleanup is not read (always -F's default, whitespace); a message a hook
+     empties is not refused; an in-progress merge's MERGE_HEAD is never made a parent; no auto-maintenance runs.
+     The message: the subject, the optional body, a blank line, `Upgrade: <sentence>` (none with --no-item),
+     then each --trailer line. Commands that fire hooks (hook run, update-ref, branch) run without
+     --literal-pathspecs, which git would export to the hooks as GIT_LITERAL_PATHSPECS=1 (a hook's `git ls-files
+     "*.py"` then matched nothing: measured 2026-10-28, 2026-11-01); a pathspec they take is `:(literal)`-prefixed
+     instead. A commit a hook refuses undoes every write and counts as a refusal;
   5. checks the COMMIT: one new commit on the old HEAD, holding exactly the landed paths; every landed
-     path equal to the branch tip (`git diff --quiet <tip> HEAD -- <path>`), every deleted one absent
-     from HEAD, the queue blob equal to the edited bytes in the form git stores them (their eol conversion
-     applied: under core.autocrlf=true a CRLF checkout commits an LF blob, and a CRLF blob stays as it is). On
-     any difference it stops loudly and keeps the worktree and branch;
+     path equal to the branch tip, blob AND mode (`git diff --quiet <tip> HEAD -- <path>`; a difference names
+     both modes or both blobs), every deleted one absent from HEAD, the queue blob equal to the edited bytes in
+     the form git stores them (their eol conversion applied: under core.autocrlf=true a CRLF checkout commits an
+     LF blob, and a CRLF blob stays as it is). On any difference it stops loudly and keeps the worktree and branch;
   6. removes the worktree (`git worktree unlock` first when locked) and deletes the branch (`-D`), only
-     after step 5 passed and only while the branch still points at the tip that was landed;
+     after step 5 passed and only while the branch still points at the tip that was landed. What could not be
+     removed is a `LEFTOVER:` line naming it, the likely holder and the command that removes it (git unregisters
+     a worktree before it fails on a held folder, which is then left empty: `rmdir`), repeated after the verify. A
+     folder that cannot be read is a leftover too, saying why, never a removed one (only a folder that is not there
+     is gone); the command unlocks first only while git still lists the worktree as locked.
+     A leftover OUTSIDE the main checkout (the skill's `../<repo>-<topic>` layout), a moved branch or a branch
+     git would not delete changes nothing the verify reads, so the verify still runs and its code is the exit
+     code (three landings, 2026-10-27 to 2026-11-02, each skipped the gating verify over an empty folder).
+     Only a worktree folder left INSIDE the main checkout stops before the verify (exit 72), which would read
+     what is left of it as a second copy of the tree;
   7. runs the --verify command from the main checkout through the platform shell (cmd.exe on Windows,
      /bin/sh elsewhere; a bare `bash` there resolves through PATH, so on Windows run this from Git Bash,
      where that is Git's bash), its output shown as it runs, then prints and exits with its exit code.
@@ -63,11 +101,13 @@ ended), or every few minutes, up to the holder's own bound (its record's start +
 plus a margin), so a held lock costs a refusal record per call that ends, not one per poll. After the verify (or
 a landing that stopped) it waits up to --codex-wait-min minutes (default 15; the first three review calls took 6
 to 9) and prints `CODEX REVIEW RETURNED <call-id> answer=<path>` with the reviewed range and whether the landing
-committed it. Returned is not adjudicated: check each point against the landed files, fix forward what holds,
-tell the user in one line per disagreement, then record the outcome. That holds outside closing mode only: in
-closing mode (a wrap or departure has been requested; from then on a late result supplies information and never
-authorizes new work) the next line asks to record the call id and the answer path only, with no adjudication,
-fix, landing or new run. A lock still held at its bound is one
+committed it. Returned is not adjudicated. The two lines after it are two CONDITIONS, the ordinary case first:
+`Outside closing mode (the usual case):` check each point against the landed files, fix forward what holds, tell
+the user one line per disagreement, then record the outcome; `If a wrap or departure has been requested (closing
+mode):` record only the call id and the answer path, with no adjudication, fix, landing or new run (from then on
+a late result supplies information and never authorizes new work). land-build cannot tell which holds, so neither
+line states closing mode as the current state (the old wording led with `in closing mode (...)`, which read as a
+fact at mid-session landings). A lock still held at its bound is one
 `CODEX REVIEW NOT RUN` line naming the command to run it by hand; any other refusal (a budget cap, a policy) is
 one `CODEX REVIEW REFUSED` line; a review still running at the bound is left running, and its line names the
 file its `CODEX-ASK` line will reach (in closing mode it is recorded as running, never stopped or adjudicated);
@@ -78,13 +118,20 @@ first try); or content your project's own rules keep out of an external prompt.
 --dry-run runs every step-1 check, prints the plan (paths, queue entry, partial files, commit message,
 the verify command, the review) and changes nothing: it starts no review.
 
-Exit: 0 landed and the verify passed (or --no-verify); the verify's own exit code when it failed AFTER
-the landing was committed and cleaned up (the output says so); 2 usage (an empty --upgrade or subject,
-neither --verify nor --no-verify, a malformed --trailer); 70 refused, nothing changed (dry-run included);
-71 committed, but the commit does not match the branch (the worktree and branch are kept, the verify is
-not run); 72 committed and byte-checked, but the worktree or branch could not be removed (the verify is
-not run); 73 the commit failed AND restoring the main checkout did not complete (the message names what
-is left).
+A git call that fails is reported by its END (a hook prints its verdict last) and, when its output is longer than
+that tail, also by every earlier line matching FAIL, ERROR, `not ok`, Traceback or failed (with the few lines after
+each), printed ahead of the tail, and by a file outside the repo holding its full stdout and stderr, whose path is
+printed: a hook can print its failing check early and 170 passing ones after it (measured 2026-10-22, 2026-11-01).
+
+Exit: 0 landed and the verify passed (or --no-verify), even with a LEFTOVER outside the main checkout (a
+non-zero code for a passed verify would read as a failed landing to every `&&` and invite a second landing of a
+committed one; the LEFTOVER line, repeated last, is how a leftover is reported); the verify's own exit code when
+it failed AFTER the landing was committed (the output says so); 2 usage (an empty --upgrade or subject, --upgrade
+with --no-item, neither --item nor --no-item, neither --verify nor --no-verify, a malformed --trailer); 70
+refused, nothing changed (dry-run included); 71 committed, but the commit does not match the branch (the worktree
+and branch are kept, the verify is not run); 72 committed and byte-checked, but the worktree's folder is left
+INSIDE the main checkout (the verify is not run: it would read that folder); 73 the commit failed AND restoring
+the main checkout did not complete (the message names what is left).
 """
 import argparse
 import importlib.util
@@ -175,28 +222,107 @@ class UndoFailed(Exception):
     """The commit failed and the main checkout could not be fully restored."""
 
 
-def tail_text(r, lines=30):
-    """The END of a failed git call's output (stdout, then stderr): its last `lines` lines, led by how many earlier
+# A failed call's output lines that name a failure, printed ahead of its tail when the tail leaves them out.
+FAILURE_LINE = re.compile(r"FAIL|ERROR|not ok|Traceback|failed")
+FAILURE_AFTER = 3    # the lines kept after each failure line
+FAILURE_MAX = 40     # failure lines (with the lines after them) shown at most; the saved file holds every line
+
+
+def save_output(r, what):
+    """Write a failed call's full stdout and stderr to a new file in the system temp dir, outside every checkout;
+    its path, or "" when it could not be written."""
+    try:
+        fd, path = tempfile.mkstemp(prefix="land-build-output-", suffix=".log")
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(("%s\nexit %s\n--- stdout ---\n" % (what, r.returncode)).encode("utf-8"))
+            fh.write(r.stdout or b"")
+            fh.write(b"\n--- stderr ---\n")
+            fh.write(r.stderr or b"")
+        return path
+    except OSError:
+        return ""
+
+
+def tail_text(r, lines=30, what="git"):
+    """The END of a failed call's output (stdout, then stderr): its last `lines` lines, led by how many earlier
     ones it leaves out. Never a head slice: git prints a child's output (a hook's, a filter's) first and its own
     verdict last, and a hook prints its passing checks before its failing one, so a head slice keeps the passes and
     cuts the failure. Measured on a 46-check hook: the first 400 characters were all `<label> ok` lines, the
-    failing check was cut off, and the last label shown read as the culprit."""
+    failing check was cut off, and the last label shown read as the culprit.
+    Nor the tail alone: a hook can print its failing check EARLY and pass dozens after it (measured 2026-10-22: 44
+    lines hidden, 2026-11-01: 172; the FAIL line sat in the hidden ones both times). So when lines are left out,
+    every earlier line matching FAILURE_LINE comes first, numbered, each with the FAILURE_AFTER lines after it, and
+    the call's full stdout and stderr go to a file outside the checkout, whose path is printed."""
     rows = []
     for stream in (r.stdout, r.stderr):
         rows += (stream or b"").decode("utf-8", "replace").strip().splitlines()
     dropped = len(rows) - lines
-    if dropped > 0:
-        rows = ["... (%d earlier line%s not shown)" % (dropped, "" if dropped == 1 else "s")] + rows[-lines:]
-    return "\n  ".join(rows)
+    if dropped <= 0:
+        return "\n  ".join(rows)
+    keep = set()
+    for i, row in enumerate(rows[:dropped]):
+        if FAILURE_LINE.search(row):
+            keep.update(range(i, min(i + FAILURE_AFTER + 1, dropped)))
+    picked = sorted(keep)
+    head = []
+    if picked:
+        head.append("failure lines among the %d earlier lines (FAIL, ERROR, not ok, Traceback, failed, each with up "
+                    "to %d after it%s):" % (dropped, FAILURE_AFTER, "; the first %d" % FAILURE_MAX
+                                            if len(picked) > FAILURE_MAX else ""))
+        prev = None
+        for i in picked[:FAILURE_MAX]:
+            if prev is not None and i != prev + 1:
+                head.append("  ...")
+            head.append("  %d: %s" % (i + 1, rows[i]))
+            prev = i
+    path = save_output(r, what)
+    return "\n  ".join(head + ["... (%d earlier line%s not shown)" % (dropped, "" if dropped == 1 else "s"),
+                               "full output (%d lines): %s" % (len(rows), path) if path else
+                               "full output: could not be saved to the temp dir"] + rows[-lines:])
 
 
-def git(cwd, *args, check=True, data=None):
-    """Run git with literal pathspecs; bytes out (`data`, when given, is its stdin). check=True raises Refused with
-    the end of git's own output (tail_text)."""
-    r = subprocess.run(["git", "--literal-pathspecs", "-C", str(cwd)] + [str(a) for a in args], input=data,
-                       capture_output=True)
+# git commands that can fire a hook. They run WITHOUT --literal-pathspecs: git exports that flag to every hook as
+# GIT_LITERAL_PATHSPECS=1, and a hook's `git ls-files "*.py"` then matches nothing (measured 2026-10-28 and
+# 2026-11-01: 0 of 288 files, and the landing was refused). Their pathspecs are protected one by one with
+# `:(literal)` instead, and an inherited GIT_LITERAL_PATHSPECS is dropped (it would read `:(literal)` as a name).
+# `update-ref` fires reference-transaction and `hook run` runs one, so the landing commit's own steps are among them.
+HOOK_COMMANDS = ("commit", "merge", "am", "rebase", "cherry-pick", "revert", "branch", "checkout", "switch", "push",
+                 "update-ref", "hook")
+
+
+def subcommand(args):
+    """git's subcommand in args: the first argument past the global options (`-c key=value` takes two)."""
+    i = 0
+    while i < len(args):
+        if args[i] == "-c":
+            i += 2
+        elif args[i].startswith("-"):
+            i += 1
+        else:
+            return args[i]
+    return ""
+
+
+def git(cwd, *args, check=True, data=None, env=None):
+    """Run git; bytes out (`data`, when given, is its stdin; `env`, when given, its environment). Literal pathspecs
+    throughout: the global flag, or for a hook-firing command (HOOK_COMMANDS) a `:(literal)` prefix on every
+    argument after `--`. check=True raises Refused with the end of git's own output (tail_text)."""
+    args = [str(a) for a in args]
+    sub = subcommand(args)
+    if sub in HOOK_COMMANDS:
+        # In `git hook run <name> -- <args>` what follows `--` is the hook's arguments, not pathspecs.
+        if "--" in args and sub != "hook":
+            k = args.index("--")
+            args = args[:k + 1] + [":(literal)" + a for a in args[k + 1:]]
+        env = {k: v for k, v in (os.environ if env is None else env).items() if k != "GIT_LITERAL_PATHSPECS"}
+        argv = ["git", "-C", str(cwd)] + args
+    else:
+        argv = ["git", "--literal-pathspecs", "-C", str(cwd)] + args
+    r = subprocess.run(argv, input=data, capture_output=True, env=env)
     if check and r.returncode:
-        raise Refused("git %s failed (rc %d): %s" % (" ".join(str(a) for a in args[:3]), r.returncode, tail_text(r)))
+        shown = args[args.index(sub):] if sub else args
+        raise Refused("git %s failed (rc %d): %s" % (" ".join(shown[:3]), r.returncode,
+                                                     tail_text(r, what=" ".join(argv))))
     return r
 
 
@@ -247,17 +373,22 @@ def split_lines(raw):
 
 
 def cut_entry(raw, item):
-    """(new queue bytes, the entry's lines, [partial patch rel paths]) for the ONE heading exactly titled `item`."""
+    """(new queue bytes, the entry's lines, [partial patch rel paths]) for the ONE heading `item` names exactly: by
+    its title (the text after `## YYYY-MM-DD · `) or by the whole heading as written, `YYYY-MM-DD · <title>`, which
+    the skill's own examples and a reader copying the heading both pass (refused as `matches 0` three times,
+    2026-10-15/19 and 2026-10-30, two projects). The whole heading must match date and title; neither form
+    is a substring match."""
     lines = split_lines(raw)
 
-    def title(ln):
-        m = HEADING.match(ln.rstrip(b"\r\n").decode("utf-8", "replace"))
-        return m.group(1) if m else None
+    def names(ln):
+        text = ln.rstrip(b"\r\n").decode("utf-8", "replace")
+        m = HEADING.match(text)
+        return (m.group(1), text[len("## "):]) if m else ()
 
-    heads = [i for i, ln in enumerate(lines) if title(ln) == item]
+    heads = [i for i, ln in enumerate(lines) if item in names(ln)]
     if len(heads) != 1:
         raise Refused("--item %r matches %d '## YYYY-MM-DD · <title>' headings exactly (it must match "
-                      "exactly one)" % (item, len(heads)))
+                      "exactly one, by its title or by the whole heading 'YYYY-MM-DD · <title>')" % (item, len(heads)))
     h = heads[0]
     end = next((i for i in range(h + 1, len(lines)) if lines[i].startswith(b"## ")), len(lines))
     start = h
@@ -294,13 +425,54 @@ def blob_ids(top, rel, data):
 
 
 def message(a):
+    """The commit message: subject, optional body, then the trailers -- `Upgrade:` first, except with --no-item: a
+    fix-forward or design build delivers no queued upgrade, and the ledger derives *built* from that trailer."""
     parts = [a.subject.strip()]
     if a.body_file:
         body = Path(a.body_file).read_bytes().decode("utf-8").replace("\r\n", "\n").strip("\n")
         if body:
             parts.append(body)
-    parts.append("\n".join(["Upgrade: " + a.upgrade.strip()] + [t.strip() for t in a.trailer]))
+    trailers = ([] if a.no_item else ["Upgrade: " + a.upgrade.strip()]) + [t.strip() for t in a.trailer]
+    if trailers:
+        parts.append("\n".join(trailers))
     return "\n\n".join(parts) + "\n"
+
+
+def blob_at(top, rev, rel):
+    """The bytes of `rel` in `rev`'s tree, or None when it holds no such file."""
+    r = git(top, "cat-file", "blob", "%s:%s" % (rev, rel), check=False)
+    return r.stdout if r.returncode == 0 else None
+
+
+def own_removal(top, p, changes, item):
+    """`changes` without the branch's own removal of the --item entry, which the landing makes itself; Refused for
+    any other edit to the queue or the entry's Partial files.
+
+    A helper that deleted its own entry "as earlier builds did" got the landing refused (measured 2026-11-01): a
+    revert commit and a re-run per build. The branch's queue is the landing's own edit when it equals cut_entry()
+    applied to the queue at the branch's BASE (the entry deleted exactly as the landing would, nothing else), and a
+    Partial file is when the branch deleted it. Those changes are dropped here, so the landing cuts the entry from
+    main's CURRENT queue once (keeping whatever main queued since the base) and an edit to a queue main also moved
+    is no overlap. Anything else -- another entry edited, an entry added, a different entry deleted, a Partial file
+    edited -- is still refused: the queue is the main thread's."""
+    kinds = {path: kind for kind, path in changes}
+    owned = [x for x in [p["queue_rel"]] + p["partial_paths"] if x in kinds]
+    if not owned:
+        return changes
+    bad = [x for x in p["partial_paths"] if x in kinds and kinds[x] != "D"]
+    if p["queue_rel"] in kinds:
+        base_q, tip_q = blob_at(top, p["base"], p["queue_rel"]), blob_at(top, p["tip"], p["queue_rel"])
+        try:
+            same = base_q is not None and tip_q is not None and cut_entry(base_q, item)[0] == tip_q
+        except Refused:
+            same = False
+        if not same:
+            bad.insert(0, p["queue_rel"])
+    if bad:
+        raise Refused("the branch edits %s itself; the landing owns the queue entry and its partial files (the one "
+                      "edit a branch may carry is the landing's own: the --item entry deleted exactly as the landing "
+                      "deletes it, and its Partial files deleted)" % ", ".join(bad))
+    return [(kind, path) for kind, path in changes if path not in owned]
 
 
 def plan(a):
@@ -344,6 +516,35 @@ def plan(a):
     changes = list(zip(fields[0::2], fields[1::2]))
     if not changes:
         raise Refused("nothing to land: %s changes no path against its merge-base %s" % (branch, base[:7]))
+
+    qrel = PurePosixPath(a.queue.replace("\\", "/"))
+    if qrel.is_absolute() or ".." in qrel.parts or ":" in a.queue:
+        raise Refused("--queue must be a file inside the checkout, given relative to it: %s" % a.queue)
+    queue_rel = qrel.as_posix()
+    queue = top / queue_rel
+    queue_old = queue_new = None
+    entry, partial_paths = [], []
+    if a.no_item:
+        # No queue entry to own, so no queue edit to make: one on the branch is the main thread's to land.
+        if queue_rel in [x for _k, x in changes]:
+            raise Refused("the branch edits %s itself; with --no-item the landing makes no queue edit, so land a "
+                          "queue change on main, not through a build branch" % queue_rel)
+    else:
+        if not queue.is_file():
+            raise Refused("%s does not exist" % queue)
+        queue_old = queue.read_bytes()
+        queue_new, entry, patches = cut_entry(queue_old, a.item)
+        for rel in patches:
+            for p in (rel, PurePosixPath(rel).with_suffix(".base").as_posix()):
+                if git(top, "cat-file", "-e", "HEAD:" + p, check=False).returncode == 0:
+                    partial_paths.append(p)
+                elif (top / p).exists():
+                    raise Refused("the Partial file %s exists but is not committed: commit or delete it first" % p)
+        changes = own_removal(top, {"queue_rel": queue_rel, "partial_paths": partial_paths, "base": base, "tip": tip},
+                              changes, a.item)
+        if not changes:
+            raise Refused("nothing to land: %s only deletes its own queue entry, which the landing would do" % branch)
+
     branch_paths = [p for _k, p in changes]
     main_paths = set(zlist(git(top, "diff", "--name-only", "--no-renames", "-z", base, head)))
     overlap = sorted(p for p in branch_paths if p in main_paths)
@@ -351,30 +552,9 @@ def plan(a):
         raise Refused("%d path(s) the branch changed were also changed on main since %s -- merge main into the "
                       "branch first, then land:\n  %s" % (len(overlap), base[:7], "\n  ".join(overlap)))
 
-    qrel = PurePosixPath(a.queue.replace("\\", "/"))
-    if qrel.is_absolute() or ".." in qrel.parts or ":" in a.queue:
-        raise Refused("--queue must be a file inside the checkout, given relative to it: %s" % a.queue)
-    queue_rel = qrel.as_posix()
-    queue = top / queue_rel
-    if not queue.is_file():
-        raise Refused("%s does not exist" % queue)
-    queue_old = queue.read_bytes()
-    queue_new, entry, patches = cut_entry(queue_old, a.item)
-    partial_paths = []
-    for rel in patches:
-        for p in (rel, PurePosixPath(rel).with_suffix(".base").as_posix()):
-            if git(top, "cat-file", "-e", "HEAD:" + p, check=False).returncode == 0:
-                partial_paths.append(p)
-            elif (top / p).exists():
-                raise Refused("the Partial file %s exists but is not committed: commit or delete it first" % p)
-    own = [p for p in [queue_rel] + partial_paths if p in branch_paths]
-    if own:
-        raise Refused("the branch edits %s itself; the landing owns the queue entry and its partial files"
-                      % ", ".join(own))
-
     landed = [p for k, p in changes if k != "D"]
     deleted = [p for k, p in changes if k == "D"]
-    paths = landed + deleted + [queue_rel] + partial_paths
+    paths = landed + deleted + ([] if a.no_item else [queue_rel]) + partial_paths
     dirty = zlist(git(top, "status", "--porcelain", "-z", "--untracked-files=all", "--", *paths))
     if dirty:
         raise Refused("the main checkout has uncommitted or untracked changes in a path this landing touches:"
@@ -499,7 +679,8 @@ def review_prompt(p, a):
             "Reviewed revisions: base %s (the merge-base) and candidate %s (the branch tip; the landing commits "
             "exactly its bytes and checks them)." % (p["base"], p["tip"]),
             "Commit subject: " + a.subject.strip(),
-            "What it delivers: " + a.upgrade.strip(), ""]
+            "What it delivers: " + (a.upgrade.strip() if not a.no_item else
+                                    "(it has no queue entry) " + a.no_item.strip()), ""]
     if len(diff) > CODEX_DIFF_MAX:
         stat = out(git(top, "diff", "--no-color", "--stat", p["base"], p["tip"]))
         return "\n".join(head + [
@@ -625,12 +806,13 @@ def codex_finish(p, a):
     except subprocess.TimeoutExpired:
         print("CODEX REVIEW still running after %g min (pid %d; it may be waiting out another Codex call's lock), left "
               "running in the background: when it ends, the last line of %s reads `CODEX-ASK <call-id> <exit> "
-              "answer=<path>`. Outside closing mode, read that answer, check each point against the landed files, then "
-              "record: python %s --outcome <call-id> changed|nothing-new --note \"...\"" % (
-                  a.codex_wait_min, proc.pid, c["out"], c["script"]))
-        print("  in closing mode (a wrap or departure has been requested): record it as still running (pid %d, its "
-              "line goes to %s) and only that -- it is not stopped, and nothing is adjudicated for it now"
-              % (proc.pid, c["out"]))
+              "answer=<path>`." % (a.codex_wait_min, proc.pid, c["out"]))
+        # Two conditions, the ordinary case first: land-build cannot tell whether closing mode is on, so no line may
+        # read as saying it is (measured 2026-10-30).
+        print("  Outside closing mode (the usual case): read that answer, check each point against the landed files, "
+              "then record: python %s --outcome <call-id> changed|nothing-new --note \"...\"" % c["script"])
+        print("  If a wrap or departure has been requested (closing mode): record only that it is still running (pid "
+              "%d, its line goes to %s) -- it is not stopped, and nothing is adjudicated for it now" % (proc.pid, c["out"]))
         return
     lines = codex_lines(c["out"])
     if not lines:
@@ -643,15 +825,17 @@ def codex_finish(p, a):
         landed = ("the tip this landing committed, byte for byte" if p.get("byte_checked") else
                   "NOT what this landing committed (it stopped before its byte check passed)")
         print("CODEX REVIEW RETURNED %s answer=%s" % (call_id, rest))
+        print("  reviewed %s..%s, %s. Returned is not adjudicated." % (p["base"][:7], p["tip"][:7], landed))
+        # Two conditions, the ordinary case first: land-build cannot tell whether closing mode is on, so no line may
+        # read as saying it is (followed literally, the old first line would have skipped findings that reproduced).
+        print("  Outside closing mode (the usual case): check each point against the landed files, fix forward what "
+              "holds, tell the owner one line per disagreement, then: python %s --outcome %s changed|nothing-new "
+              "--note \"...\"" % (c["script"], call_id))
         # Closing mode (once a wrap or departure has been requested, the session finishes it and starts no new
         # work): a late result supplies information and never authorizes development, so in closing mode it is
         # recorded, not adjudicated.
-        print("  in closing mode (a wrap or departure has been requested): record the call id %s and the answer path %s "
-              "only -- no adjudication, fix, landing or new run for it now" % (call_id, rest))
-        print("  reviewed %s..%s, %s. Returned is not adjudicated: outside closing mode, check each point against "
-              "the landed files, fix "
-              "forward what holds, tell the owner one line per disagreement, then: python %s --outcome %s "
-              "changed|nothing-new --note \"...\"" % (p["base"][:7], p["tip"][:7], landed, c["script"], call_id))
+        print("  If a wrap or departure has been requested (closing mode): record only the call id %s and the answer "
+              "path %s -- no adjudication, fix, landing or new run for it now" % (call_id, rest))
     elif how == "refused" and code == EXIT_CODEX_LOCKED:
         print("CODEX REVIEW NOT RUN: another Codex call held codex-ask's lock through %d attempt(s), up to that call's "
               "own time bound -- this landing has no review; to run it by hand: python %s --kind review --cwd \"%s\" "
@@ -672,8 +856,11 @@ def show(p, a):
         counts["A"], counts["M"], counts["D"]))
     for kind, path in p["changes"]:
         print("  %s %s" % (kind, path))
-    heading = p["entry"][0].rstrip(b"\r\n").decode("utf-8", "replace")
-    print("queue: remove %r (%d line(s)) from %s" % (heading, len(p["entry"]), p["queue_rel"]))
+    if a.no_item:
+        print("queue: none -- no queue entry (--no-item: %s); no Upgrade: trailer" % a.no_item.strip())
+    else:
+        heading = p["entry"][0].rstrip(b"\r\n").decode("utf-8", "replace")
+        print("queue: remove %r (%d line(s)) from %s" % (heading, len(p["entry"]), p["queue_rel"]))
     for path in p["partial_paths"]:
         print("partial: remove %s" % path)
     print("commit message:")
@@ -712,6 +899,233 @@ def undo(p):
             "; ".join(problems + ["left: " + ", ".join(left[:12])] if left else problems)))
 
 
+def landing_index(p, idx):
+    """The environment that commits a TEMPORARY index at `idx`: main's HEAD as step 1 read it (p["head"], which
+    commit_landing also makes the commit's parent and the ref update's expected value), each landed path exactly as
+    the tip's tree holds it (blob and MODE), the deleted and Partial paths removed, and the queue as the real index
+    staged it.
+
+    Not a pathspec commit: `git commit -- <paths>` re-reads those paths from the working tree, and under
+    core.filemode=false (Windows) the working tree has no exec bit, so a branch's 100755 file landed as 100644 and a
+    mode change was dropped; the byte check then refused the landing before its verify (measured 2026-10-30,
+    measured here: the real index held 100755 after the restore, the pathspec commit 100644). Not the real index
+    either: it holds a sibling session's staged work, which must stay out (file-inbox.py commits the same way). And
+    never committed by `git commit`, which takes HEAD as the parent when it starts: a main that moved after this
+    snapshot would get the snapshot's tree, undoing what moved it (commit_landing)."""
+    top = p["top"]
+    env = dict(os.environ, GIT_INDEX_FILE=str(idx))
+    git(top, "read-tree", p["head"], env=env)
+    want = set(p["landed"])
+    rows = []
+    for rec in zlist(git(top, "ls-tree", "-r", "-z", "--full-tree", p["tip"])):
+        meta, _tab, path = rec.partition("\t")
+        if path in want:
+            rows.append(rec)
+            want.discard(path)
+    if want:
+        raise Refused("the tip %s holds no entry for %s" % (p["tip"][:7], ", ".join(sorted(want))))
+    if p["queue_new"] is not None:
+        rows += zlist(git(top, "ls-files", "-s", "-z", "--", p["queue_rel"]))
+    if rows:
+        git(top, "update-index", "-z", "--index-info", data="".join(r + "\0" for r in rows).encode("utf-8"), env=env)
+    gone = p["deleted"] + p["partial_paths"]
+    if gone:
+        git(top, "update-index", "--force-remove", "--", *gone, env=env)
+    return env
+
+
+def run_hook(top, config, name, env, *args):
+    """Run the project's `name` hook as `git commit` runs it: through `git hook run` (core.hooksPath and hook config
+    honoured, the checkout's top as its directory, its stdout sent to stderr), with GIT_INDEX_FILE the temporary
+    index and GIT_EDITOR=":" (git commit's own hook environment), never with GIT_LITERAL_PATHSPECS ("hook" is one of
+    HOOK_COMMANDS). A missing hook is skipped. Refused, naming the hook, when it fails."""
+    r = git(top, *config, "hook", "run", "--ignore-missing", name, *(("--",) + args if args else ()), check=False,
+            env=dict(env, GIT_EDITOR=":"))
+    if r.returncode:
+        raise Refused("the %s hook refused the commit (rc %d): %s" % (name, r.returncode,
+                                                                     tail_text(r, what="git hook run " + name)))
+
+
+def commit_landing(p, env, msgfile):
+    """Commit the temporary index (`env`) as ONE commit whose parent is the HEAD step 1 read (p["head"]), and move
+    main to it only while main is still there. Returns the session stamp's git config (for the post-commit hook);
+    raises Refused, with main unmoved, for a refusing hook, a failed commit, or a main that moved.
+
+    Not `git commit`, which takes HEAD as the parent when IT starts, not when the index was read: a sibling session's
+    commit in between (several sessions can share one checkout, and an inbox filer may commit to main at any time) got a
+    landing commit on the sibling's HEAD holding the snapshot's tree, which undid the sibling's change, and the parent
+    check reported MISMATCH only once main held it (Codex 2026-11-02). Here the snapshot (landing_index), the parent
+    (`commit-tree -p`) and the ref update (`update-ref HEAD <new> <old>`, a compare-and-swap) all name p["head"], the
+    HEAD every check in step 1 was made against, so a main that moved refuses and nothing lands. Refused, not
+    retried: a retry would redo step 1's checks against the new main and run the hooks again on a new tree, which is
+    what running land-build again does.
+
+    `git commit`'s own steps, kept in its order: pre-commit on the temporary index; the tree written AFTER it (git
+    commit re-reads the index after that hook, so a hook's `git add` is committed); the session stamp through `git
+    interpret-trailers --in-place --no-divider` with its config (git commit's --trailer); prepare-commit-msg with
+    `<file> message` (git commit -F's source) and commit-msg, on the message file; the message read back and cleaned
+    as -F's default (`git stripspace`, whitespace); `commit-tree -S` when commit.gpgsign is true (commit-tree does not
+    read it, measured on git 2.53), and a refusal when git cannot read it as a boolean, as git commit refuses (a
+    failed lookup is not "unsigned": `ture` exits 128 with empty stdout); the reflog entry `commit: <subject>`; and
+    the ref update run with the temporary index too, so a reference-transaction hook sees the committed index, as it
+    did under git commit, never the real one with a sibling's staged work (Codex 2026-11-02)."""
+    top, base = p["top"], p["head"]
+    # Stamped at commit time, before the verify: a landing whose verify then fails keeps its owner.
+    config, trailer = session_stamp()
+    run_hook(top, config, "pre-commit", env)
+    tree = out(git(top, "write-tree", env=env))
+    if trailer:
+        git(top, *config, "interpret-trailers", "--in-place", "--no-divider", *trailer, msgfile.as_posix())
+    run_hook(top, config, "prepare-commit-msg", env, msgfile.as_posix(), "message")
+    run_hook(top, config, "commit-msg", env, msgfile.as_posix())
+    msg = git(top, "stripspace", data=msgfile.read_bytes()).stdout
+    gs = git(top, "config", "--type=bool", "--get", "commit.gpgsign", check=False)
+    if gs.returncode == 1 and not out(gs):   # unset
+        sign = []
+    elif gs.returncode == 0 and out(gs) in ("true", "false"):
+        sign = ["-S"] if out(gs) == "true" else []
+    else:
+        raise Refused("git could not read commit.gpgsign as true or false, so the landing commit was not made (git "
+                      "commit refuses it too): %s" % tail_text(gs, what="git config --type=bool commit.gpgsign"))
+    new = out(git(top, "commit-tree", tree, "-p", base, *sign, data=msg))
+    subject = msg.split(b"\n", 1)[0].decode("utf-8", "replace")
+    ref = git(top, "update-ref", "-m", "commit: " + subject, "HEAD", new, base, check=False, env=env)
+    if ref.returncode:
+        now = out(git(top, "rev-parse", "-q", "--verify", "HEAD", check=False))
+        if now != base:
+            raise Refused("main moved while this landing was being committed: HEAD is %s, not the %s every check and "
+                          "the commit were made on, so the commit was not put on main (on the new HEAD it would undo "
+                          "what moved it); run land-build again, which checks the branch against the new main"
+                          % (now[:7] or "?", base[:7]))
+        raise Refused("git could not move main to the landing commit: %s" % tail_text(ref, what="git update-ref HEAD"))
+    return config
+
+
+def entry_change(top, tip, path):
+    """How `path` differs between the tip and HEAD, read from `git diff --raw`: both modes when they differ, else
+    both blobs ("" when git reports no difference)."""
+    f = zlist(git(top, "diff", "--raw", "-z", "--no-renames", "--abbrev=40", tip, "HEAD", "--", path, check=False))
+    m = re.match(r"^:(\d+) (\d+) ([0-9a-f]+) ([0-9a-f]+) ", f[0]) if f else None
+    if not m:
+        return ""
+    if m.group(1) != m.group(2):
+        return " (mode %s in the commit, %s in the branch)" % (m.group(2), m.group(1))
+    return " (blob %s in the commit, %s in the branch)" % (m.group(4)[:7], m.group(3)[:7])
+
+
+def inside(path, root):
+    """Whether `path` is `root` or lies under it."""
+    a, b = norm(Path(path).resolve()), norm(Path(root).resolve())
+    return a == b or a.startswith(b.rstrip(os.sep) + os.sep)
+
+
+# Who holds a worktree git cannot delete: measured, the calling agent's own shell after a `cd` into it (measured
+# 2026-10-27), and a background pytest or a Windows indexer that let go minutes later (2026-10-28).
+HOLDERS = ("likely holder: a process whose current directory is inside it, often the calling agent's own shell "
+           "after a `cd` into the worktree (cd to the main checkout), a background test run or other job started "
+           "there, an editor, or a Windows indexer or antivirus scan (they let go within minutes)")
+
+
+def remove_worktree(p):
+    """Remove the build worktree (unlocked first when locked). (leftover line or "", still registered, folder left)."""
+    top, wt = p["top"], p["wt"]
+    failed = ""
+    if p["rec"]["locked"]:
+        r = git(top, "worktree", "unlock", wt, check=False)
+        if r.returncode:
+            failed = "could not unlock %s: %s" % (wt, tail_text(r))
+    if not failed:
+        rm = git(top, "worktree", "remove", wt, check=False)
+        if not rm.returncode:
+            return "", False, False
+        failed = "could not remove %s: %s" % (wt, tail_text(rm))
+    now = next((r for r in worktrees(top) if same_path(r["path"], wt)), None)
+    registered = now is not None
+    unreadable = ""
+    try:
+        left = len(os.listdir(wt))
+    except FileNotFoundError:
+        left = None
+    except OSError as e:
+        # A folder that cannot be read is not a folder that is gone (Codex 2026-11-02): read as gone, a PermissionError
+        # printed no LEFTOVER and, inside the main checkout, let the verify run over what is left.
+        left, unreadable = -1, "%s: %s" % (type(e).__name__, e.strerror or e)
+    if not registered and left is None:
+        return "", False, False   # git reported a failure, but nothing is left of it
+    if registered:
+        # Unlocked first only while git lists it as locked NOW: after an unlock that worked, a second `unlock` fails
+        # and `&&` stops the removal (Codex 2026-11-02).
+        cmd = 'git -C "%s" worktree %sremove "%s"' % (top, "unlock \"%s\" && git -C \"%s\" worktree " % (wt, top)
+                                                       if now["locked"] else "", wt)
+        state = "git still lists it as a worktree"
+    elif unreadable:
+        cmd = 'rm -rf "%s"' % wt
+        state = "git unregistered it; what is left in it is unknown"
+    elif left == 0:
+        cmd = 'rmdir "%s"' % wt
+        state = "git unregistered it and deleted its files; the empty folder is left"
+    else:
+        cmd = 'rm -rf "%s"' % wt
+        state = ("git unregistered it; %d entr%s it could not delete are left (the landing holds every tracked byte "
+                 "and the worktree had no untracked file)" % (left, "y" if left == 1 else "ies"))
+    if unreadable:
+        state += "; its folder could not be read (%s)" % unreadable
+    return ("the worktree %s is left (%s); %s; once the holder is gone: %s -- %s" % (wt, state, HOLDERS, cmd, failed),
+            registered, True)
+
+
+def remove_branch(p, wt_registered):
+    """Delete the build branch, only while it still points at the landed tip; the leftover line, or ""."""
+    top, branch, tip = p["top"], p["branch"], p["tip"]
+    if wt_registered:
+        return ("the branch %s is kept: the worktree above still has it checked out; once that is removed: git -C "
+                "\"%s\" branch -D %s" % (branch, top, branch))
+    now = out(git(top, "rev-parse", "--verify", "-q", "refs/heads/" + branch, check=False))
+    if now != tip:
+        return ("the branch %s moved to %s after %s was landed, so it is kept (it holds commits this landing did not "
+                "bring): inspect them with git -C \"%s\" log %s..%s, then git -C \"%s\" branch -D %s"
+                % (branch, now[:7] or "?", tip[:7], top, tip[:7], branch, top, branch))
+    br = git(top, "branch", "-D", p["branch"], check=False)
+    if br.returncode:
+        return ("the branch %s is kept (delete it by hand: git -C \"%s\" branch -D %s) -- could not delete %s: %s"
+                % (branch, top, branch, branch, tail_text(br)))
+    return ""
+
+
+def remove_build(p, a):
+    """Remove the worktree and the branch; print what could not be removed as LEFTOVER lines and return the line to
+    repeat after the verify ("" when nothing is left). Raises Kept only for a worktree folder left INSIDE the main
+    checkout, which the verify would read as a second copy of the tree; anything else left (a folder outside it, a
+    branch) changes nothing the verify reads, so the verify still runs (three landings,
+    2026-10-27 to 2026-11-02, each skipped the gating verify over an empty folder outside the checkout)."""
+    top, wt = p["top"], p["wt"]
+    wt_left, registered, folder = remove_worktree(p)
+    br_left = remove_branch(p, registered)
+    leftovers = [x for x in (wt_left, br_left) if x]
+    if not leftovers:
+        print("removed: worktree %s, branch %s" % (wt, p["branch"]))
+        return ""
+    if not wt_left:
+        print("removed: worktree %s" % wt)
+    if folder and inside(wt, top):
+        raise Kept("the worktree %s is INSIDE the main checkout %s, where the verify would read what is left of it as "
+                   "a second copy of the tree, so the verify was NOT run: %s; then run the verify yourself%s -- the "
+                   "landing is committed and byte-checked" % (wt, top, "; ".join(leftovers),
+                                                               ": " + a.verify if a.verify else ""))
+    for ln in leftovers:
+        print("LEFTOVER: " + ln)
+    why = ("the worktree's folder is outside the main checkout %s, so the verify never reads it" % top if folder else
+           "a kept branch changes no file the verify reads")
+    print("the landing is committed and byte-checked, and the verify still runs: %s" % why)
+    return "LEFTOVER (repeated): %s -- clean it up as above; it does not change the exit code" % "; ".join(
+        ln.split(" -- ")[0] for ln in leftovers)
+
+
+def repeat_leftover(p):
+    if p.get("leftover_note"):
+        print(p["leftover_note"])
+
+
 def land(p, a):
     top, tip = p["top"], p["tip"]
     tmp = Path(tempfile.mkdtemp(prefix="land-build-"))
@@ -725,13 +1139,16 @@ def land(p, a):
                 git(top, "rm", "-q", "--", *p["deleted"])
             if p["partial_paths"]:
                 git(top, "rm", "-q", "--", *p["partial_paths"])
-            (top / p["queue_rel"]).write_bytes(p["queue_new"])
-            # Stamped at commit time, before the verify: a landing whose verify then fails keeps its owner.
-            config, trailer = session_stamp()
-            git(top, *config, "commit", "-q", "-F", msgfile, *trailer, "--", *p["paths"])
+            if p["queue_new"] is not None:
+                (top / p["queue_rel"]).write_bytes(p["queue_new"])
+                git(top, "add", "--", p["queue_rel"])
+            env = landing_index(p, tmp / "index")
+            config = commit_landing(p, env, msgfile)
         except Refused as e:
             undo(p)
-            raise Refused("the landing commit failed, and the main checkout was restored: %s" % e)
+            raise Refused("the landing commit failed and nothing landed; the main checkout was restored: %s" % e)
+        # Main has moved, so past the undo: git commit ignores the post-commit hook's exit code, and so does this.
+        git(top, *config, "hook", "run", "--ignore-missing", "post-commit", check=False, env=dict(env, GIT_EDITOR=":"))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -746,9 +1163,11 @@ def land(p, a):
     if held != set(p["paths"]):
         problems.append("the commit holds %s, not the landed paths %s" % (
             sorted(held - set(p["paths"])) or "fewer", sorted(set(p["paths"]) - held) or "more"))
+    # Blob AND mode: `git diff` compares both, and entry_change names which one differs.
     for path in p["landed"]:
         if git(top, "diff", "--quiet", tip, "HEAD", "--", path, check=False).returncode != 0:
-            problems.append("%s in the commit differs from %s at %s" % (path, p["branch"], tip[:7]))
+            problems.append("%s in the commit differs from %s at %s%s" % (path, p["branch"], tip[:7],
+                                                                          entry_change(top, tip, path)))
     for path in p["deleted"] + p["partial_paths"]:
         if git(top, "cat-file", "-e", "HEAD:" + path, check=False).returncode == 0:
             problems.append("%s is still in the commit" % path)
@@ -756,42 +1175,33 @@ def land(p, a):
     # is compared in the form git STORES, not as working-tree bytes: under core.autocrlf=true and no eol attribute
     # the working file is CRLF and the blob LF, and a byte compare refused every correct landing (exit 71, no
     # verify; measured in two projects, 2026-10-13 and 2026-10-15). Still exact: a blob git would not store from these bytes fails.
-    qblob = out(git(top, "rev-parse", "-q", "--verify", "HEAD:" + p["queue_rel"], check=False))
-    if not qblob or qblob not in blob_ids(top, p["queue_rel"], p["queue_new"]):
-        problems.append("the committed %s is not the edited queue byte for byte (as git stores it)" % p["queue_rel"])
+    if p["queue_new"] is not None:
+        qblob = out(git(top, "rev-parse", "-q", "--verify", "HEAD:" + p["queue_rel"], check=False))
+        if not qblob or qblob not in blob_ids(top, p["queue_rel"], p["queue_new"]):
+            problems.append("the committed %s is not the edited queue byte for byte (as git stores it)" % p["queue_rel"])
     if problems:
         raise Mismatch("commit %s does not match %s (%s): %s -- the worktree %s and branch %s are kept; inspect "
                        "with git diff %s HEAD" % (commit[:7], p["branch"], tip[:7], "; ".join(problems), p["wt"],
                                                   p["branch"], tip[:7]))
     p["byte_checked"] = True  # the commit holds exactly the tip the review was handed
     counts = {k: sum(1 for kk, _ in p["changes"] if kk[:1] == k) for k in "AMD"}
-    print("LANDED %s as %s on %s: %d path(s), %d added, %d modified, %d deleted; queue entry %r removed%s" % (
+    queue_note = ("no queue entry (--no-item: %s)" % a.no_item.strip() if a.no_item else
+                  "queue entry %r removed%s" % (a.item, "; partial files removed: %s" % ", ".join(p["partial_paths"])
+                                                if p["partial_paths"] else ""))
+    print("LANDED %s as %s on %s: %d path(s), %d added, %d modified, %d deleted; %s" % (
         p["branch"], commit[:7], p["main_branch"], len(p["changes"]), counts["A"], counts["M"], counts["D"],
-        a.item, "; partial files removed: %s" % ", ".join(p["partial_paths"]) if p["partial_paths"] else ""))
-    print("byte check: %d landed path(s) equal %s (%s) in the COMMITTED tree; %d deleted path(s) absent from HEAD"
-          % (len(p["landed"]), p["branch"], tip[:7], len(p["deleted"]) + len(p["partial_paths"])))
+        queue_note))
+    print("byte check: %d landed path(s) equal %s (%s) in the COMMITTED tree, blob and mode; %d deleted path(s) "
+          "absent from HEAD" % (len(p["landed"]), p["branch"], tip[:7], len(p["deleted"]) + len(p["partial_paths"])))
 
     # Removal only once the commit provably holds the branch's bytes, and only the tip that was landed.
-    wt = p["wt"]
-    if p["rec"]["locked"]:
-        r = git(top, "worktree", "unlock", wt, check=False)
-        if r.returncode:
-            raise Kept("could not unlock %s: %s" % (wt, tail_text(r)))
-    rm = git(top, "worktree", "remove", wt, check=False)
-    if rm.returncode:
-        raise Kept("could not remove %s: %s" % (wt, tail_text(rm)))
-    now = out(git(top, "rev-parse", "--verify", "-q", "refs/heads/" + p["branch"], check=False))
-    if now != tip:
-        raise Kept("%s moved to %s after %s was landed: branch kept" % (p["branch"], now[:7] or "?", tip[:7]))
-    br = git(top, "branch", "-D", p["branch"], check=False)
-    if br.returncode:
-        raise Kept("could not delete %s: %s" % (p["branch"], tail_text(br)))
-    print("removed: worktree %s, branch %s" % (wt, p["branch"]))
+    p["leftover_note"] = remove_build(p, a)
 
     if not a.verify:
         print("NO VERIFY RAN (--no-verify): the landing is committed (%s) but unverified -- run the project's "
               "verify loop yourself" % commit[:7])
         repeat_parent(p)
+        repeat_leftover(p)
         return 0
     print("VERIFY: %s" % a.verify)
     sys.stdout.flush()
@@ -804,6 +1214,7 @@ def land(p, a):
     else:
         print("VERIFY PASSED rc 0")
     repeat_parent(p)
+    repeat_leftover(p)
     return verify_rc
 
 
@@ -813,9 +1224,15 @@ def main(argv=None):
         return review_child(argv[1])
     ap = argparse.ArgumentParser(description="Land a build helper's branch on the main checkout in one command.")
     ap.add_argument("worktree", help="the build helper's linked worktree")
-    ap.add_argument("--item", required=True, help="the queue entry's exact title (after '## YYYY-MM-DD · ')")
+    it = ap.add_mutually_exclusive_group(required=True)
+    it.add_argument("--item", help="the queue entry: its exact title (after '## YYYY-MM-DD · '), or that whole "
+                                   "heading as written, 'YYYY-MM-DD · <title>'")
+    it.add_argument("--no-item", metavar="WHY",
+                    help="land a branch with no queue entry (a fix-forward of a landed build, a design build): no "
+                         "queue edit and no Upgrade: trailer, every other check kept; WHY is one line, printed")
     ap.add_argument("--subject", required=True, help="the commit subject")
-    ap.add_argument("--upgrade", required=True, help="the Upgrade: trailer's one plain sentence")
+    ap.add_argument("--upgrade", help="the Upgrade: trailer's one plain sentence (required with --item; refused with "
+                                      "--no-item, which writes no Upgrade: trailer)")
     ap.add_argument("--body-file", help="a file holding the commit body (UTF-8)")
     ap.add_argument("--trailer", action="append", default=[], help="an extra 'Key: value' trailer line, repeatable")
     v = ap.add_mutually_exclusive_group(required=True)
@@ -835,7 +1252,13 @@ def main(argv=None):
     a = ap.parse_args(argv)
     if a.codex_wait_min < 0:
         ap.error("--codex-wait-min must be 0 or more")
-    if not a.upgrade.strip() or "\n" in a.upgrade.strip():
+    if a.no_item is not None:
+        if not a.no_item.strip() or "\n" in a.no_item.strip():
+            ap.error("--no-item must be one non-empty line: why this landing has no queue entry")
+        if a.upgrade is not None:
+            ap.error("--upgrade with --no-item: a landing with no queue entry writes no Upgrade: trailer (the ledger "
+                     "reads that trailer as a delivered queued upgrade)")
+    elif a.upgrade is None or not a.upgrade.strip() or "\n" in a.upgrade.strip():
         ap.error("--upgrade must be one non-empty line: the sentence the Upgrade: trailer records")
     if not a.subject.strip() or "\n" in a.subject.strip():
         ap.error("--subject must be one non-empty line")
@@ -868,7 +1291,7 @@ def main(argv=None):
         print("MISMATCH: %s" % e)
         rc = EXIT_MISMATCH
     except Kept as e:
-        print("KEPT: %s -- the landing is committed and byte-checked; remove it by hand, then run the verify" % e)
+        print("KEPT: %s" % e)
         rc = EXIT_KEPT
     except UndoFailed as e:
         print("UNDO FAILED: %s" % e)

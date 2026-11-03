@@ -194,7 +194,8 @@ A build started at the wrap is one the owner waits for, however it runs.
    `run_in_background: true`, an agent type that has a shell and **no isolation flag**, told to work
    only in that worktree's absolute path, **never to use `cd ..` or a `../` path, and to put scratch
    files in a `mktemp -d` dir** (2 of 3 helpers told only "write nothing outside it" still wrote a
-   scratch file one level up, into a parent no `git status` sees). It returns the diff plus RED and
+   scratch file one level up, into a parent no `git status` sees), and **never to edit `UPGRADE-QUEUE.md`:
+   the landing removes the entry**. It returns the diff plus RED and
    GREEN evidence. (Not the
    Agent tool's `isolation` option: it creates `<project root>/.claude/worktrees/agent-<id>/`, inside
    the tree, and, unless the `worktree.baseRef` setting is `head`, cuts it from origin's default
@@ -207,7 +208,10 @@ A build started at the wrap is one the owner waits for, however it runs.
    a wrap would run for those files (for a skill, `update-context`'s Step 7 probe):
    `python ~/.claude/skills/reflect-upgrades/scripts/land-build.py <worktree> --item "<queue title>" --subject "<subject>" --upgrade "<one plain sentence>" --verify "<the project's quick verify loop>"`
    (for example `--verify "bash run-tests.sh --quick"`, whatever the project's own quick test command
-   is). **Pass the project's quick verify loop, not
+   is). `--item` takes the title after `## YYYY-MM-DD · ` or that whole heading,
+   `YYYY-MM-DD · <title>`; a landing with no queue entry (a fix-forward of a landed build, a design
+   build) passes `--no-item "<why>"` instead: no queue edit and no `Upgrade:` trailer, every other
+   check kept. **Pass the project's quick verify loop, not
    only the build's own test:** cross-cutting lints scan every test file, so a new test can turn a
    DIFFERENT suite red while its own stays green. The script brings the branch's paths over and removes
    the queue entry (and a Partial's `.patch` and `.base`) in one commit with the trailer and a pathspec,
@@ -220,7 +224,9 @@ A build started at the wrap is one the owner waits for, however it runs.
    then `git worktree remove <path>` and `git branch -d build/<topic>` (as `-D`, since main gets the
    branch's bytes, not its commits; the byte check is what licenses it). A harness
    worktree left under `.claude/worktrees/` is a second copy of every file the main checkout's tests
-   scan. It exits with the verify's code; `--dry-run` prints the plan and changes nothing.
+   scan. A worktree it cannot remove (a shell or a test run still inside it) is a `LEFTOVER:` line with
+   its cleanup command, and the verify still runs, unless that folder is inside the main checkout (exit
+   72). It exits with the verify's code; `--dry-run` prints the plan and changes nothing.
    **If your setup has an external review script** (`~/.claude/codex-ask.py`; its contract is in
    land-build.py's docstring), the build also gets a review: before the commit land-build starts it on
    the branch's diff in the background (waiting out another call that holds the script's lock), and after

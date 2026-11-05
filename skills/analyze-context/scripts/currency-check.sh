@@ -23,8 +23,9 @@ hostname
 # linked worktree shares its config), and every later commit carries it: one project committed a
 # whole session wrap as tmp-proof <tmp@proof.invalid> while this gate reported clean. The helper
 # prints nothing unless the identity looks throwaway. Its line is a NOTE, never a FINDING (it must
-# not stop the gate, only reach the briefing), so emit_carry_line names the section for the short
-# paths whenever it printed. A git project with the helper missing is told so, never skipped.
+# not stop the gate, only reach the briefing), so emit_carry_line and emit_arrival_surface name the
+# section for the short paths whenever it printed. A git project with the helper missing is told so,
+# never skipped.
 IDN="$(dirname "${BASH_SOURCE[0]}")/identity-note.sh"
 IDENTITY_OUT=""
 if [ -f "$IDN" ]; then
@@ -113,12 +114,10 @@ emit_docket_bound() {   # $1 = the pickup doc
   done < <(LC_ALL=C.UTF-8 grep -oiE '[A-Za-z0-9_./-]*(roadmap|docket)[A-Za-z0-9_.-]*[.]md' "$doc" 2>/dev/null)
 }
 
-# The docket half of the short-read contract. The SAME-DAY and ARRIVAL paths both print it from
-# this one copy, so the bound cannot drift between them (two copies kept in step by a comment is
-# the drift this script could not detect in itself -- the same reason emit_resume_class is one).
-# The state sections BOTH short paths carry, from this one copy. The same-day path used to have no
-# carry line at all, so the RULED OUT section printed and then fell out of the one briefing a
-# next-morning resume on the same machine gets -- the exact case the rulings exist for.
+# The state sections the SAME-DAY path carries. It used to have no carry line at all, so the RULED
+# OUT section printed and then fell out of the one briefing a next-morning resume on the same
+# machine gets -- the exact case the rulings exist for. The ARRIVAL path does not print this: the
+# owner picked a short form that repeats none of these (emit_arrival_surface says what surfaces).
 emit_carry_line() {
   echo "   Carry the UPGRADES, CI, RULED OUT, DEPLOY PARITY and SITE TOOLS sections this report printed, verbatim (whichever"
   echo "   were printed; on the no-git path they come after this block)."
@@ -137,6 +136,9 @@ emit_carry_line() {
   fi
 }
 
+# The docket half of the SAME-DAY read contract. The ARRIVAL path used to print it too and now
+# reads no docket: it read about 10K tokens only to repeat them, and emit_open_facts gives the
+# short form the counts it needs.
 emit_docket_contract() {   # $1 = the pickup doc
   local doc="$1"
   echo "   PLUS the docket (open items by ID, one line each, preserving each row's status marker) from"
@@ -150,6 +152,115 @@ emit_docket_contract() {   # $1 = the pickup doc
   echo "   and REPORT the unread remainder as a number. This line is the copy the reader"
   echo "   actually sees on the load-bearing downgrade path, so the bound has to live here too."
   emit_docket_bound "$doc"
+}
+
+# ---------- what the ARRIVAL path shows the owner, and what stops at this output ----------
+# The owner picked a short arrival (2026-11-05): the old one printed 9,554 characters, mostly lines
+# of no use to the reader. The sections still print, because the session needs them. Selection is by
+# structure, not by a character ceiling: this says which lines surface, and nothing else is repeated.
+emit_arrival_surface() {
+  echo "   The UPGRADES, RULED OUT, CI, DEPLOY PARITY, SITE TOOLS and WORKTREES sections reach you in this output and stop here:"
+  echo "   they bind you as usual and are not repeated at the owner. Only what needs the owner surfaces, in plain words, with no"
+  echo "   machine id past the second line's first slot, commit sha or row id:"
+  echo "     Do this line: a restart bootstrap asked for; a merge that stopped; the IDENTITY note."
+  echo "     Open line: a red or unreadable CI; a REMOVED ruling; production behind its repo, from DEPLOY PARITY; the OPEN counts."
+  # Only when the IDENTITY section printed: the short form has no other place it would surface.
+  IDENTITY_CLAIM=${IDENTITY_OUT:-}
+  case "$IDENTITY_CLAIM" in *"IDENTITY: could not check"*)
+    IDENTITY_CLAIM=""
+    echo "   The identity check did not run (its helper is missing): say that on the Open line, and restore the check before changing any config."
+  esac
+  if [ -n "${IDENTITY_CLAIM:-}" ]; then
+    echo "   The IDENTITY section printed under MACHINE: say on the Do this line that commits would carry the wrong name,"
+    echo "   and fix it in the config file it names before the next commit."
+  fi
+  # Only when the WORKTREES section named a worktree (or could not check).
+  if [ "${WORKTREE_LINES_N:-0}" != 0 ]; then
+    echo "   The WORKTREES lines count on the Open line; to clear them, park a stopped build helper's (reflect-upgrades'"
+    echo "   park-worktree.py), drop the rest, never commit one's files."
+  fi
+}
+
+# The sections' own routing lines say to carry them into the briefing (ci-verdict-line.sh,
+# deploy-parity-line.sh, upgrade-status-line.sh, rulings.py). That is right on the full and slim
+# paths and wrong on the arrival path, so --arrival drops those lines: a section saying "carry me"
+# beside a block saying "do not" is two contradictory instructions, and the reader has to pick. The
+# class is not known yet when the report prints, so a FULL class under --arrival loses them too; its
+# placement comes from the skill's Step 1 bullets, which those lines only repeat. grep -a, because a
+# section swallowed as "Binary file matches" is the one failure this filter must not have.
+_arrival_unrouted() {
+  if [ -n "$ARRIVAL" ]; then
+    LC_ALL=C grep -avE '^\((a state line, not a FINDING|state lines, not FINDINGs) -- carry '
+  else
+    cat
+  fi
+}
+
+# The counts behind the short form's Open line, printed on the ARRIVAL path only: it no longer reads
+# the docket, so the numbers have to come from here. A part with nothing to say is not printed, and
+# a count that could not be taken says so: a dropped helper must never read as a zero (G#444).
+emit_open_facts() {
+  local dc py="" c out rc n upn re src top wk em bt un wparts="" lines=() bad note rest re2
+  dc="$(dirname "${BASH_SOURCE[0]}")/docket_corpus.py"
+  # `python` first: on Windows a bare `python3` can resolve to the Microsoft Store alias stub.
+  for c in python python3 py; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+      py="$c"; break
+    fi
+  done
+  if [ ! -f "$dc" ]; then
+    lines+=("OPEN docket: could not check -- docket_corpus.py is missing beside currency-check.sh")
+  elif [ -z "$py" ]; then
+    lines+=("OPEN docket: could not check -- no Python 3.9+ on PATH")
+  else
+    out=$("$py" "$dc" count 2>/dev/null); rc=$?
+    out=${out//$'\r'/}
+    if [ "$rc" -ne 0 ]; then
+      lines+=("OPEN docket: could not check -- docket_corpus.py exited $rc (a crash, not a verdict)")
+    elif [ -n "$out" ]; then
+      lines+=("$out")
+    fi
+  fi
+  # The queue count is the UPGRADES section's own, never a second reading of the file's grammar. The
+  # git path already holds that section in REPORT; the no-git path prints it after this block.
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=$(pwd)
+  if [ -f "$top/UPGRADE-QUEUE.md" ] || [ -f "$top/UPGRADE-NEXT.md" ]; then
+    src=${REPORT:-$(emit_upgrade_status)}
+    n=$(printf '%s\n' "$src" | LC_ALL=C sed -n 's/^upgrade queue: \([0-9][0-9]*\) item.*/\1/p' | head -1)
+    # The up-next count ends the line but for its FULL and not-counted notes, so a title that merely
+    # quotes ', up next 3' is not read as one.
+    upn=""; re=", up next ([0-9]+)( -- FULL \(cap | \([0-9]+ '## ' heading|\$)"
+    [[ "$(printf '%s\n' "$src" | LC_ALL=C grep -m1 '^upgrade queue: ')" =~ $re ]] && upn=${BASH_REMATCH[1]}
+    bad=0; note=""; rest=$(printf '%s\n' "$src" | LC_ALL=C grep -m1 '^upgrade queue: ')
+    re2="\(([0-9]+) '## ' heading\(s\) [^)]*not counted\)"
+    while [[ "$rest" =~ $re2 ]]; do
+      bad=$((bad + BASH_REMATCH[1])); rest=${rest#*"${BASH_REMATCH[0]}"}
+    done
+    [ "$bad" -gt 0 ] && note=", $bad heading(s) not counted"
+    if [ -z "$n" ]; then
+      LC_ALL=C grep -qs '^## ' "$top/UPGRADE-QUEUE.md" "$top/UPGRADE-NEXT.md" \
+        && lines+=("OPEN queue: could not check -- UPGRADE-QUEUE.md has headings and the UPGRADES section printed no count")
+    elif [ "$n" -gt 0 ] || [ -n "$upn" ] || [ "$bad" -gt 0 ]; then
+      lines+=("OPEN queue: $n item(s)${upn:+, up next $upn}${note}")
+    fi
+  fi
+  # The WORKTREES section's lines, counted by kind. Empty on the no-git path.
+  wk=$(printf '%s\n' "${REPORT:-}" | grep -c '^NOTE worktree-work:')
+  em=$(printf '%s\n' "${REPORT:-}" | grep -cE '^NOTE worktree-(emptied|prunable):')
+  bt=$(printf '%s\n' "${REPORT:-}" | grep -c '^NOTE worktree-battery:')
+  un=$(printf '%s\n' "${REPORT:-}" | grep -cE '^(NOTE worktree-unknown:|WORKTREES: could not check)')
+  [ "$em" -gt 0 ] && wparts="$wparts, $em emptied or prunable"
+  [ "$wk" -gt 0 ] && wparts="$wparts, $wk holding work"
+  [ "$bt" -gt 0 ] && wparts="$wparts, $bt holding a mutation battery"
+  [ "$un" -gt 0 ] && wparts="$wparts, $un could not check"
+  [ -n "$wparts" ] && lines+=("OPEN worktrees: ${wparts#, }")
+  echo
+  echo "== OPEN (counts for the arrival briefing's Open line; a part with nothing to say is not printed) =="
+  if [ "${#lines[@]}" -gt 0 ]; then
+    printf '%s\n' "${lines[@]}"
+  else
+    echo "OPEN: nothing counted"
+  fi
 }
 
 # ---------- arrival-path read bound for the PRIMARY doc, MEASURED ----------
@@ -279,16 +390,17 @@ emit_resume_class() {
     echo "   read $RC_DOC whole if it is at or under ~40KB; above that read ONLY its current-state portion"
     echo "   (up to its first History/Archive/Closed heading) and REPORT the unread remainder as a number."
     emit_doc_bound "$RC_DOC"
-    echo "   Deliver last completed / next intended / blocker"
+    echo "   Do NOT read the docket: the OPEN section below holds the counts the Open line needs."
+    echo "   Deliver ONLY the short form in analyze-context Step 1: where the handoff came from, Do this, Last done, Next,"
+    echo "   Blocked, Open and the \"brief me\" line. Drop a line with nothing to say."
     if [ -n "${ARRIVAL_SINCE:-}" ]; then
       RC_SINCE_N=$(git rev-list --count "$ARRIVAL_SINCE"..HEAD 2>/dev/null)
       echo "   ${RC_SINCE_N} commit(s) landed after $RC_DOC was last written; the handoff does not describe them,"
-      echo "   so name them in the briefing (newest first, first 10 shown):"
+      echo "   so the Last done line covers them in plain words, with no shas (newest first, first 10 shown):"
       git log -n 10 --format='     %h %s' "$ARRIVAL_SINCE"..HEAD 2>/dev/null
       [ "${RC_SINCE_N:-0}" -gt 10 ] && echo "     ... and $((RC_SINCE_N - 10)) more (git log --oneline ${ARRIVAL_SINCE:0:7}..HEAD)"
     fi
-    emit_docket_contract "$RC_DOC"
-    emit_carry_line
+    emit_arrival_surface
     echo "   NO memory topic files, specs, archive or other deep reads; NO reading helpers or subagents;"
     echo "   NO claim-check pass; NO test or verify runs."
     # The one Step 4.5 row the arrival path keeps. A question about THIS machine's own past action
@@ -302,12 +414,13 @@ emit_resume_class() {
     echo "   only what they do not answer."
     echo "   Then offer the full briefing on request (\"brief me\")."
     # The one background agent an arrival starts. The ban above is on READING helpers: a session
-    # starts its one build right after its briefing whenever the upgrade queue holds an item,
-    # arrivals included, because a wrap never builds. The first arrival after that change read a
-    # blanket "NO helper agents" here as covering the build too, and built nothing with five
+    # starts its one build right after its briefing whenever the upgrade queue holds something worth
+    # building, arrivals included, because a wrap never builds. The first arrival after that change
+    # read a blanket "NO helper agents" here as covering the build too, and built nothing with five
     # items queued.
-    echo "   ONE background agent still starts: when this report's UPGRADES section shows an upgrade queue,"
-    echo "   start its oldest item right after the briefing (reflect-upgrades Step 5) and say so in one line."
+    echo "   ONE background agent still starts: a build, right after the briefing, when the upgrade queue holds"
+    echo "   something worth building (reflect-upgrades Step 5); the Next line says so in a few words."
+    emit_open_facts
   elif [ -z "$RC_REASONS" ]; then
     echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); ${RC_PROV}; machine stamp matches; single-doc pattern.${RC_BASIS}"
     echo "=> UNLESS the user asked for a full briefing: take the SLIM PATH (analyze-handoff contract):"
@@ -330,7 +443,7 @@ emit_upgrade_status() {
   local usl
   usl="$(dirname "${BASH_SOURCE[0]}")/upgrade-status-line.sh"
   if [ -f "$usl" ]; then
-    bash "$usl"
+    bash "$usl" | _arrival_unrouted
   else
     echo
     echo "== UPGRADES =="
@@ -347,7 +460,7 @@ emit_rulings() {
   local rl
   rl="$(dirname "${BASH_SOURCE[0]}")/rulings-line.sh"
   if [ -f "$rl" ]; then
-    bash "$rl"
+    bash "$rl" | _arrival_unrouted
   else
     echo
     echo "== RULED OUT (owner rulings - do not re-propose) =="
@@ -451,7 +564,7 @@ done
 # nothing (measured once: a restart stranded a helper's 9-file diff, saved later by hand). The shared
 # helper names every linked worktree holding work HEAD does not carry, an emptied or prunable one, and a
 # stranded mutation battery. Its lines are NOTEs, never FINDINGs; emit_carry_line carries them on the
-# short paths. A missing helper is told so, never skipped.
+# slim path and emit_open_facts counts them on the arrival path. A missing helper is told so, never skipped.
 WTN="$(dirname "${BASH_SOURCE[0]}")/worktrees-note.sh"
 if [ -f "$WTN" ]; then
   bash "$WTN"
@@ -660,7 +773,7 @@ emit_upgrade_status
 emit_rulings
 }
 
-REPORT=$(emit_report)
+REPORT=$(emit_report | _arrival_unrouted)
 printf '%s\n' "$REPORT"
 FINDINGS_N=$(printf '%s\n' "$REPORT" | grep -c '^FINDING')
 WORKTREE_LINES_N=$(printf '%s\n' "$REPORT" | grep -cE '^(NOTE worktree-|WORKTREES: could not check)')

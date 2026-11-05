@@ -39,7 +39,8 @@ production line automatically. Keys:
 PER-FILE CLASSES
     MATCH       served bytes == the blob at --ref
     NORMALISED  equal only after the configured normalisers (warned; fatal under --strict)
-    BEHIND      production serves an OLDER committed version (the report names it)
+    BEHIND      production serves an OLDER committed version (the report names it, beside
+                the response's Cache-Status and Age, or "(not sent)" for a header it lacked)
     MISSING     404/410 on production for a file --ref publishes
     DIFFERS     matches no committed version in reach: an uncommitted tree was
                 deployed, or the host rewrites the file
@@ -55,6 +56,17 @@ controls prove.
     full sweep    if every fetched file matches no committed version at all, the tool is
                   measuring nothing rather than finding a total outage: INSTRUMENT
                   SUSPECT, exit 2.
+    re-read       the two above read each file once, so neither can see a reading that
+                  stopped being true before it was reported. When a
+                  run has a BEHIND row (else a MISSING row), the earliest-read such file is
+                  fetched a second time, from inside the affected set. A re-fetch that
+                  matches --ref, or reads anything but what the sweep read, means production
+                  changed during the check or an edge served stale bytes: could not check,
+                  exit 2, no deploy owed. A re-fetch that fails is exit 2 too. This names no
+                  cause, and one agreeing re-fetch only fails to refute the verdict: it does
+                  not prove the reading stable, so a deploy that reaches this edge a second
+                  later still reads as owed. The headers on the rows are what a repeat of
+                  the reading has to be judged by.
 
 WHAT IT CANNOT SEE
     Files production serves that the tree does not track (zombies) are UNKNOWN, not
@@ -64,8 +76,9 @@ WHAT IT CANNOT SEE
 EXIT STATUS
     0  every checked file is at --ref (normalised matches warned, not fatal)
     1  deploy owed / drift: any BEHIND, MISSING or DIFFERS (or NORMALISED under --strict)
-    2  could not check: usage or config error, a failed fetch, INSTRUMENT SUSPECT, an
-       exhausted --budget, or a tree that publishes nothing. Never 0 on a failed fetch.
+    2  could not check: usage or config error, a failed fetch, INSTRUMENT SUSPECT, a re-read
+       that contradicts the sweep or fails, an exhausted --budget, or a tree that publishes
+       nothing. Never 0 on a failed fetch.
 
 USAGE (run from anywhere inside the project repo)
     python deploy-parity.py                    # full sweep: production vs HEAD
@@ -357,33 +370,52 @@ def not_examined_line(cfg: dict, skipped: dict) -> str:
 # --------------------------------------------------------------------------- #
 # Fetching
 # --------------------------------------------------------------------------- #
-def fetch(url: str, cfg: dict) -> tuple[Optional[int], bytes, str]:
-    """(final status after redirects or None on network failure, body, error text)."""
+def edge_evidence(headers) -> str:
+    """A response's own account of which cache answered, for a verdict to carry. Cache-Status
+    is a list field that a chain of caches may send as several header lines, so every line is
+    kept. A header the response did not send says so: never 'None', never an invented 0. A
+    folded header keeps its line break in the value, so each value is unfolded: --brief
+    promises one line."""
+    def field(name: str) -> str:
+        return ", ".join(" ".join(value.split()) for value in headers.get_all(name) or []) or "(not sent)"
+    return "Cache-Status: %s | Age: %s" % (field("Cache-Status"), field("Age"))
+
+
+def fetch(url: str, cfg: dict) -> tuple[Optional[int], bytes, str, str]:
+    """(final status after redirects or None on network failure, body, error text,
+    edge evidence, empty when there was no response to read it from)."""
     sep = "&" if "?" in url else "?"
     req = urllib.request.Request("%s%scb=%d" % (url, sep, random.randint(1, 10**9)),
                                  headers={"User-Agent": cfg["user_agent"],
                                           "Cache-Control": "no-cache"})
     try:
         with urllib.request.urlopen(req, timeout=cfg["timeout"]) as r:
-            return r.status, r.read(), ""
+            return r.status, r.read(), "", edge_evidence(r.headers)
     except urllib.error.HTTPError as e:
-        return e.code, b"", ""
+        return e.code, b"", "", edge_evidence(e.headers)
     except Exception as e:  # DNS, TLS, refused, timeout: not a verdict about the deploy
-        return None, b"", str(e)[:120]
+        return None, b"", str(e)[:120], ""
 
 
-def fetch_all(rels: list[str], site: str, cfg: dict, deadline: Optional[float]) -> dict:
-    """{rel: (status, body, err)}. Unfinished at the deadline -> FETCH-ERROR 'budget'."""
+def fetch_all(rels: list[str], site: str, cfg: dict, deadline: Optional[float], read_at: dict) -> dict:
+    """{rel: fetch()'s tuple}. Unfinished at the deadline -> FETCH-ERROR 'budget'. `read_at` gets
+    the time each finished response was read: the fetches run at once, so list order says nothing
+    about that."""
+    def timed(rel: str) -> tuple:
+        answer = fetch(site + url_path(rel, cfg), cfg)
+        read_at[rel] = time.monotonic()
+        return answer
+
     out: dict = {}
     ex = cf.ThreadPoolExecutor(max_workers=cfg["workers"])
-    futs = {ex.submit(fetch, site + url_path(r, cfg), cfg): r for r in rels}
+    futs = {ex.submit(timed, r): r for r in rels}
     try:
         remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
         done, pending = cf.wait(futs, timeout=remaining)
         for f in done:
             out[futs[f]] = f.result()
         for f in pending:
-            out[futs[f]] = (None, b"", "--budget exhausted before this fetch finished")
+            out[futs[f]] = (None, b"", "--budget exhausted before this fetch finished", "")
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
     return out
@@ -444,6 +476,34 @@ def production_tree(repo: Repo, ref: str, live_by_rel: dict, cfg: dict) -> Optio
 
 
 # --------------------------------------------------------------------------- #
+# The re-read control
+# --------------------------------------------------------------------------- #
+def reread_control(repo: Repo, site: str, ref: str, rel: str, first: tuple, want_id: Optional[str],
+                   cfg: dict) -> str:
+    """Fetch once more a file the sweep read as behind or missing, `first` being that reading.
+
+    Returns the row to print when the second reading agrees with the first, and raises
+    CouldNotCheck when it does not. Same bytes always classify the same way, so a production
+    that stays put can never trip this: only bytes that moved between the two fetches can.
+    Like the preflight it is one fetch outside --budget, bounded by the configured timeout.
+    """
+    status, body, err, edge = fetch(site + url_path(rel, cfg), cfg)
+    if status is None or status not in (200, 404, 410):
+        raise CouldNotCheck("the re-fetch of %s failed (%s), so this sweep's verdict has no control" % (
+            rel, err or ("HTTP %d" % status if status else "network error")))
+    gone = (404, 410)
+    norm = cfg["_norm"]
+    at_ref = status == 200 and compare_to_blob(repo, body, git_blob_id(body), want_id, norm) != DIFF
+    same = status in gone if first[0] in gone else status == 200 and classify(body, first[1], norm) != DIFF
+    if same:
+        return "  re-read    %s  still not at %s on a second fetch | %s" % (rel, ref, edge)
+    raise CouldNotCheck("production changed during the check, or an edge served stale bytes -- %s first read %s (%s) "
+                        "and %s on a re-fetch (%s), so this sweep cannot say a deploy is owed; run it again" % (
+                            rel, "HTTP %d" % first[0] if first[0] in gone else "an older version", first[3],
+                            ("matches %s" % ref) if at_ref else "HTTP %d matching neither reading" % status, edge))
+
+
+# --------------------------------------------------------------------------- #
 # The run
 # --------------------------------------------------------------------------- #
 def verdict(counts: dict, strict: bool) -> int:
@@ -497,16 +557,17 @@ def run(repo: Repo, cfg: dict, ref: str = "HEAD", since: Optional[str] = None,
         # Preflight one fetch alone: a dead network fails in one timeout, not N/workers.
         first = targets[0]
         pre = fetch(site + url_path(first, cfg), cfg)
+        read_at = {first: time.monotonic()}
         if pre[0] is None:
             raise CouldNotCheck("%s unreachable (%s)" % (site, pre[2] or "network error"))
         fetched = {first: pre}
-        fetched.update(fetch_all([t for t in targets[1:] + controls if t != first], site, cfg, deadline))
+        fetched.update(fetch_all([t for t in targets[1:] + controls if t != first], site, cfg, deadline, read_at))
 
         want_ids = repo.batch_ids(["%s:%s/%s" % (full, pd, r) for r in targets + controls])
         results: dict[str, tuple[str, str]] = {}
         live_by_rel: dict[str, bytes] = {}
         for rel in targets + controls:
-            status, body, err = fetched[rel]
+            status, body, err, edge = fetched[rel]
             if status is None:
                 results[rel] = (FETCH_ERROR, err or "network error")
                 continue
@@ -523,7 +584,7 @@ def run(repo: Repo, cfg: dict, ref: str = "HEAD", since: Optional[str] = None,
                 results[rel] = (kind, "")
                 continue
             m = newest_matching_commit(repo, ref, "%s/%s" % (pd, rel), body, cfg)
-            results[rel] = (BEHIND, "production = %s %s" % m) if m else (
+            results[rel] = (BEHIND, "production = %s %s | %s" % (*m, edge)) if m else (
                 DIFFERS, "matches no committed version in the last %d" % cfg["history_limit"])
 
         # Controls: a broken instrument must never be read as a deploy verdict.
@@ -561,6 +622,15 @@ def run(repo: Repo, cfg: dict, ref: str = "HEAD", since: Optional[str] = None,
         if counts.get(NORMALISED):
             say("normalised matches use: %s" % (", ".join(cfg["normalise"]) or "(none)"))
         say(not_examined_line(cfg, skipped))
+
+        # The third control. It runs on any BEHIND row (else any MISSING row), before the fetch-error
+        # stop and before a production tree is named, so a reading it contradicts claims neither. The
+        # earliest-read file has had the longest for production to move under it.
+        behind = [r for r in targets + controls if results[r][0] == BEHIND]
+        candidates = behind or [r for r in targets if results[r][0] == MISSING]
+        pick = min(candidates, key=lambda r: read_at[r], default=None)
+        if pick:
+            say(reread_control(repo, site, ref, pick, fetched[pick], want_ids["%s:%s/%s" % (full, pd, pick)], cfg))
 
         if counts.get(FETCH_ERROR):
             raise CouldNotCheck("%d of %d fetch(es) failed (first: %s)" % (
@@ -746,7 +816,17 @@ def selftest() -> int:
         c3 = commit("c3 touches nothing published")
 
         def deploy(ref, crlf_rel=None):
-            shutil.rmtree(serve)
+            # A server thread can hold the last file it served open for a moment after the client has its
+            # bytes, and Windows refuses to delete an open file. The re-read makes that file the last thing
+            # requested before the next deploy, so this is no longer rare.
+            for attempt in range(50):
+                try:
+                    shutil.rmtree(serve)
+                    break
+                except PermissionError:
+                    if attempt == 49:
+                        raise
+                    time.sleep(0.1)
             serve.mkdir()
             for rel in Repo(repo_dir).zlist("ls-tree", "-r", "--name-only", "-z", ref, "--", "site/"):
                 data = Repo(repo_dir).run("show", "%s:%s" % (ref, rel))
@@ -758,15 +838,37 @@ def selftest() -> int:
 
         class Quiet(http.server.SimpleHTTPRequestHandler):
             fail_paths: set = set()
+            script: dict = {}  # path -> the answers to its 1st, 2nd.. request (bytes, or a status); the disk after
+            hits: dict = {}
+            edge_headers: list = []
+            slow: dict = {}
 
             def log_message(self, *a):
                 pass
 
+            def end_headers(self):
+                for k, v in Quiet.edge_headers:
+                    self.send_header(k, v)
+                super().end_headers()
+
             def do_GET(self):
-                if urllib.parse.urlsplit(self.path).path in Quiet.fail_paths:
+                path = urllib.parse.urlsplit(self.path).path
+                n = Quiet.hits[path] = Quiet.hits.get(path, 0) + 1
+                time.sleep(Quiet.slow.get(path, 0))
+                if path in Quiet.fail_paths:
                     self.send_error(503)
                     return
-                super().do_GET()
+                steps = Quiet.script.get(path, [])
+                answer = steps[n - 1] if n <= len(steps) else None
+                if isinstance(answer, int):
+                    self.send_error(answer)
+                elif isinstance(answer, bytes):
+                    self.send_response(200)
+                    self.send_header("Content-Length", str(len(answer)))
+                    self.end_headers()
+                    self.wfile.write(answer)
+                else:
+                    super().do_GET()
         httpd = http.server.ThreadingHTTPServer(
             ("127.0.0.1", 0), functools.partial(Quiet, directory=str(serve)))
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -881,11 +983,176 @@ def selftest() -> int:
         # Either outcome is timing, not a defect: every budgeted fetch can finish before the zero-length wait
         # (then the run ends in its verdict -- here "NOT AT PARITY", rc 1) or not (rc 2, the budget named).
         # Measured 2026-09-27: 3 of 4 runs took the first path, which the old `rc in (0, 2)` called a crash.
-        rc, out = go(budget=0.000001)
+        def go_budget(seconds):  # a fetch tuple of the wrong shape is a failed check, not a crashed selftest
+            try:
+                return go(budget=seconds)
+            except ValueError as e:
+                return -1, "crashed: %s" % e
+
+        rc, out = go_budget(0.000001)
         last = out.strip().splitlines()[-1] if out.strip() else ""
         ok((rc in (0, 1) and re.match(r"(NOT AT )?PARITY -- ", last) is not None)
            or (rc == 2 and "--budget exhausted" in out),
            "a tiny --budget never crashes: it ends in a verdict, or says the budget ran out (could not check)")
+
+        print("-- the re-read control: a reading its own second fetch contradicts is not a verdict --")
+        a_old = b"<p>a v1</p>\n"
+        a_new = b"<p>a v2</p>\n"
+        moved = "production changed during the check, or an edge served stale bytes"
+        owed_words = ("NOT AT PARITY", "deploy owed", "pending deploy", "PRODUCTION TREE")
+
+        def stub(script=None, headers=None, slow=None):
+            Quiet.script, Quiet.edge_headers, Quiet.slow = script or {}, headers or [], slow or {}
+            Quiet.hits = {}
+
+        def row(out, kind, rel):
+            return next((ln for ln in out.splitlines() if re.match(r"\s+%s\s+%s\s" % (kind, re.escape(rel)), ln)), "")
+
+        deploy(c3)
+        stub({"/a.html": [a_old], "/b.html": [404]})
+        rc, out = go()
+        ok(rc == 2 and moved in out and "could not check" in out,
+           "old bytes on the first request, HEAD's after -> could not check, exit 2")
+        ok(not any(w in out for w in owed_words), "that run claims no deploy owed and names no production tree")
+        ok("a.html first read an older version" in out and "matches HEAD on a re-fetch" in out,
+           "the could-not-check line names the file and both of its readings")
+        ok(row(out, "BEHIND", "a.html") != "", "the sweep's BEHIND row is still printed: it is the evidence")
+        stub({"/a.html": [a_old], "/b.html": [404]},
+             headers=[("Cache-Status", '"Netlify Edge"; hit'), ("Age", "300")])
+        rc, out = go(brief=True)
+        ok(rc == 2 and out.count("\n") == 1 and out.startswith("production: could not check -- " + moved),
+           "--brief: exactly one line, and it is the could-not-check line")
+        ok(out.count("Cache-Status:") == 2 and out.count("Age: 300") == 2,
+           "that one line carries the cache evidence of both readings")
+
+        deploy(c1)
+        stub()
+        rc, out = go()
+        ok(rc == 1 and "NOT AT PARITY" in out and ("PRODUCTION TREE: %s" % c1) in out and moved not in out,
+           "old bytes on every request (a change never deployed) still reads BEHIND, exit 1")
+        ok(Quiet.hits.get("/a.html") == 2 and sum(Quiet.hits.values()) == 5,
+           "the control really ran on that verdict: one extra request, to the BEHIND file")
+        ok("still not at HEAD on a second fetch" in row(out, "re-read", "a.html"),
+           "a verdict that survives says so: the re-read row is printed")
+        deploy(c3)
+        stub()
+        rc, out = go()
+        ok(rc == 0 and max(Quiet.hits.values()) == 1 and row(out, "re-read", "a.html") == "",
+           "a run at parity has nothing to re-read and spends no extra request")
+
+        deploy(c3)
+        stub({"/a.html": [a_old]})
+        rc, out = go()
+        ok(rc == 2 and moved in out and "no single committed tree" not in out,
+           "some changed files already new, some old (no single tree matches) -> could not check, exit 2")
+        deploy(c3)
+        stub({"/b.html": [404]})
+        rc, out = go()
+        ok(rc == 2 and moved in out and not any(w in out for w in owed_words),
+           "only an added file reads stale (MISSING, no BEHIND row) -> could not check, exit 2")
+        deploy(c3)
+        (serve / "b.html").unlink()
+        stub()
+        rc, out = go()
+        ok(rc == 1 and row(out, "MISSING", "b.html") != "" and Quiet.hits.get("/b.html") == 2 and moved not in out,
+           "a file that stays missing on the re-fetch is still a deploy owed, exit 1")
+        deploy(c3)
+        stub({"/a.html": [a_old]})
+        Quiet.fail_paths = {"/css/s.css"}
+        rc, out = go()
+        Quiet.fail_paths = set()
+        ok(rc == 2 and moved in out and row(out, "BEHIND", "a.html") != "",
+           "the filed reading's shape (BEHIND rows plus a failed fetch): the re-read still runs and is what is reported")
+        deploy(c1)
+        stub()
+        Quiet.fail_paths = {"/css/s.css"}
+        rc, out = go()
+        Quiet.fail_paths = set()
+        ok(rc == 2 and "fetch(es) failed" in out and row(out, "re-read", "a.html") != "" and "NOT AT PARITY" not in out,
+           "BEHIND rows plus a failed fetch, and the re-read agrees: the failed fetch still stops the verdict, exit 2")
+        # Two files read old, and the one listed first answers last. Only the earlier reading has
+        # had time to go out of date: the later file still serves old bytes on its re-fetch.
+        old_css, old_home = b"body{}\n", b"<p>home</p>\n"
+        write("css/s.css", b"body{color:red}\n")
+        write("index.html", b"<p>home v2</p>\n")
+        c4 = commit("c4 changes two published files")
+        deploy(c4)
+        stub({"/css/s.css": [old_css, old_css], "/index.html": [old_home]}, slow={"/css/s.css": 0.4})
+        rc, out = go()
+        ok(rc == 2 and moved in out and "index.html first read an older version" in out,
+           "the re-read picks the file read earliest, not the one listed first")
+        git("reset", "-q", "--hard", c3)
+        import http.client
+        import io
+        folded = http.client.parse_headers(io.BytesIO(
+            b"Cache-Status: edge; fwd=miss,\r\n durable; hit\r\nAge: 12\r\n\r\n"))
+        evidence = edge_evidence(folded)
+        ok("\r" not in evidence and "\n" not in evidence and "edge; fwd=miss, durable; hit" in evidence,
+           "a folded header stays one line and loses no part of its value")
+
+        deploy(c1)
+        stub({"/a.html": [a_old, 503]})
+        rc, out = go()
+        ok(rc == 2 and "the re-fetch of a.html failed (HTTP 503)" in out and moved not in out
+           and not any(w in out for w in owed_words),
+           "a failed re-fetch is named as such: no control ran, so no verdict and no claim that production moved")
+        deploy(c1)
+        stub({"/a.html": [a_old, b"<p>a v3, committed nowhere</p>\n"]})
+        rc, out = go()
+        ok(rc == 2 and moved in out and "neither reading" in out and not any(w in out for w in owed_words),
+           "a third reading on the re-fetch (neither the sweep's bytes nor HEAD's) -> could not check, exit 2")
+        deploy(c1)
+        stub({"/a.html": [a_old.replace(b"\n", b"\r\n"), a_old]})
+        rc, out = go()
+        ok(rc == 1 and moved not in out,
+           "a re-fetch that differs from the sweep's reading only in line endings is the same reading, exit 1")
+        deploy(c3)
+        stub({"/a.html": [a_old, a_new.replace(b"\n", b"\r\n")]})
+        rc, out = go()
+        ok(rc == 2 and "matches HEAD on a re-fetch" in out,
+           "HEAD's bytes after normalisation count as HEAD's on the re-fetch")
+
+        print("-- BEHIND rows carry the response's cache evidence --")
+        deploy(c1)
+        stub(headers=[("Cache-Status", '"Netlify Edge"; fwd=miss'), ("Cache-Status", '"Netlify Durable"; hit'),
+                      ("Age", "12")])
+        rc, out = go()
+        behind = row(out, "BEHIND", "a.html")
+        ok(rc == 1 and ("production = %s" % c1) in behind and '"Netlify Edge"; fwd=miss' in behind,
+           "the BEHIND row carries Cache-Status beside the version it names")
+        ok('"Netlify Durable"; hit' in behind, "every Cache-Status line is kept, not only the first")
+        ok(re.search(r"\| Age: 12$", behind) is not None, "the BEHIND row carries Age")
+        stub()
+        rc, out = go()
+        behind = row(out, "BEHIND", "a.html")
+        ok(rc == 1 and "Cache-Status: (not sent)" in behind and "Age: (not sent)" in behind and "None" not in behind,
+           "a response without the headers does not crash and says they were not sent")
+
+        deploy(c3)
+        stub(slow={"/index.html": 1.0})
+        rc, out = go_budget(0.2)  # the one path an ordinary sweep never takes
+        stub()
+        ok(rc == 2 and "--budget exhausted" in out,
+           "a budget-exhausted fetch reaches the verdict code in fetch()'s shape: could not check, never a crash")
+
+        print("-- the re-read control: every file changed since the previous tree reads BEHIND; --since --")
+        write("index.html", b"<p>home v2</p>\n")
+        c4 = commit("c4 changes one published file")
+        deploy(c4)
+        stub({"/index.html": [b"<p>home</p>\n"]})
+        rc, out = go()
+        ok(rc == 2 and moved in out and not any(w in out for w in owed_words),
+           "the one file changed since the previous tree reads BEHIND, then HEAD -> could not check, exit 2")
+        deploy(c4)
+        stub({"/a.html": [a_old]})
+        rc, out = go(since=c3)
+        ok(rc == 2 and moved in out, "--since: a control that read stale on the first request -> could not check, exit 2")
+        deploy(c4)
+        (serve / "a.html").write_bytes(a_old)
+        stub()
+        rc, out = go(since=c3)
+        ok(rc == 1 and "production predates --since" in out and Quiet.hits.get("/a.html") == 2,
+           "--since: a control that stays older is still 'production predates --since', exit 1")
     finally:
         if httpd is not None:
             httpd.shutdown()

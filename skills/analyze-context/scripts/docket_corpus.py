@@ -34,6 +34,11 @@ API (stable; load by path -- the file is not on sys.path once installed):
         `row_id` may be spelled G#N, #N, N or PROJECT-N (numeric forms match numeric row ids;
         G#N matches only central-style G# rows), or a text id such as A1 or a table item name.
         Raises LookupError for a project that is not found.
+    count(scope='here', parent=None) -> list of dicts {project, files, open, closed, unknown, error}
+        One per chosen project: its OWN docket rows by state (kinds docket and config, one count per
+        row id, each resolved as state() would). Never the split-out bodies, archives or handoffs,
+        so central's open figure is count-docket.py's. `unknown` is a third number on purpose: a
+        row this cannot read is not a closed one. `files` empty means the project has no docket.
     inboxes(root) -> list of dicts {path, age_days, status, tracked}
         Pending DOCKET-INBOX-*.md files at a project root, listed even when untracked (a
         filing written but never committed is the one most likely to be lost). status is
@@ -80,6 +85,9 @@ DISCOVERY (per project; case-insensitive names; no recursion except config globs
     handoff     HANDOFF*.md at the root
     self-audit  SELF-AUDIT.md at the root
     inbox       DOCKET-INBOX-*.md at the root
+    upgrade-list  UPGRADE-QUEUE.md, UPGRADE-NEXT.md and UPGRADE-NOTES.md at the root: never a docket
+                (no row ids minted, no effect on 'no docket found'), but a lesson on one of them must
+                come back from a search or it gets filed again
     Always excluded: .claude/worktrees/**, node_modules/**, chrome_profile_*/**, .git/**.
     Files are de-duplicated by real path (a memory dir is often a junction into the repo).
 
@@ -103,6 +111,8 @@ GRAMMARS (detected per line)
                                                   #N its item cell leads with, never a later cell
     glyph-first       - <glyph> ...               no id: keyed by file:line
     inbox-block       a proposal block in a DOCKET-INBOX file: keyed by file#block, open
+    upgrade-entry     one '## ' entry of an upgrade list: keyed by file#block, open; the file's name
+                      says whether it is owed a build
     A numbered list in a handoff is not a docket, so numbered, alpha and table ids are
     project-level only in a docket/roadmap/archive/config file whose dominant grammar they
     are; elsewhere the row is keyed by file:line.
@@ -129,11 +139,12 @@ CLI (ASCII usage; every list/search prints its denominator)
     python docket_corpus.py search [-i] PATTERN [--scope S] [--json]    (-i: ignore case)
     python docket_corpus.py state PROJECT ID [--json]
     python docket_corpus.py inboxes [--root PATH | --scope S] [--json]
+    python docket_corpus.py count [--scope S] [--json]   (the arrival gate's OPEN docket line)
     python docket_corpus.py --selftest
     --parent PATH works with every subcommand.
 
 EXIT STATUS
-    list / search / inboxes: 0 ran (search: whether or not anything matched), 2 usage error,
+    list / search / inboxes / count: 0 ran (search: whether or not anything matched), 2 usage error,
     unknown scope or project, or an inboxes --root that is not a directory. state: 0 open or
     closed, 1 absent or unknown, 2 error.
 
@@ -241,9 +252,10 @@ INBOX_DATE_RE = re.compile(r"^docket-inbox-(\d{4}-\d{2}-\d{2})", re.I)
 ID_GRAMMARS = ("central-g", "hash-bullet", "hash-para", "numbered", "alpha-bullet", "table-first-cell")
 DOCKET_KINDS = ("docket", "roadmap", "config", "archive")
 KIND_TIER = {"docket": 0, "roadmap": 1, "config": 1, "archive": 2,
-             "handoff": 3, "handoff-archive": 3, "self-audit": 3, "inbox": 4}
+             "handoff": 3, "handoff-archive": 3, "self-audit": 3, "inbox": 4, "upgrade-list": 4}
 KIND_ORDER = ("docket", "roadmap", "config", "archive", "handoff-archive", "handoff", "self-audit",
-              "inbox")
+              "inbox", "upgrade-list")
+UPGRADE_LISTS = ("upgrade-queue.md", "upgrade-next.md", "upgrade-notes.md")
 
 LEVELS = ("", "context", "continuation", "docs")
 MEMORY_LEVELS = ("continuation/memory", "context/memory")
@@ -548,6 +560,8 @@ def _project_files(p):
             add(f, "self-audit")
         elif b.startswith("docket-inbox-"):
             add(f, "inbox")
+        elif b in UPGRADE_LISTS:
+            add(f, "upgrade-list")
     found.sort(key=lambda t: KIND_ORDER.index(t[1]))
     return found, cfg, err
 
@@ -793,11 +807,12 @@ def _parse_cached(path, kind, rel, smap_items, raw):
         rows.append(row)
         return row
 
-    if kind == "inbox":
+    if kind in ("inbox", "upgrade-list"):
         # A filing that uses sub-headings for its candidates is split on those alone (its
         # bullets are the candidates' fields); one without headings is split on the
         # backlog index's proposal-lead shapes after a blank line. Text before the first
-        # block is block 0.
+        # block is block 0. An upgrade list has the same shape: '## ' entries, bullets as fields.
+        grammar = "inbox-block" if kind == "inbox" else "upgrade-entry"
         name = os.path.basename(path)
         by_heading = any(SUBHEADING_RE.match(ln) for ln in lines)
         k, cur = 0, None
@@ -811,9 +826,9 @@ def _parse_cached(path, kind, rel, smap_items, raw):
                 k += 1
             if start or cur is None:
                 ident = "%s#%d" % (name, k)
-                cur = new_row(i, "inbox-block", ident, ident, ident.casefold(), "open")
+                cur = new_row(i, grammar, ident, ident, ident.casefold(), "open")
             row_of[i] = cur
-        return rows, row_of, lines, "inbox-block"
+        return rows, row_of, lines, grammar
 
     cls = _classify(lines, kind)
     counts = {}
@@ -1060,6 +1075,52 @@ def state_detail(project, row_id, parent=None):
                       "id": r["id"]} for r in rows]}
 
 
+COUNT_KINDS = ("docket", "config")
+
+
+def count(scope="here", parent=None):
+    _, chosen = select(scope, parent)
+    out = []
+    for p in chosen:
+        idx = _index(p)
+        files = [f for f in idx["files"] if f["kind"] in COUNT_KINDS]
+        tally = {"open": 0, "closed": 0, "unknown": 0}
+        seen = set()
+        for f in files:
+            for r in f["rows"]:
+                if r["key"].startswith("@"):        # a file-local row: no other file can state it
+                    st = r["state"]
+                elif r["key"] in seen:
+                    continue
+                else:
+                    seen.add(r["key"])
+                    st = _resolve(idx["by_key"][r["key"]])
+                tally[st if st in tally else "unknown"] += 1
+        c = {"project": p["name"], "files": [f["rel"] for f in files], "error": idx["error"],
+             "unread": [f["rel"] for f in files if not f["rows"]]}
+        c.update(tally)
+        out.append(c)
+    return out
+
+
+def open_docket_line(c):
+    """The arrival gate's OPEN docket line for one count() dict; '' for a project with no docket."""
+    where = ", ".join(c["files"])
+    if not c["files"]:
+        return "OPEN docket: could not check -- %s" % c["error"] if c["error"] else ""
+    if c["open"] + c["closed"] + c["unknown"] == 0:
+        line = "OPEN docket: no row it can read in %s" % where   # a dead parse is not a real zero
+    elif c["unknown"]:
+        line = "OPEN docket: %d open row(s), %d with no status it can read, in %s" % (c["open"], c["unknown"], where)
+    else:
+        line = "OPEN docket: %d open row(s) in %s" % (c["open"], where)
+    # One readable file must not turn another's dead parse into a confident count.
+    unread = c.get("unread") or []
+    if unread and c["open"] + c["closed"] + c["unknown"]:
+        line += " (no row it can read in %s)" % ", ".join(unread)
+    return line + (" (config problem: %s)" % c["error"] if c["error"] else "")
+
+
 def _inbox_git_state(root):
     """(committed, indexed) inbox basenames (casefolded) at root, or (None, None) outside git.
 
@@ -1182,6 +1243,18 @@ def _cmd_inboxes(a):
     return 0
 
 
+def _cmd_count(a):
+    rows = count(a.scope, a.parent)
+    if a.json:
+        print(json.dumps({"counts": rows}, ensure_ascii=False, indent=1))
+        return 0
+    for c in rows:
+        line = open_docket_line(c)
+        if line:
+            print(line if len(rows) == 1 else "%s: %s" % (c["project"], line))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="docket_corpus.py",
                                  description="Search every project's docket files as one corpus.")
@@ -1204,6 +1277,9 @@ def main(argv=None):
     p.add_argument("--root", default=None)
     p.add_argument("--scope", default="all")
     p.add_argument("--json", action="store_true")
+    p = sub.add_parser("count", help="open / closed / unknown rows of a project's own docket files")
+    p.add_argument("--scope", default="here")
+    p.add_argument("--json", action="store_true")
     for sp in sub.choices.values():
         sp.add_argument("--parent", default=argparse.SUPPRESS, help="directory holding the projects")
     a = ap.parse_args(argv)
@@ -1214,7 +1290,7 @@ def main(argv=None):
         return 2
     try:
         return {"list": _cmd_list, "search": _cmd_search, "state": _cmd_state,
-                "inboxes": _cmd_inboxes}[a.cmd](a)
+                "inboxes": _cmd_inboxes, "count": _cmd_count}[a.cmd](a)
     except (LookupError, ValueError, re.error) as e:
         print("error: %s" % e, file=sys.stderr)
         return 2

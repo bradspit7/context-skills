@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-10-30.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-11-05.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -17,9 +17,10 @@ hook*), and the user can invoke it by name. A session's one build starts early -
 or at a mid-session firing (Step 5).
 
 **Every surviving lesson ends in exactly one outcome:** `reused` (an existing tool already does it),
-`built` (this session's one build), `queued` (this project's `UPGRADE-QUEUE.md`), `filed-central` (a
-committed inbox lesson, routes a-d below), `noted` (a project memory note — owner rulings and
-preferences), `strengthened-existing` / `dedup-existing` (it is already somewhere), or `zero`.
+`built` (this session's one build), `queued` (on the list: this project's `UPGRADE-QUEUE.md` or
+`UPGRADE-NEXT.md`), `filed-central` (a committed inbox lesson, routes a-d below), `noted` (recorded, not
+owed a build: `UPGRADE-NOTES.md`, or a project memory note for owner rulings and preferences),
+`strengthened-existing` / `dedup-existing` (it is already somewhere), or `zero`.
 "Surfaced in chat" is not an outcome: chat scrolls away.
 
 ## When to fire / not fire
@@ -65,27 +66,39 @@ python ~/.claude/skills/analyze-context/scripts/docket_corpus.py search -i '<ter
   live hit that already does the job → **rung 0: adopt or port it** (outcome `reused`). A hit that is
   a sibling copy of the tool you are about to fix → the fix goes to its shared owner, once.
 - **Then the corpus, by 2-3 terms naming the failure mechanism.** The helper searches every project's
-  real docket files (including split-out row-body files, archives, pending `DOCKET-INBOX-*.md` filings
-  and the self-audit log) and prints its denominator. A hit → `strengthened-existing` or
+  real docket files (including split-out row-body files, archives, pending `DOCKET-INBOX-*.md` filings,
+  the self-audit log and the three upgrade lists of Step 4) and prints its denominator. A hit → `strengthened-existing` or
   `dedup-existing`: record the occurrence against the existing entry (a new date, project or wording
   does not make a new upgrade). A central hit is recorded from any project through the outcome record
   (Step 6), **never by editing the central docket or another session's pending inbox file** — that is
   the uncommitted-edit-to-a-live-central-doc class. A project hit is recorded in that project's own
   docket.
 
-## Step 3 — Filter (the anti-noise gate)
+## Step 3 — The rule: does it earn a build?
 
-1. **Load-bearing test — name all five, or it is an observation, not a lesson:** **current behaviour**
-   (what happens today), **implementation target** (the file that changes), **expected improvement**
-   (a step removed, a failure detected, a capability gained), **recurring cost** (context bytes, hook
-   latency, maintenance — text loaded into every session of every project is the most expensive shape
-   there is), and a **concrete acceptance check** (what you would run to see it work). *"A future
-   session would act differently"* is necessary, never sufficient: reading one more rule qualifies and
-   improves nothing. **The five fields are the build spec** — target = the file, acceptance check = the
-   RED condition, current behaviour = the incident command and output.
-2. **Target project alive** — a lesson whose remedy targets a discontinued project is dead work (check
-   wherever you track project lifecycle status, if you do). Its platform kernel, if any, still routes
-   (a).
+Finding something true does not mean owing it a build. This rule decides:
+
+> **Build automatically when the change has a credible, worthwhile benefit to real work, the fix can actually deliver that benefit, and a simpler response wouldn't do the job better.**
+
+Each candidate gets three short answers, in plain words, from evidence already in its entry:
+
+1. **What real work improves, and what's the evidence?** Something the owner asked for, a step the owner repeats, a failure that happened, or a serious risk someone has actually shown is reachable.
+2. **Why is this fix worth its full cost?** Building, testing, upkeep, and anything it adds to normal sessions. Could removing or simplifying something do it instead?
+3. **How does an ordinary request get the benefit?** A result the owner or a session would see, not just a new warning, a passing test or a sentence in a skill.
+
+**Machinery isn't banned.** It's judged the same way. A true lesson that doesn't pass is recorded, not
+built (Step 4).
+
+**Target project alive** — a lesson whose remedy targets a discontinued project is dead work (check wherever you track project lifecycle status, if you do). Its platform
+kernel, if any, still routes (a).
+
+**The five fields are the build spec, not the test.** Filling them in passes nothing; a lesson that
+passes names them so it can be built: **current behaviour** (what happens today), **implementation
+target** (the file that changes), **expected improvement** (a step removed, a failure detected, a
+capability gained), **recurring cost** (context bytes, hook latency, maintenance — text loaded into every
+session of every project is the most expensive shape there is), and a **concrete acceptance check** (what
+you would run to see it work). Target = the file, acceptance check = the RED condition, current behaviour
+= the incident command and output.
 
 ## Step 4 — Pick the rung, then the route
 
@@ -148,17 +161,30 @@ target: <the file or tool that would change>
 `second_bite` is required for route b and omitted otherwise.
 
 Show the receipt (path + short sha): "filed" means a quotable commit. The next central session
-processes the inbox under these same rules — builds it, queues it, or hands it back.
+processes the inbox under these same rules — builds it, lists it, notes it, or hands it back.
 
-**Project lessons that are not this session's build go to the project's `UPGRADE-QUEUE.md`** at its
-root: one `## YYYY-MM-DD · <title>` heading per item (oldest first), then `- **Lesson:**`,
-`- **Target:**`, `- **RED:**`, `- **Source:**` bullets (plus `- **Partial:**` once a stopped helper's
-work is parked, Step 5 item 4). **Cap 5.** A full queue shows as one briefing
-line; it is never a question for the owner.
+**Recording is separate from queuing.** A project lesson that is not this session's build goes in one of
+three files at the project root, all in one form: a `## YYYY-MM-DD · <title>` heading per item, then
+`- **Lesson:**`, `- **Better because:**` (one line in plain words, no file names), `- **Target:**`,
+`- **RED:**`, `- **Source:**` bullets (plus `- **Partial:**` once a stopped helper's work is parked, Step 5
+item 4).
+
+- **`UPGRADE-QUEUE.md`: Build next, about 10. File order is build order.** What the owner has chosen comes
+  first, unless something is seriously broken right now. **The owner's picks go to the top.** Everything
+  else competes on benefit, full cost and confidence; age only breaks ties.
+- **`UPGRADE-NEXT.md`: Up next, in order.** A lesson that passes Step 3 goes in `UPGRADE-NEXT.md`, or in
+  `UPGRADE-QUEUE.md` at its place in the order if it beats what's there.
+- **`UPGRADE-NOTES.md`: recorded, not owed a build.** Anything else goes in `UPGRADE-NOTES.md`, findable by
+  Step 2's search, with a one-line reason. Recording stays free. Another sighting adds a date and is a
+  reason to look again, not automatic approval. A session that hits a problem held here is told it's
+  already known.
+
+A full list shows as one briefing line and is never a question for the owner: a full list sends a new
+lesson to `UPGRADE-NEXT.md` or notes.
 
 ## Step 5 — Build one per session, early (never at a wrap)
 
-**A wrap never builds, and neither does a departure.** They queue their lesson (Step 4) and end with
+**A wrap never builds, and neither does a departure.** They record their lesson (Step 4) and end with
 nothing left running. Measured 2026-09-29 (owner: *"30 MINUTE UPDATE CONTEXT??"*): the wrap itself
 finished in 10.5 minutes, but the build it had started in the background kept the session looking busy
 for 17 more, and its report promised to apply the build "when it returns", so the owner waited for it.
@@ -166,7 +192,10 @@ A build started at the wrap is one the owner waits for, however it runs.
 
 **A session's build starts early** (one per session), so it lands while the owner is still working:
 - **At session start:** when the briefing's `UPGRADES` line shows a non-empty `UPGRADE-QUEUE.md`,
-  start the **oldest** item right after the briefing, in the background, and go on with the owner's
+  take its **first** entry and **check it against the rule (Step 3) right before building**. If it fails,
+  move it to `UPGRADE-NOTES.md` with the reason and take the next; commit the move with a pathspec before
+  any helper starts. **No candidate means no build.** The builder has no duty to stay busy. Start the one
+  that passes right after the briefing, in the background, and go on with the owner's
   request. **When that entry carries a `- **Partial:** <patch> at <base>` bullet** (an earlier helper's
   parked work, item 4), the build starts from it, not from scratch:
   `python ~/.claude/skills/reflect-upgrades/scripts/park-worktree.py --unpark <patch> --into <worktree dir> --branch build/<topic>`
@@ -174,20 +203,23 @@ A build started at the wrap is one the owner waits for, however it runs.
   blob); the helper commits that as its starting point, merges the local HEAD, then builds. Anything the
   partial recorded (a FAILED count, a passing run) is a **lead, not a result**: re-run it.
 - **Mid-session:** a nudge or manual firing starts this session's build when none has started yet --
-  its new lesson on rungs 1-5 if one fits one session, else the oldest queued item.
-- **Topping up the queue from the docket:** when the queue holds fewer than its cap of 5, append the top
-  open row of the project's docket as a new entry before the build starts (central: the first row under
-  `## Open — pick up here` in `roadmap.md`, kept in value order), its `- **Source:**` naming the row id. A
-  sorted docket then drains one row per session whenever fresh lessons are scarce, and a fresh lesson
-  never waits behind more than four. The row stays in the docket until the build that lands it closes it.
+  its new lesson on rungs 1-5 if it passes Step 3 and fits one session, else the first queued entry that
+  passes.
+- **Room on the list:** when `UPGRADE-QUEUE.md` holds fewer than about 10, move the top of `UPGRADE-NEXT.md`
+  up. A docket row comes on only if it passes the rule (central: from `## Open — pick up here` in
+  `roadmap.md`), its `- **Source:**` naming the row id; the row stays in the docket until the build that
+  lands it closes it.
+- **A small correction may not need a helper at all:** a misleading line can be fixed in passing, with no
+  helper and no review.
 
 1. **Look again before building** — if the build edits a hook or script, query the capability index
    for other copies of it. Shared logic lives once; project differences live in per-project config;
    a fix to a shared tool goes to its shared owner.
 2. **Write the spec on the main thread:** the incident command and output, the target file, the RED
    condition (Step 3's five fields). **The lesson must be in `UPGRADE-QUEUE.md` before the helper
-   starts** — a queued item already is; write a new lesson's entry now, even one past the cap. That
-   entry is what carries the lesson if the build never lands.
+   starts** — a queued item already is; write a new lesson's entry now, at its place in the order, and on
+   a full list move the last entry down to `UPGRADE-NEXT.md`. That entry is what carries the lesson if the
+   build never lands.
 3. **Hand it to a fresh small-context helper in the background** that builds the check in its own
    worktree **outside the project root**, made by hand from the local HEAD:
    `git worktree add ../<repo>-<topic> -b build/<topic> <local HEAD sha>`, then the Agent tool with
@@ -231,7 +263,9 @@ A build started at the wrap is one the owner waits for, however it runs.
    land-build.py's docstring), the build also gets a review: before the commit land-build starts it on
    the branch's diff in the background (waiting out another call that holds the script's lock), and after
    the verify prints `CODEX REVIEW RETURNED <call-id> answer=<path>` with the range it reviewed. Returned
-   is not adjudicated: check each point against the landed files, fix forward what holds, tell the user
+   is not adjudicated: check each point against the landed files, fix forward what holds and is
+   worth fixing now (a point not fixed on the spot goes through Step 3 like any lesson, and a true one may
+   earn only a note), tell the user
    one line per disagreement, then record the call's outcome. In closing mode that line, like any late
    event, is recorded only: its call id and answer path. A refusal is one line and never blocks the
    landing. Pass
@@ -240,7 +274,7 @@ A build started at the wrap is one the owner waits for, however it runs.
    The trailer is the record (a ledger can derive *built* from it, in the repo where it landed), so a
    delivered upgrade gets exactly one, on the commit that delivers it, and a test-only, review-fix or
    fix-up commit gets none. If the session ends first, the entry stays queued and the next session's
-   start builds it. **In closing mode** (from a wrap or departure request on: `update-context`'s
+   start checks it and builds it. **In closing mode** (from a wrap or departure request on: `update-context`'s
    *Closing mode*, where the session finishes the wrap and starts no new work), **a returned helper is
    recorded only, never landed, and a wrap stops and parks a running build, as a departure does.** Its
    partial diff is parked, never left in a worktree no step names (stopped unreported, it sits there
@@ -258,14 +292,14 @@ A build started at the wrap is one the owner waits for, however it runs.
    **Park only a worktree this session's helper used;** the briefing's and wrap's `WORKTREES` lines
    name every other one, and those are reported, never parked. When the build lands, its commit
    removes the queue entry **and** the partial's `.patch` and `.base` files (`land-build.py` does both).
-5. **Too big for one session** → queue it (cap 5).
+5. **Too big for one session** → record it by Step 4's rules and take the next entry.
 6. **Projects with live external writes or regulated personal data:** the build may only add tests
    that import no write client, and must not touch the project's sensitive-data/secret guard, its git
    hooks, its harness settings, its config/override files or its live runners (the project's own
    `CLAUDE.md` names them). The RED proof uses an in-memory mutant or a synthetic fixture with the live
    gate forced off. The full suite must be green and the project's own reviewer must pass before the
    commit.
-7. **Central lessons** are built by a central session, oldest first and early as above, on a branch in a
+7. **Central lessons** are built by a central session, in list order and early as above, on a branch in a
    central worktree; `main` is fast-forwarded only when the shared checkout is clean and no other
    central session is live.
 
@@ -284,7 +318,7 @@ One row per lesson:
 
 **Honesty labels are mandatory:** `proven-need` (this session hit it), `solid-extension` (real value,
 no forcing incident), `speculative` (plausible, unproven). A session realistically yields 0-2 lessons;
-at most one `speculative`, and 3+ rows means the load-bearing filter failed — re-run Step 3. Nothing
+at most one `speculative`, and 3+ rows means the rule was not applied — re-run Step 3. Nothing
 survives → one line: "No tooling upgrades warranted this session." That is a common, valid result.
 
 **Record the verdict, whatever it is.** The *record* is required; *where* you keep it is yours — a log
@@ -318,7 +352,8 @@ A row recorded under the wrong name is corrected append-only, never edited
 `observed` is refused, because it was written for both meanings; existing rows still read as
 recurrences. If you cannot record it in the moment, say so in the report — never silently skip.
 
-**Never drop a surviving lesson.** Each named non-reason licensed a real near-drop: *"the docket is on
+**Never drop a surviving lesson.** `UPGRADE-NOTES.md` satisfies this: not owed a build is not lost. Each
+named non-reason licensed a real near-drop: *"the docket is on
 rotation-hold"* (a hold blocks structural rotation, never a queue line or an inbox filing); *"keep the
 wrap diff small"*; *"context is high, wrap fast"*. Catching an unrecorded lesson in your own report
 means going back and recording it before finishing — the user should never have to say "file it".

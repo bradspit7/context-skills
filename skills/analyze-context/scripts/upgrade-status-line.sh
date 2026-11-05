@@ -9,9 +9,12 @@
 #                    oldest and its age in days (date from the FILENAME; mtime only when the
 #                    name carries no date), up to 5 names oldest-first, then 'and N more'.
 #                    A handback left at a project root is otherwise read by nobody.
-#   upgrade queue:   UPGRADE-QUEUE.md at the root. Each item is a level-2 heading
-#                    '## YYYY-MM-DD <U+00B7> <title>', oldest first, cap 5. A '## ' heading in any
-#                    other shape is reported as NOT counted rather than silently dropped.
+#   upgrade queue:   UPGRADE-QUEUE.md at the root, the build list. Each item is a level-2 heading
+#                    '## YYYY-MM-DD <U+00B7> <title>'. File order is build order, so 'next' is the
+#                    FIRST entry whatever dates the headings carry; cap 10. ', up next M' when
+#                    UPGRADE-NEXT.md has entries. UPGRADE-NOTES.md is recorded, not owed a build, and
+#                    is not counted. A '## ' heading in any other shape is reported as NOT counted
+#                    rather than silently dropped.
 #   landed here in the last 30 days:
 #                    every line that STARTS with 'Upgrade:' in the full message of each commit
 #                    of the last 30 days (newest 5, with the short sha, then 'and N more').
@@ -151,31 +154,38 @@ if [ -n "$ROWS" ]; then
 fi
 
 # ---- (b) the upgrade queue -------------------------------------------------------------------
-Q="$TOP/UPGRADE-QUEUE.md"
-if [ -f "$Q" ]; then
-  QN=0; QBAD=0; QOLD=""; QTITLE=""
+# One entry grammar across the lists. Sets LN (entries), LBAD ('## ' headings in another shape) and
+# LFIRST (the first entry's title). A list that does not exist has no entries.
+_read_list() {
+  local ln qt
+  LN=0; LBAD=0; LFIRST=""
+  [ -f "$1" ] || return 0
   while IFS= read -r ln || [ -n "$ln" ]; do
     ln=${ln%$'\r'}
     case "$ln" in "## "*) ;; *) continue ;; esac
-    qd=""; qt=""
-    if [[ "$ln" =~ ^'## '([0-9]{4}-[0-9]{2}-[0-9]{2})' '(.*)$ ]]; then
-      qd=${BASH_REMATCH[1]}
-      case "${BASH_REMATCH[2]}" in "$MID "?*) qt=${BASH_REMATCH[2]#"$MID "} ;; esac
+    qt=""
+    if [[ "$ln" =~ ^'## '[0-9]{4}-[0-9]{2}-[0-9]{2}' '(.*)$ ]]; then
+      case "${BASH_REMATCH[1]}" in "$MID "?*) qt=${BASH_REMATCH[1]#"$MID "} ;; esac
     fi
     if [ -n "$qt" ]; then
-      QN=$((QN + 1))
-      if [ -z "$QOLD" ] || [[ "$qd" < "$QOLD" ]]; then QOLD=$qd; QTITLE=$qt; fi
+      LN=$((LN + 1))
+      [ -z "$LFIRST" ] && LFIRST=$qt
     else
-      QBAD=$((QBAD + 1))
+      LBAD=$((LBAD + 1))
     fi
-  done < "$Q"
-  if [ "$QN" -gt 0 ] || [ "$QBAD" -gt 0 ]; then
-    QL="upgrade queue: $QN item(s)"
-    [ "$QN" -gt 0 ] && QL="$QL, oldest $QOLD $QTITLE"
-    [ "$QN" -ge 5 ] && QL="$QL -- FULL (cap 5)"
-    [ "$QBAD" -gt 0 ] && QL="$QL ($QBAD '## ' heading(s) not in the '## YYYY-MM-DD $MID <title>' form -- not counted)"
-    OUT+=("$QL")
-  fi
+  done < "$1"
+  return 0
+}
+_read_list "$TOP/UPGRADE-QUEUE.md"; QN=$LN; QBAD=$LBAD; QFIRST=$LFIRST
+_read_list "$TOP/UPGRADE-NEXT.md"; NN=$LN; NBAD=$LBAD
+if [ "$QN" -gt 0 ] || [ "$QBAD" -gt 0 ] || [ "$NN" -gt 0 ] || [ "$NBAD" -gt 0 ]; then
+  QL="upgrade queue: $QN item(s)"
+  [ "$QN" -gt 0 ] && QL="$QL, next $QFIRST"
+  [ "$NN" -gt 0 ] && QL="$QL, up next $NN"
+  [ "$QN" -ge 10 ] && QL="$QL -- FULL (cap 10)"
+  [ "$QBAD" -gt 0 ] && QL="$QL ($QBAD '## ' heading(s) not in the '## YYYY-MM-DD $MID <title>' form -- not counted)"
+  [ "$NBAD" -gt 0 ] && QL="$QL ($NBAD '## ' heading(s) in UPGRADE-NEXT.md not in that form -- not counted)"
+  OUT+=("$QL")
 fi
 
 # ---- (c) Upgrade: lines landed in the last 30 days -------------------------------------------
@@ -269,6 +279,6 @@ if [ "${#OUT[@]}" -gt 0 ] || [ "${#RECENT[@]}" -gt 0 ]; then
   for l in ${OUT[@]+"${OUT[@]}"} ${RECENT[@]+"${RECENT[@]}"}; do printf '%s\n' "$l"; done
   # The skill default for anything that is not a FINDING is to move on, so the section says itself
   # where it belongs (the deploy-parity helper does the same).
-  echo "(state lines, not FINDINGs -- carry them into the briefing / handoff; a pending inbox, a FULL queue or a could-not-check is an open item)"
+  echo "(state lines, not FINDINGs -- carry them into the briefing / handoff; a pending inbox or a could-not-check is an open item)"
 fi
 exit 0

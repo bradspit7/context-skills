@@ -105,6 +105,28 @@ the same app id when both carry one, otherwise the same CLI id. The wrap declare
       HEAD": a squash or a cherry-pick shows as not on HEAD. Exit 0 with the report, unintegrated
       work included; 2 on a usage error, or when a ref or worktree could not be read: it names
       each as `inspection incomplete: WHAT` and never reports as absent what it could not read.
+  python wrap-completeness.py --started TOKEN [TOKEN ...] [--folder TOKEN=PATH ...]
+                              [--merge TOKEN[=BRANCH] ...] [--is-running TOKEN ...]
+                              [--name-only TOKEN=REASON ...] [--repo DIR]
+      update-context's Step 1: merge what the sessions this session started finished, before the
+      wrap commits (the owner's word, 2026-11-04). The only mode that writes, and only for a token
+      given --merge: nothing merges by default, so a disposition left out cannot merge a running
+      session's branch. --merge says the session finished and this session started it; BRANCH is
+      its branch as the app records it, else its --folder's branch. --is-running and --name-only
+      merge nothing and are named: a running session is asked about, and --name-only's REASON says
+      why it is left alone (started by another session, work in an open PR).
+      Each merge is device-sync's (merge, never rebase; merge-check), built as an object so the
+      checkout holds no merge state at any point: git merge-tree, git commit-tree, merge-check
+      --commit, then git merge --ff-only. So a conflict or a finding leaves HEAD, the index and the
+      tree untouched with nothing to abort; a sibling session's staged file neither blocks the merge
+      nor rides along; and HEAD moving meanwhile fails the fast-forward instead of reverting that
+      commit. It never pushes, and never commits, deletes or moves anything of the session's. Then
+      the --sessions report, then the verdict: `clear:`, or `open:` with one line per item that
+      withholds the wrap's closing line (a branch not merged and why; a running session; commits
+      HEAD does not reach, stamped or not; a session's uncommitted files, by name; a session it
+      cannot see). `no matching stamped commits found` with no branch or folder to look at is
+      unknown, never clean. Exit 0 clear, 1 open, 2 usage or inspection incomplete (merges nothing).
+      With nothing to merge it runs no merge-check and costs what --sessions costs.
 Every git call is bounded by GIT_TIMEOUT seconds; a call past it exits 2.
 """
 import argparse
@@ -1408,7 +1430,8 @@ def sessions(repo, tokens, folders=()):
     by_token = dict((t["token"], t) for t in out_tokens)
     claimed = {here}
     for tok, path in folders:
-        f = {"path": path, "where": None, "uncommitted": None, "branch": None}
+        f = {"path": path, "where": None, "uncommitted": None, "branch": None, "branch_name": None, "here": False,
+             "head": None}
         try:
             ftop = git(path, "rev-parse", "--show-toplevel").stdout.strip()
         except Usage as ex:
@@ -1426,6 +1449,9 @@ def sessions(repo, tokens, folders=()):
                 continue
             f["where"] = "the main worktree" if hit[0]["main"] else "linked worktree"
             f["branch"] = ("branch " if hit[0]["branch"] else "") + branch_label(hit[0])
+            f["branch_name"] = branch_label(hit[0]) if hit[0]["branch"] else None
+            f["here"] = norm_path(ftop) == here
+            f["head"] = hit[0]["head"]
         by_token[tok]["folders"].append(f)
     unassigned = []
     for e in others:
@@ -1444,7 +1470,7 @@ def sessions(repo, tokens, folders=()):
             unassigned.append({"path": e["path"], "branch": branch_label(e), "uncommitted": n})
     return {"repo": top, "head": head_sha, "head_branch": sym.stdout.strip() if sym.returncode == 0 else None,
             "branches": len(branches), "worktrees": len(others), "incomplete": list(dict.fromkeys(incomplete)),
-            "tokens": out_tokens, "unassigned": unassigned, "subjects": g.subject}
+            "tokens": out_tokens, "unassigned": unassigned, "subjects": g.subject, "graph": g}
 
 
 def print_sessions(s):
@@ -1501,16 +1527,257 @@ def run_sessions(a):
     if a.until or a.json or a.tip or a.session is not None:
         raise Usage("--until, --json, --tip and --session do not apply to --sessions")
     tokens = list(dict.fromkeys(session_token(t) for t in a.sessions))
+    return print_sessions(sessions(a.repo, tokens, parse_folders(a.folder, tokens, "--sessions")))
+
+
+def parse_folders(given, tokens, mode):
+    """--folder TOKEN=PATH ...: [(token, path)], each token one of `mode`'s."""
     folders = []
-    for f in a.folder or ():
+    for f in given or ():
         tok, sep, path = f.partition("=")
         if not sep or not tok or not path:
             raise Usage("--folder takes TOKEN=PATH, not %r" % f)
         tok = session_token(tok)
         if tok not in tokens:
-            raise Usage("--folder names %s, which is not one of the --sessions tokens" % tok)
+            raise Usage("--folder names %s, which is not one of the %s tokens" % (tok, mode))
         folders.append((tok, path))
-    return print_sessions(sessions(a.repo, tokens, folders))
+    return folders
+
+
+# ==============================================================================================
+# --started: update-context's Step 1 merges what the sessions this session started finished, before
+# the wrap commits. The owner's word, 2026-11-04, given in advance, is what the app's rule for
+# started sessions asks for. A merge is built and checked as an object and lands by fast-forward, so
+# the checkout holds no merge state at any point. Measured on a scratch repo: during a real
+# `git merge --no-commit`, a sibling's `git commit -- path` fails outright, and a commit that moves
+# the branch from a temp index (file-inbox.py's way) is silently reverted by the merge commit; and
+# one staged file of a sibling's stops the merge from starting. Here none of those can happen.
+# ==============================================================================================
+
+MERGE_CHECK = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "device-sync",
+                                            "scripts", "merge-check.py"))
+MERGE_CHECK_TIMEOUT = 600  # seconds
+
+
+def merge_check(repo, sha):
+    """device-sync's merge-check.py on one two-parent merge commit: (its exit status, its output),
+    or (None, why) when it could not run, which is never a clean result."""
+    if not os.path.isfile(MERGE_CHECK):
+        return None, "%s is not there" % MERGE_CHECK
+    try:
+        r = subprocess.run([sys.executable, MERGE_CHECK, "--repo", repo, "--commit", sha], capture_output=True,
+                           encoding="utf-8", errors="replace", timeout=MERGE_CHECK_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        return None, "it timed out after %ss" % MERGE_CHECK_TIMEOUT
+    return r.returncode, r.stdout + r.stderr
+
+
+def another_sessions(g, c, tok):
+    """Whether commit c's one stamp is a different session's than tok. A CLI id stamped alone under
+    a local_ token says nothing either way: the hook may not have seen the app id."""
+    kind, ident = g.ident(c)
+    if kind != ONE or in_adopted(ident, {tok}):
+        return False
+    return ident[1] is not None or not tok.startswith("local_")
+
+
+def changed_since(repo, base, rev):
+    return set(git(repo, "diff", "--name-only", "--no-renames", base, rev).stdout.splitlines())
+
+
+def merge_branch(repo, tok, branch, head_branch, g):
+    """One started session's branch into HEAD, or the reason it stays out. Nothing changes until the
+    final fast-forward, which git refuses, changing nothing, when HEAD moved, a dirty or untracked
+    file would be overwritten, or a merge is already in progress (that merge is someone else's: it
+    is never aborted). Returns merged (the commit), nothing (HEAD reaches the branch), or why."""
+    m = {"token": tok, "branch": branch, "merged": None, "nothing": False, "why": None, "findings": [], "both": [],
+         "ahead": 0, "mine": 0, "by_hand": False}
+    ref = "refs/heads/" + branch  # a tag of the same name would win over the bare name
+    got = git(repo, "rev-parse", "--verify", "-q", ref + "^{commit}", check=False)
+    if got.returncode != 0:
+        m["why"] = "no local branch %s in this repository" % branch
+        return m
+    tip = got.stdout.strip()
+    head = git(repo, "rev-parse", "HEAD").stdout.strip()
+    ahead = git(repo, "rev-list", "%s..%s" % (head, tip)).stdout.split()
+    if not ahead:
+        m["nothing"] = True
+        return m
+    m["ahead"] = len(ahead)
+    if head_branch is None:
+        m["why"] = "HEAD is detached, so there is no branch to merge into"
+        return m
+    work = [c for c in ahead if c in g.parents and not g.is_merge(c)]
+    m["mine"] = sum(1 for c in work if adopts(g, c, tok))
+    if work and all(another_sessions(g, c, tok) for c in work):
+        m["why"] = "every commit on it carries another session's stamp"
+        return m
+    base = git(repo, "merge-base", head, tip, check=False)
+    if base.returncode != 0:
+        m["why"] = "it shares no history with HEAD"
+        return m
+    base = base.stdout.strip()
+    m["both"] = sorted(changed_since(repo, base, head) & changed_since(repo, base, tip))
+    built = git(repo, "merge-tree", "--write-tree", "-z", "--name-only", "--no-messages", head, tip, check=False)
+    fields = built.stdout.split("\x00")
+    if built.returncode == 1 and _SHA_RE.fullmatch(fields[0]):
+        m["why"] = "conflict in %s" % ", ".join(f for f in fields[1:] if f)
+        m["by_hand"] = True
+        return m
+    if built.returncode != 0:
+        m["why"] = "git merge-tree failed (it needs git 2.38 or later): %s" % " ".join(built.stderr.split())
+        return m
+    msg = ["-m", "Merge started session's branch %s into %s" % (branch, head_branch),
+           "-m", "Session: %s. %d commit(s). Wrap merge: merge-check clean, verify loop not run." % (tok, len(ahead))]
+    value, _why = session_from_env()
+    if value:
+        msg += ["-m", "%s: %s" % (SESSION_KEY, value)]
+    made = git(repo, "commit-tree", fields[0], "-p", head, "-p", tip, *msg, check=False)
+    if made.returncode != 0:
+        m["why"] = "git commit-tree failed: %s" % " ".join(made.stderr.split())
+        return m
+    commit = made.stdout.strip()
+    rc, out = merge_check(repo, commit)
+    if rc is None:
+        m["why"] = "merge-check could not run: %s" % out
+        return m
+    if rc != 0:
+        m["why"] = "merge-check findings"
+        m["findings"] = [ln for ln in out.splitlines() if ln.startswith(("FINDING", "UNUSED"))] or out.splitlines()
+        m["by_hand"] = True
+        return m
+    landed = git(repo, "merge", "--ff-only", commit, check=False)
+    if landed.returncode != 0:
+        m["why"] = "git refused the fast-forward: %s" % " ".join((landed.stderr or landed.stdout).split())
+        return m
+    m["merged"] = commit
+    return m
+
+
+def print_merge(m):
+    print("merge session %s, branch %s:" % (m["token"], m["branch"]))
+    if m["nothing"]:
+        print("  nothing to merge: HEAD reaches it")
+    elif m["merged"]:
+        print("  MERGED %d commit(s), %d with its stamp, as %s; ran merge-check (clean); did not run the verify loop"
+              % (m["ahead"], m["mine"], m["merged"][:9]))
+        print("  both sides changed %s" % ("%d file(s): %s" % (len(m["both"]), ", ".join(m["both"])) if m["both"]
+                                           else "no file"))
+    else:
+        print("  NOT MERGED: %s; nothing changed" % m["why"])
+        for ln in m["findings"]:
+            print("    %s" % ln)
+        if m["by_hand"]:
+            print("  by hand, device-sync Step 1a: git merge --no-ff --no-edit refs/heads/%s" % m["branch"])
+
+
+def uncommitted_paths(path):
+    """The paths uncommitted() counts."""
+    out = git(path, "status", "--porcelain", "--untracked-files=all").stdout
+    return [ln[3:] for ln in out.split("\n") if ln.strip()]
+
+
+def open_items(repo, s, merged, running, named):
+    """One line per thing that withholds the wrap's closing line, read after the merges."""
+    items = []
+    head = s["head"]
+    for t in s["tokens"]:
+        tok = t["token"]
+        m = merged.get(tok)
+        if tok in running:
+            items.append("session %s: still running; never stopped, never merged: ask whether to wait" % tok)
+        elif tok not in named and tok not in merged:
+            items.append("session %s: no --merge, --is-running or --name-only given" % tok)
+        lead = "session %s: " % tok
+        if tok in named:
+            lead += "named only (%s): " % named[tok]
+        failed = "branch %s" % m["branch"] if m and m["why"] else None
+        if failed:
+            items.append("branch %s (session %s): %s" % (m["branch"], tok, m["why"]))
+        seen = set()
+        for grp in t["elsewhere"]:
+            seen.update(grp["shas"])
+            if grp["label"] != failed:
+                items.append("%s%d commit(s) on %s HEAD does not reach" % (lead, len(grp["shas"]), grp["label"]))
+        looked = bool(m and m["branch"])
+        for f in t["folders"]:
+            if f["uncommitted"] is None:
+                items.append("session %s: folder %s: %s: not checked here" % (tok, f["path"], f["where"]))
+                continue
+            looked = True
+            if f["here"]:
+                continue  # this checkout: its dirty paths and its commits are the wrap's own
+            if f["uncommitted"]:
+                paths = uncommitted_paths(f["path"])
+                items.append("session %s: folder %s: %d uncommitted, never committed for it: %s"
+                             % (tok, f["path"], len(paths), ", ".join(paths)))
+            if f["head"] and not failed:
+                unseen = [c for c in git(repo, "rev-list", "%s..%s" % (head, f["head"])).stdout.split()
+                          if c not in seen]
+                if unseen:
+                    items.append("%s%d commit(s) on the folder's %s HEAD does not reach, matching no stamp"
+                                 % (lead, len(unseen), f["branch"]))
+        if not t["on_head"] and not t["elsewhere"] and not looked and tok not in running:
+            items.append("session %s: unknown: no matching stamped commits found, and no branch or folder to look at"
+                         % tok)
+    return items
+
+
+def run_started(a):
+    """--started from the parsed arguments: the merges, the --sessions report, the verdict."""
+    if a.sessions is not None or a.wrap or a.since or a.candidates:
+        raise Usage("--started cannot be combined with --sessions, --wrap, --since or --candidates")
+    if a.until or a.json or a.tip or a.session is not None:
+        raise Usage("--until, --json, --tip and --session do not apply to --started")
+    tokens = list(dict.fromkeys(session_token(t) for t in a.started))
+    folders = parse_folders(a.folder, tokens, "--started")
+    merges, running, named = {}, set(), {}
+
+    def mine(raw, flag):
+        tok = session_token(raw)
+        if tok not in tokens:
+            raise Usage("%s names %s, which is not one of the --started tokens" % (flag, tok))
+        if tok in merges or tok in running or tok in named:
+            raise Usage("%s has more than one disposition: give each token one disposition" % tok)
+        return tok
+
+    for raw in a.merge or ():
+        tok, _sep, branch = raw.partition("=")
+        merges[mine(tok, "--merge")] = branch or None
+    for raw in a.is_running or ():
+        running.add(mine(raw, "--is-running"))
+    for raw in a.name_only or ():
+        tok, _sep, reason = raw.partition("=")
+        if not reason:
+            raise Usage("--name-only takes TOKEN=REASON, not %r" % raw)
+        named[mine(tok, "--name-only")] = reason
+    s = sessions(a.repo, tokens, folders)
+    if s["incomplete"]:
+        print("merged nothing: %s" % INCOMPLETE)
+        return print_sessions(s)
+    by_token = dict((t["token"], t) for t in s["tokens"])
+    results = {}
+    for tok in tokens:
+        if tok not in merges:
+            continue
+        branch = merges[tok] or next((f["branch_name"] for f in by_token[tok]["folders"] if f["branch_name"]), None)
+        if branch is None:
+            results[tok] = {"token": tok, "branch": None, "merged": None, "nothing": False, "why": None}
+            print("merge session %s: no branch on record and none from --folder" % tok)
+            continue
+        results[tok] = merge_branch(a.repo, tok, branch, s["head_branch"], s["graph"])
+        print_merge(results[tok])
+    if any(m["merged"] for m in results.values()):
+        s = sessions(a.repo, tokens, folders)
+    code = print_sessions(s)
+    items = open_items(a.repo, s, results, running, named)
+    if items:
+        print('open: %d item(s), so no "Done — safe to close.":' % len(items))
+        for it in items:
+            print("  %s" % it)
+    else:
+        print("clear: every started session's committed work is on HEAD, and no folder holds uncommitted work")
+    return 2 if code == 2 else (1 if items else 0)
 
 
 def build_parser():
@@ -1529,16 +1796,24 @@ def build_parser():
     ap.add_argument("--session", metavar="VALUE")
     ap.add_argument("--sessions", nargs="+", metavar="TOKEN")
     ap.add_argument("--folder", action="append", metavar="TOKEN=PATH")
+    ap.add_argument("--started", nargs="+", metavar="TOKEN")
+    ap.add_argument("--merge", action="append", metavar="TOKEN[=BRANCH]")
+    ap.add_argument("--is-running", action="append", metavar="TOKEN")
+    ap.add_argument("--name-only", action="append", metavar="TOKEN=REASON")
     return ap
 
 
 def main(argv=None):
     a = build_parser().parse_args(argv)
     try:
+        if a.started is not None:
+            return run_started(a)
+        if a.merge or a.is_running or a.name_only:
+            raise Usage("--merge, --is-running and --name-only apply to --started only")
         if a.sessions is not None:
             return run_sessions(a)
         if a.folder:
-            raise Usage("--folder applies to --sessions only")
+            raise Usage("--folder applies to --sessions and --started only")
         if a.candidates:
             return run_candidates(a)
         if a.session is not None:

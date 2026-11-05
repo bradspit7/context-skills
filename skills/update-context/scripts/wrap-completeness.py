@@ -1559,6 +1559,11 @@ MERGE_CHECK = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__fi
 MERGE_CHECK_TIMEOUT = 600  # seconds
 
 
+# The landing. git's defaults would overwrite an ignored local file and, under merge.autoStash, stash
+# a sibling's staged work and reapply it unstaged, each while reporting success.
+FF_LAND = ("merge", "--ff-only", "--no-overwrite-ignore", "--no-autostash")
+
+
 def merge_check(repo, sha):
     """device-sync's merge-check.py on one two-parent merge commit: (its exit status, its output),
     or (None, why) when it could not run, which is never a clean result."""
@@ -1581,15 +1586,43 @@ def another_sessions(g, c, tok):
     return ident[1] is not None or not tok.startswith("local_")
 
 
+def carried_off(repo, s, tok, tip, head, ahead, left_out):
+    """Why merging tok's branch would also bring in a session this wrap leaves out, or None: that
+    session's stamped commits in the range (a paired CLI id's alone included, which adoption does not
+    cover), or commits on its folder's HEAD. When the other built on this branch (this tip is an
+    ancestor of its HEAD) that HEAD adds nothing, and tok's own commits are tok's wherever they also
+    sit."""
+    g = s["graph"]
+    by_token = dict((t["token"], t) for t in s["tokens"])
+
+    def alone(t):
+        return {c for p in by_token[t]["pairs"] for c in p["alone"]}
+
+    own = {c for p in by_token[tok]["pairs"] if not p["ambiguous"] for c in p["alone"]}  # an ambiguous id proves no one's
+    for other in left_out:
+        got = {c for c in ahead if c in g.parents and adopts(g, c, other)}
+        got.update(alone(other) & set(ahead))
+        for f in by_token[other]["folders"]:
+            if not f["head"] or f["here"] or git(repo, "merge-base", "--is-ancestor", tip, f["head"],
+                                                 check=False).returncode == 0:
+                continue
+            theirs = set(git(repo, "rev-list", "%s..%s" % (head, f["head"])).stdout.split()) - own
+            got.update(c for c in theirs if c in ahead and not (c in g.parents and adopts(g, c, tok)))
+        if got:
+            return "it would also bring in %d commit(s) of session %s, which this wrap leaves out" % (len(got), other)
+    return None
+
+
 def changed_since(repo, base, rev):
     return set(git(repo, "diff", "--name-only", "--no-renames", base, rev).stdout.splitlines())
 
 
-def merge_branch(repo, tok, branch, head_branch, g):
+def merge_branch(repo, tok, branch, s, left_out):
     """One started session's branch into HEAD, or the reason it stays out. Nothing changes until the
     final fast-forward, which git refuses, changing nothing, when HEAD moved, a dirty or untracked
     file would be overwritten, or a merge is already in progress (that merge is someone else's: it
     is never aborted). Returns merged (the commit), nothing (HEAD reaches the branch), or why."""
+    g, head_branch = s["graph"], s["head_branch"]
     m = {"token": tok, "branch": branch, "merged": None, "nothing": False, "why": None, "findings": [], "both": [],
          "ahead": 0, "mine": 0, "by_hand": False}
     ref = "refs/heads/" + branch  # a tag of the same name would win over the bare name
@@ -1607,10 +1640,16 @@ def merge_branch(repo, tok, branch, head_branch, g):
     if head_branch is None:
         m["why"] = "HEAD is detached, so there is no branch to merge into"
         return m
+    if any(c not in g.parents for c in ahead):
+        m["why"] = "it moved after it was inspected: run this check again"
+        return m
     work = [c for c in ahead if c in g.parents and not g.is_merge(c)]
     m["mine"] = sum(1 for c in work if adopts(g, c, tok))
     if work and all(another_sessions(g, c, tok) for c in work):
         m["why"] = "every commit on it carries another session's stamp"
+        return m
+    m["why"] = carried_off(repo, s, tok, tip, head, ahead, left_out)
+    if m["why"]:
         return m
     base = git(repo, "merge-base", head, tip, check=False)
     if base.returncode != 0:
@@ -1646,7 +1685,7 @@ def merge_branch(repo, tok, branch, head_branch, g):
         m["findings"] = [ln for ln in out.splitlines() if ln.startswith(("FINDING", "UNUSED"))] or out.splitlines()
         m["by_hand"] = True
         return m
-    landed = git(repo, "merge", "--ff-only", commit, check=False)
+    landed = git(repo, *FF_LAND, commit, check=False)
     if landed.returncode != 0:
         m["why"] = "git refused the fast-forward: %s" % " ".join((landed.stderr or landed.stdout).split())
         return m
@@ -1668,7 +1707,10 @@ def print_merge(m):
         for ln in m["findings"]:
             print("    %s" % ln)
         if m["by_hand"]:
-            print("  by hand, device-sync Step 1a: git merge --no-ff --no-edit refs/heads/%s" % m["branch"])
+            print("  by hand, in a worktree, so this checkout never holds a merge: git worktree add --detach <path> HEAD")
+            print("    there: git merge --no-ff --no-edit refs/heads/%s; settle and check it under device-sync Step 1a"
+                  % m["branch"])
+            print("    here: git %s <its sha>; if HEAD moved it refuses: merge HEAD there and repeat" % " ".join(FF_LAND))
 
 
 def uncommitted_paths(path):
@@ -1699,6 +1741,15 @@ def open_items(repo, s, merged, running, named):
             seen.update(grp["shas"])
             if grp["label"] != failed:
                 items.append("%s%d commit(s) on %s HEAD does not reach" % (lead, len(grp["shas"]), grp["label"]))
+        for p in t["pairs"]:
+            off = [(c, w) for c, w in zip(p["alone"], p["where"]) if c not in s["graph"].ancestors(head)]
+            seen.update(c for c, _w in off)
+            if off and p["ambiguous"]:
+                items.append("session %s: paired CLI id %s is ambiguous (%d app ids): %d commit(s) HEAD does not "
+                             "reach, not attributed" % (tok, p["cli"], len(p["apps"]), len(off)))
+            elif off:
+                items.append("%s%d commit(s) stamped with paired CLI id %s alone, on %s, HEAD does not reach"
+                             % (lead, len(off), p["cli"], "; ".join(sorted({w for _c, w in off}))))
         looked = bool(m and m["branch"])
         for f in t["folders"]:
             if f["uncommitted"] is None:
@@ -1721,6 +1772,15 @@ def open_items(repo, s, merged, running, named):
             items.append("session %s: unknown: no matching stamped commits found, and no branch or folder to look at"
                          % tok)
     return items
+
+
+def print_verdict(items):
+    if items:
+        print('open: %d item(s), so no "Done — safe to close.":' % len(items))
+        for it in items:
+            print("  %s" % it)
+    else:
+        print("clear: every started session's committed work is on HEAD, and no folder holds uncommitted work")
 
 
 def run_started(a):
@@ -1754,9 +1814,21 @@ def run_started(a):
     s = sessions(a.repo, tokens, folders)
     if s["incomplete"]:
         print("merged nothing: %s" % INCOMPLETE)
-        return print_sessions(s)
+        code = print_sessions(s)
+        print_verdict(["%s: %s" % (INCOMPLETE, what) for what in s["incomplete"]])
+        return code
+    try:
+        return merge_and_report(a, tokens, folders, s, merges, running, named)
+    except Usage as ex:  # after a merge too: what merged has been said, and the verdict still reads
+        print_verdict([str(ex)])
+        return 2
+
+
+def merge_and_report(a, tokens, folders, s, merges, running, named):
+    """--started once the first inspection reads whole: the merges, the report, the verdict."""
     by_token = dict((t["token"], t) for t in s["tokens"])
     results = {}
+    left_out = [t for t in tokens if t not in merges]
     for tok in tokens:
         if tok not in merges:
             continue
@@ -1765,18 +1837,13 @@ def run_started(a):
             results[tok] = {"token": tok, "branch": None, "merged": None, "nothing": False, "why": None}
             print("merge session %s: no branch on record and none from --folder" % tok)
             continue
-        results[tok] = merge_branch(a.repo, tok, branch, s["head_branch"], s["graph"])
+        results[tok] = merge_branch(a.repo, tok, branch, s, left_out)
         print_merge(results[tok])
     if any(m["merged"] for m in results.values()):
         s = sessions(a.repo, tokens, folders)
     code = print_sessions(s)
-    items = open_items(a.repo, s, results, running, named)
-    if items:
-        print('open: %d item(s), so no "Done — safe to close.":' % len(items))
-        for it in items:
-            print("  %s" % it)
-    else:
-        print("clear: every started session's committed work is on HEAD, and no folder holds uncommitted work")
+    items = open_items(a.repo, s, results, running, named) + ["%s: %s" % (INCOMPLETE, w) for w in s["incomplete"]]
+    print_verdict(items)
     return 2 if code == 2 else (1 if items else 0)
 
 

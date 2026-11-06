@@ -1236,7 +1236,9 @@ def main(argv=None):
     ap.add_argument("--body-file", help="a file holding the commit body (UTF-8)")
     ap.add_argument("--trailer", action="append", default=[], help="an extra 'Key: value' trailer line, repeatable")
     v = ap.add_mutually_exclusive_group(required=True)
-    v.add_argument("--verify", metavar="COMMAND", help="the project's verify loop, run from the main checkout")
+    v.add_argument("--verify", metavar="COMMAND",
+                   help="the project's verify loop, run from the main checkout through the platform's default "
+                        "shell: cmd.exe on Windows, so a bash-form VAR=x cmd goes inside bash -c '...'")
     v.add_argument("--no-verify", action="store_true", help="run no verify (says so loudly)")
     ap.add_argument("--queue", default=DEFAULT_QUEUE, help="the queue file, relative to the checkout (default: %s)"
                     % DEFAULT_QUEUE)

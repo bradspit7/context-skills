@@ -111,8 +111,9 @@ GRAMMARS (detected per line)
                                                   #N its item cell leads with, never a later cell
     glyph-first       - <glyph> ...               no id: keyed by file:line
     inbox-block       a proposal block in a DOCKET-INBOX file: keyed by file#block, open
-    upgrade-entry     one '## ' entry of an upgrade list: keyed by file#block, open; the file's name
-                      says whether it is owed a build
+    upgrade-entry     one '## ' entry of an upgrade list: keyed by file#N from #1, open; the file's name
+                      says whether it is owed a build. Its '###' lines are body, and the text above
+                      its first entry is no row, so a search never returns it
     A numbered list in a handoff is not a docket, so numbered, alpha and table ids are
     project-level only in a docket/roadmap/archive/config file whose dominant grammar they
     are; elsewhere the row is keyed by file:line.
@@ -807,12 +808,28 @@ def _parse_cached(path, kind, rel, smap_items, raw):
         rows.append(row)
         return row
 
-    if kind in ("inbox", "upgrade-list"):
+    if kind == "upgrade-list":
+        # A list's rows are its '## ' entries and nothing else, the same lines the status line counts.
+        # The title and comment above the first entry are the file's rules, never a lesson, and a
+        # '###' is its entry's body. /codex-sweep grades what `search .` returns, so a row for either
+        # would have it grading a file's intro. A line above the first entry owns no row, and search
+        # drops those for this kind alone.
+        name = os.path.basename(path)
+        k, cur = 0, None
+        for i, ln in enumerate(lines):
+            if ln.startswith("## "):
+                k += 1
+                ident = "%s#%d" % (name, k)
+                cur = new_row(i, "upgrade-entry", ident, ident, ident.casefold(), "open")
+            row_of[i] = cur
+        return rows, row_of, lines, "upgrade-entry"
+
+    if kind == "inbox":
         # A filing that uses sub-headings for its candidates is split on those alone (its
         # bullets are the candidates' fields); one without headings is split on the
         # backlog index's proposal-lead shapes after a blank line. Text before the first
-        # block is block 0. An upgrade list has the same shape: '## ' entries, bullets as fields.
-        grammar = "inbox-block" if kind == "inbox" else "upgrade-entry"
+        # block is block 0.
+        grammar = "inbox-block"
         name = os.path.basename(path)
         by_heading = any(SUBHEADING_RE.match(ln) for ln in lines)
         k, cur = 0, None
@@ -1032,6 +1049,8 @@ def search(pattern, scope="all", parent=None, ignore_case=True):
                     continue
                 row = f["row_of"][i]
                 if row is None:
+                    if f["kind"] == "upgrade-list":
+                        continue
                     rel = "%s:%d" % (f["rel"], i + 1)
                     row = {"id": rel, "label": None, "key": "~" + rel.casefold(), "grammar": "loose",
                            "state": "unknown", "line": i + 1, "head": ln.rstrip(), "stub": False,

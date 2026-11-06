@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-11-05.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-11-05.3 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -167,7 +167,7 @@ processes the inbox under these same rules — builds it, lists it, notes it, or
 three files at the project root, all in one form: a `## YYYY-MM-DD · <title>` heading per item, then
 `- **Lesson:**`, `- **Better because:**` (one line in plain words, no file names), `- **Target:**`,
 `- **RED:**`, `- **Source:**` bullets (plus `- **Partial:**` once a stopped helper's work is parked, Step 5
-item 4).
+item 4, and an optional `- **Needs own session:** <why>`, Step 5).
 
 - **`UPGRADE-QUEUE.md`: Build next, about 10. File order is build order.** What the owner has chosen comes
   first, unless something is seriously broken right now. **The owner's picks go to the top.** Everything
@@ -180,7 +180,7 @@ item 4).
   already known.
 
 A full list shows as one briefing line and is never a question for the owner: a full list sends a new
-lesson to `UPGRADE-NEXT.md` or notes.
+lesson to `UPGRADE-NEXT.md` or notes, unless it beats an entry there, which then moves down (Step 5 item 2).
 
 ## Step 5 — Build one per session, early (never at a wrap)
 
@@ -191,20 +191,26 @@ for 17 more, and its report promised to apply the build "when it returns", so th
 A build started at the wrap is one the owner waits for, however it runs.
 
 **A session's build starts early** (one per session), so it lands while the owner is still working:
-- **At session start:** when the briefing's `UPGRADES` line shows a non-empty `UPGRADE-QUEUE.md`,
+- **At session start:** when the briefing's `UPGRADES` line shows entries in `UPGRADE-QUEUE.md`,
   take its **first** entry and **check it against the rule (Step 3) right before building**. If it fails,
-  move it to `UPGRADE-NOTES.md` with the reason and take the next; commit the move with a pathspec before
-  any helper starts. **No candidate means no build.** The builder has no duty to stay busy. Start the one
-  that passes right after the briefing, in the background, and go on with the owner's
+  move it to `UPGRADE-NOTES.md` with the reason and take the next. An empty `UPGRADE-QUEUE.md` with entries
+  in `UPGRADE-NEXT.md` moves the top one up, then takes it through the same check. Commit any move with a
+  pathspec before any helper starts. **No candidate means no build.** The builder has no duty to stay busy.
+  Start the one that passes right after the briefing, in the background, and go on with the owner's
   request. **When that entry carries a `- **Partial:** <patch> at <base>` bullet** (an earlier helper's
   parked work, item 4), the build starts from it, not from scratch:
   `python ~/.claude/skills/reflect-upgrades/scripts/park-worktree.py --unpark <patch> --into <worktree dir> --branch build/<topic>`
   creates the helper's worktree at the patch's base with the partial applied (read from its committed
   blob); the helper commits that as its starting point, merges the local HEAD, then builds. Anything the
   partial recorded (a FAILED count, a passing run) is a **lead, not a result**: re-run it.
-- **Mid-session:** a nudge or manual firing starts this session's build when none has started yet --
-  its new lesson on rungs 1-5 if it passes Step 3 and fits one session, else the first queued entry that
-  passes.
+- **Mid-session:** a nudge or manual firing starts this session's build when none has started yet. File
+  order is build order here too: a new lesson on rungs 1-5 is placed by Step 4's order, and the build is
+  the first entry that passes Step 3, which is the new lesson only if it was placed first. On a full list,
+  a lesson that would land last goes to `UPGRADE-NEXT.md` and is not this session's build.
+- **An entry no helper may build:** one with a `- **Needs own session:**` bullet, or whose target item 6
+  forbids, is not started by a helper, and "first" means the first entry a helper may build. The briefing
+  names it and offers it as its own owner-started session (a session whose whole task it is), or it moves
+  to the project's docket so it stops using a list slot.
 - **Room on the list:** when `UPGRADE-QUEUE.md` holds fewer than about 10, move the top of `UPGRADE-NEXT.md`
   up. A docket row comes on only if it passes the rule (central: from `## Open — pick up here` in
   `roadmap.md`), its `- **Source:**` naming the row id; the row stays in the docket until the build that
@@ -218,8 +224,8 @@ A build started at the wrap is one the owner waits for, however it runs.
 2. **Write the spec on the main thread:** the incident command and output, the target file, the RED
    condition (Step 3's five fields). **The lesson must be in `UPGRADE-QUEUE.md` before the helper
    starts** — a queued item already is; write a new lesson's entry now, at its place in the order, and on
-   a full list move the last entry down to `UPGRADE-NEXT.md`. That entry is what carries the lesson if the
-   build never lands.
+   a full list move the last entry down to `UPGRADE-NEXT.md`: the entry moved down is never the one being
+   built. The queue entry is what carries the lesson if the build never lands.
 3. **Hand it to a fresh small-context helper in the background** that builds the check in its own
    worktree **outside the project root**, made by hand from the local HEAD:
    `git worktree add ../<repo>-<topic> -b build/<topic> <local HEAD sha>`, then the Agent tool with
@@ -240,7 +246,8 @@ A build started at the wrap is one the owner waits for, however it runs.
    a wrap would run for those files (for a skill, `update-context`'s Step 7 probe):
    `python ~/.claude/skills/reflect-upgrades/scripts/land-build.py <worktree> --item "<queue title>" --subject "<subject>" --upgrade "<one plain sentence>" --verify "<the project's quick verify loop>"`
    (for example `--verify "bash run-tests.sh --quick"`, whatever the project's own quick test command
-   is). `--item` takes the title after `## YYYY-MM-DD · ` or that whole heading,
+   is). It runs through the platform's default shell, `cmd.exe` on Windows, so a bash-form `VAR=x cmd`
+   goes inside `bash -c '...'`. `--item` takes the title after `## YYYY-MM-DD · ` or that whole heading,
    `YYYY-MM-DD · <title>`; a landing with no queue entry (a fix-forward of a landed build, a design
    build) passes `--no-item "<why>"` instead: no queue edit and no `Upgrade:` trailer, every other
    check kept. **Pass the project's quick verify loop, not

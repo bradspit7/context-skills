@@ -263,6 +263,27 @@ emit_open_facts() {
   fi
 }
 
+# The one background agent an arrival starts. The block's ban is on READING helpers: a session starts
+# its one build right after its briefing whenever the upgrade queue holds something worth building,
+# arrivals included, because a wrap never builds. The first arrival after that change read a blanket
+# "NO helper agents" here as covering the build too, and built nothing with five items queued. With no
+# entry on either list there is nothing to promise. An empty queue with entries up next still has a
+# build to start, and which case this is comes off the UPGRADES section's own line, as the OPEN count
+# does; a heading that section cannot count still gets the general sentence.
+emit_arrival_build() {
+  local top
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=$(pwd)
+  LC_ALL=C grep -qs '^## ' "$top/UPGRADE-QUEUE.md" "$top/UPGRADE-NEXT.md" || return 0
+  echo "   ONE background agent still starts: a build, right after the briefing, when the upgrade queue holds"
+  echo "   something worth building (reflect-upgrades Step 5); the Next line says so in a few words."
+  case "$(printf '%s\n' "${REPORT:-$(emit_upgrade_status)}" | LC_ALL=C grep -m1 '^upgrade queue: ')" in
+    "upgrade queue: 0 item(s), up next "*)
+      echo "   The upgrade queue is empty, so take the next entry from up next: move its top one onto the queue,"
+      echo "   then put it through the same check."
+      ;;
+  esac
+}
+
 # ---------- arrival-path read bound for the PRIMARY doc, MEASURED ----------
 # The arrival briefing reads the handoff whole at or under ~40KB. Above that it reads only the
 # current-state portion: a handoff keeps current state at the top and rotated history below, so
@@ -413,13 +434,7 @@ emit_resume_class() {
     echo "   against this machine's runtime logs and that day's session transcripts first; ask the owner"
     echo "   only what they do not answer."
     echo "   Then offer the full briefing on request (\"brief me\")."
-    # The one background agent an arrival starts. The ban above is on READING helpers: a session
-    # starts its one build right after its briefing whenever the upgrade queue holds something worth
-    # building, arrivals included, because a wrap never builds. The first arrival after that change
-    # read a blanket "NO helper agents" here as covering the build too, and built nothing with five
-    # items queued.
-    echo "   ONE background agent still starts: a build, right after the briefing, when the upgrade queue holds"
-    echo "   something worth building (reflect-upgrades Step 5); the Next line says so in a few words."
+    emit_arrival_build
     emit_open_facts
   elif [ -z "$RC_REASONS" ]; then
     echo "SAME-DAY RESUME CANDIDATE — gate clean (0 FINDINGs); ${RC_PROV}; machine stamp matches; single-doc pattern.${RC_BASIS}"

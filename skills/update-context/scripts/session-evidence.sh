@@ -1,11 +1,27 @@
 #!/usr/bin/env bash
 # session-evidence.sh — consolidated end-of-session evidence gatherer for update-context.
-# Read-only. Prints a structured report. TRIAGE lines must each be classified in the
-# audit artifact; THRESHOLD lines trigger the rotation / memory-hygiene pass. Always exits 0.
+# Read-only on the project: the only files it writes are its own captures, in the git dir, never the
+# work tree. Prints a structured report. TRIAGE lines must each be classified in the audit artifact;
+# THRESHOLD lines trigger the rotation / memory-hygiene pass. Exits 0, or 2 for an unknown argument.
 #
-# Usage: bash session-evidence.sh
+# Usage: bash session-evidence.sh             the whole report, once per wrap; also saved to a capture
+#        bash session-evidence.sh --hygiene   only the HYGIENE scan, for the re-check after the writes
+#
+# SE_CAPTURE_DIR moves the capture out of the git dir.
 
 set -u
+
+# A typo must not fall through to the whole report: it would cost the full run and read as the scan
+# that was asked for (G#448).
+case "$#:${1:-}" in
+  0:) SE_MODE=full ;;
+  1:--hygiene) SE_MODE=hygiene ;;
+  *)
+    echo "session-evidence.sh: unknown argument: $*" >&2
+    echo "usage: bash session-evidence.sh [--hygiene]" >&2
+    exit 2
+    ;;
+esac
 
 # Emit the captured VALUE of every ACTIVE marker matching an ERE, one per line.
 #
@@ -265,8 +281,35 @@ _lost_marker_regions() {
   done
 }
 
+# The HYGIENE scan. One definition, two entry points: the whole report's section and --hygiene (G#352).
+_hygiene_section() {
+  echo "== HYGIENE (conflict markers + frontmatter trailing whitespace + dropped marker regions in markdown, in the about-to-commit set) =="
+  # Change set this wrap will commit = tracked-modified UNION untracked. `git diff --check` alone
+  # misses untracked NEW files (the exact class that shipped a `metadata:`-trailing-space memory file
+  # uncaught), so we union both. Trailing-whitespace is scoped to YAML frontmatter (between the leading
+  # `---` fences) on purpose: markdown BODY may legitimately end a line in two spaces (a hard break),
+  # so a blanket trailing-ws check would false-positive in prose-heavy projects — frontmatter never
+  # wants a trailing space, so this stays zero-false-positive across every project the mirror reaches.
+  HYG_OUT=$( { git diff --name-only HEAD 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sort -u | while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    # conflict markers: <<<<<<< / >>>>>>> are never markdown; skip lone ======= (setext underline)
+    if grep -InE '^(<{7}|>{7})' "$f" >/dev/null 2>&1; then
+      echo "THRESHOLD $f has a merge-conflict marker (<<<<<<< / >>>>>>>) — resolve before committing"
+    fi
+    if [ "$(sed -n '1p' "$f" 2>/dev/null | tr -d '\r')" = "---" ]; then
+      L=$(awk 'NR==1{infm=1;next} infm&&$0=="---"{exit} infm&&/[ \t]$/{printf "%s ",NR}' "$f" 2>/dev/null)
+      [ -n "$L" ] && echo "THRESHOLD $f frontmatter trailing whitespace (line(s): $L) — strip it; fails git diff --check (the 'metadata: ' class)"
+    fi
+    _lost_marker_regions "$f"
+  done )
+  if [ -n "$HYG_OUT" ]; then printf '%s\n' "$HYG_OUT"; else echo "(clean — no conflict markers, frontmatter trailing whitespace or dropped marker regions in the change set)"; fi
+}
+
+# The whole report. A function so one pipe can save it (see the end of this file).
+_full_report() {
 echo "== MACHINE =="
 hostname
+echo "$SE_CAPTURE_LINE"
 
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   echo
@@ -299,26 +342,7 @@ else
   fi
 
   echo
-  echo "== HYGIENE (conflict markers + frontmatter trailing whitespace + dropped marker regions in markdown, in the about-to-commit set) =="
-  # Change set this wrap will commit = tracked-modified UNION untracked. `git diff --check` alone
-  # misses untracked NEW files (the exact class that shipped a `metadata:`-trailing-space memory file
-  # uncaught), so we union both. Trailing-whitespace is scoped to YAML frontmatter (between the leading
-  # `---` fences) on purpose: markdown BODY may legitimately end a line in two spaces (a hard break),
-  # so a blanket trailing-ws check would false-positive in prose-heavy projects — frontmatter never
-  # wants a trailing space, so this stays zero-false-positive across every project the mirror reaches.
-  HYG_OUT=$( { git diff --name-only HEAD 2>/dev/null; git ls-files --others --exclude-standard 2>/dev/null; } | sort -u | while IFS= read -r f; do
-    [ -f "$f" ] || continue
-    # conflict markers: <<<<<<< / >>>>>>> are never markdown; skip lone ======= (setext underline)
-    if grep -InE '^(<{7}|>{7})' "$f" >/dev/null 2>&1; then
-      echo "THRESHOLD $f has a merge-conflict marker (<<<<<<< / >>>>>>>) — resolve before committing"
-    fi
-    if [ "$(sed -n '1p' "$f" 2>/dev/null | tr -d '\r')" = "---" ]; then
-      L=$(awk 'NR==1{infm=1;next} infm&&$0=="---"{exit} infm&&/[ \t]$/{printf "%s ",NR}' "$f" 2>/dev/null)
-      [ -n "$L" ] && echo "THRESHOLD $f frontmatter trailing whitespace (line(s): $L) — strip it; fails git diff --check (the 'metadata: ' class)"
-    fi
-    _lost_marker_regions "$f"
-  done )
-  if [ -n "$HYG_OUT" ]; then printf '%s\n' "$HYG_OUT"; else echo "(clean — no conflict markers, frontmatter trailing whitespace or dropped marker regions in the change set)"; fi
+  _hygiene_section
 fi
 
 echo
@@ -1130,3 +1154,45 @@ echo "== VERDICT =="
 echo "Every TRIAGE line needs a class (commit/delete/leave-untracked). Every THRESHOLD line triggers"
 echo "the rotation or hygiene pass in THIS run. Porcelain paths missing from the audit artifact = incomplete wrap."
 echo "INFO lines are visibility-only (held or assessment); no mandatory action this run."
+echo "$SE_CAPTURE_LINE"
+}
+
+if [ "$SE_MODE" = hygiene ]; then
+  if git rev-parse --git-dir >/dev/null 2>&1; then
+    _hygiene_section
+  else
+    echo "== HYGIENE =="
+    echo "(not scanned -- not a git repo, so there is no change set to read)"
+  fi
+  exit 0
+fi
+
+# The capture. Wraps ran this report twice or more (measured from transcripts), partly because a first
+# run cut by `| head -80` hid sections they then ran it again to see. So the report goes to a file
+# whatever the caller does with stdout: only tee ignores SIGPIPE, so a closed pipe stops what the caller
+# sees and neither the report nor the file. One file per run, because sessions share a checkout: a
+# sibling's later run must not replace the report this wrap was told to read. Written to a temp name and
+# moved to the printed path only when whole, because a killed run runs no cleanup: the printed path then
+# fails loudly instead of returning part of a report. Whole means the file's last line, not tee's status,
+# which a closed pipe can set. Captures and killed runs' temp files over 7 days old are cleared.
+SE_CAPTURE_DIR=${SE_CAPTURE_DIR:-$(git rev-parse --absolute-git-dir 2>/dev/null)}
+if [ -z "$SE_CAPTURE_DIR" ]; then
+  SE_CAPTURE_LINE="CAPTURE: none (not a git repo) -- this output is the only copy of the report."
+  _full_report
+  exit 0
+fi
+SE_CAPTURE="$SE_CAPTURE_DIR/session-evidence-capture.$(date -u +%Y%m%dT%H%M%SZ).$$.txt"
+SE_CAPTURE_TMP="$SE_CAPTURE.tmp"
+if ! { : > "$SE_CAPTURE_TMP"; } 2>/dev/null; then
+  SE_CAPTURE_LINE="CAPTURE: unavailable (cannot write in $SE_CAPTURE_DIR) -- this output is the only copy of the report."
+  _full_report
+  exit 0
+fi
+find "$SE_CAPTURE_DIR" -maxdepth 1 -name 'session-evidence-capture.*' -mtime +7 -exec rm -f {} + 2>/dev/null
+SE_CAPTURE_LINE="CAPTURE: $SE_CAPTURE -- this whole report. Read a section from that file; do not run the script again for it."
+_full_report | ( trap '' PIPE; tee "$SE_CAPTURE_TMP" 2>/dev/null )
+if [ "$(tail -n 1 "$SE_CAPTURE_TMP" 2>/dev/null)" != "$SE_CAPTURE_LINE" ] || ! mv -f "$SE_CAPTURE_TMP" "$SE_CAPTURE" 2>/dev/null; then
+  rm -f "$SE_CAPTURE_TMP"
+  echo "session-evidence.sh: the capture was not saved: $SE_CAPTURE did not get the whole report" >&2
+fi
+exit 0

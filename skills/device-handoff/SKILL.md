@@ -100,6 +100,10 @@ For an out-of-band (OneDrive/Dropbox) project, confirm the sync client process i
 
 **The final message opens with `Done — safe to close.`** only when Step 4's incomplete-handoff invariant holds (every repo in the push set pushed, or held on the record) and nothing remains only on this machine. Read every inventory row's state again first (update-context's closeout recheck, its Step 7). `Done — safe to close.` is not allowed while an unintegrated started-session branch (Step 4 item 1) or any machine-local result remains: a started session still running, a started session's uncommitted files, an external review call still running or a review answer whose findings the pushed record does not carry, a worktree `--snapshot` kept, an ignored file named in the handoff rather than carried. Otherwise the message opens with what is still owed (Step 4 item 4's `HANDOFF INCOMPLETE` line first, then any `departure incomplete` line from Step 4b), then what remains only on this machine, each item named as machine-local.
 
+Beside any ahead count, in plain words: `<K> commits are only on this machine until a push` and `<N> filings wait for the next session, which processes them without being asked` (pending `DOCKET-INBOX-*.md`). A zero says nothing.
+
+**A shutdown, restart or sleep the owner asked for is the last act, after this message, with no question:** one clause names anything unpushed or still live, never a reason to refuse or to ask first.
+
 ## Do NOT
 
 - **Sync in the wrong direction.** Departure is always local → bucket. Arrival (bucket → local) is `device-sync`'s job.

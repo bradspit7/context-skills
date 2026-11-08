@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-11-05.3 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-11-07.1 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -229,7 +229,11 @@ A build started at the wrap is one the owner waits for, however it runs.
 3. **Hand it to a fresh small-context helper in the background** that builds the check in its own
    worktree **outside the project root**, made by hand from the local HEAD:
    `git worktree add ../<repo>-<topic> -b build/<topic> <local HEAD sha>`, then the Agent tool with
-   `run_in_background: true`, an agent type that has a shell and **no isolation flag**, told to work
+   `run_in_background: true` and an agent type that has a shell and **no isolation flag**. A lean build
+   agent that loads no instruction files is much cheaper to start, if you define one; it then knows only
+   its brief, so the brief carries the project's rules (item 6's forbidden files included) and names the
+   suites to run: the build's own and the project's cross-cutting lints, which scan every test file. It
+   is told to work
    only in that worktree's absolute path, **never to use `cd ..` or a `../` path, and to put scratch
    files in a `mktemp -d` dir** (2 of 3 helpers told only "write nothing outside it" still wrote a
    scratch file one level up, into a parent no `git status` sees), and **never to edit `UPGRADE-QUEUE.md`:

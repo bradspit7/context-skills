@@ -237,7 +237,11 @@ A build started at the wrap is one the owner waits for, however it runs.
    only in that worktree's absolute path, **never to use `cd ..` or a `../` path, and to put scratch
    files in a `mktemp -d` dir** (2 of 3 helpers told only "write nothing outside it" still wrote a
    scratch file one level up, into a parent no `git status` sees), and **never to edit `UPGRADE-QUEUE.md`:
-   the landing removes the entry**. It returns the diff plus RED and
+   the landing removes the entry**. A battery or selftest it writes that copies the tree and runs git
+   **copies no `.git`, file or directory, and runs its git with the variables
+   `git rev-parse --local-env-vars` lists removed from the environment** (a git hook in a linked
+   worktree exports `GIT_DIR` and `GIT_INDEX_FILE`, and a child that inherits them re-initialises or
+   stages into the real repository). It returns the diff plus RED and
    GREEN evidence. (Not the
    Agent tool's `isolation` option: it creates `<project root>/.claude/worktrees/agent-<id>/`, inside
    the tree, and, unless the `worktree.baseRef` setting is `head`, cuts it from origin's default

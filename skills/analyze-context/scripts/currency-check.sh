@@ -134,6 +134,11 @@ emit_carry_line() {
     echo "   worktree holding work HEAD does not carry -- park a stopped build helper's (reflect-upgrades'"
     echo "   park-worktree.py), drop the rest, never commit one's files."
   fi
+  # Only when the SIBLING REPOS section printed a line: a sibling repo the session-start sequence did not
+  # pull surfaces nowhere else on the slim path.
+  if [ "${SIBLING_LINES_N:-0}" -gt 0 ]; then
+    echo "   Carry the SIBLING REPOS lines too, verbatim; one that is behind or not checked means this project's session-start sequence (its CLAUDE.md) did not run here: run it before other work."
+  fi
 }
 
 # The docket half of the SAME-DAY read contract. The ARRIVAL path used to print it too and now
@@ -178,6 +183,10 @@ emit_arrival_surface() {
   if [ "${WORKTREE_LINES_N:-0}" != 0 ]; then
     echo "   The WORKTREES lines count on the Open line; to clear them, park a stopped build helper's (reflect-upgrades'"
     echo "   park-worktree.py), drop the rest, never commit one's files."
+  fi
+  # Only when a SIBLING REPOS line is behind or could not check: one at 0 needs nothing from the owner.
+  if [ "${SIBLING_STALE_N:-0}" -gt 0 ]; then
+    echo "   A SIBLING REPOS line is behind or not checked: say on the Do this line that the session-start pulls did not reach that repo, and run them before other work."
   fi
 }
 
@@ -483,6 +492,162 @@ emit_rulings() {
   fi
 }
 
+# ---------- SIBLING REPOS: the other repos this project's CLAUDE.md pulls at session start -- BOTH paths ----------
+# Some projects start every session by pulling OTHER repos too (a `cd <path> && git pull` block in their
+# CLAUDE.md), and this gate fetched only the current one. One project's session start pulls two other
+# repos: four sessions in a row ran this gate instead of that sequence, and in the fourth a sibling
+# really was behind while the report said nothing about it. So each sibling the CLAUDE.md pulls is
+# fetched (its upstream's remote only, bounded) and gets one line: how far behind it is, or why it could
+# not be checked (two when one folder is pulled both plainly and with its own target). It tells; it never pulls, merges or touches a sibling's working tree.
+# Its lines are state lines, never FINDINGs: a sibling behind does not make this project's handoff
+# wrong, its remedy is the session-start sequence the CLAUDE.md already mandates, and some sibling
+# repos drift ahead on their own (web edits), so a FINDING would turn routine same-day resumes into full
+# briefings. emit_carry_line and emit_arrival_surface name the section on the short paths.
+# CLAUDE.md text is never eval'd: quotes are stripped, `~` and $HOME are expanded here, and any other
+# shell variable is reported, not expanded. Called from both paths for the same reason as
+# emit_resume_class (G#359). A CLAUDE.md naming no sibling prints no section at all.
+SIB_Q="'"
+SIB_PATH_RE="(\"[^\"]*\"|${SIB_Q}[^${SIB_Q}]*${SIB_Q}|[^[:space:]&;|\"${SIB_Q}]+)"
+SIB_CD_RE="^[[:space:]]*cd[[:space:]]+${SIB_PATH_RE}[[:space:]]*&&[[:space:]]*git[[:space:]]+pull([[:space:];&|].*)?\$"
+SIB_GITC_RE="^[[:space:]]*git[[:space:]]+-C[[:space:]]+${SIB_PATH_RE}[[:space:]]+pull([[:space:];&|].*)?\$"
+# git pull options whose value may come as the next word (`--depth 1`): that word is the option's value, not
+# a remote or branch. Every entry REQUIRES a value; an option missing from this list makes its value read as a
+# target, which says could not check (the visible direction), while a no-value option wrongly listed here would
+# swallow a real target and answer with the upstream's count, so add only options that require one.
+SIB_PULL_VALUE_OPTS=" --depth --deepen --shallow-since --shallow-exclude -j --jobs --upload-pack -o --server-option --negotiation-tip --refmap -s --strategy -X --strategy-option --cleanup "
+SIB_MAX=8
+
+# One sibling, in a subshell that cds into it (never `git -C` with a /c/... path: MSYS rewrites it).
+# Prints exactly one line. The fetch's output goes to /dev/null, never through $(...): a transport child
+# that outlives a killed git would hold a captured pipe open and hang the gate.
+_sib_check() {   # $1 = the path as written, $2 = its folder, $3 = the fetch bound in seconds
+  (
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_NAMESPACE GIT_PREFIX
+    cd "$2" 2>/dev/null || { echo "SIBLING $1: could not check -- no such folder"; exit 0; }
+    b=$(git symbolic-ref --quiet --short HEAD 2>/dev/null) || { echo "SIBLING $1: could not check -- detached HEAD"; exit 0; }
+    # The remote is decided BEFORE fetching: no upstream, no fetch.
+    r=$(git config "branch.$b.remote" 2>/dev/null)
+    if [ -z "$r" ] || [ -z "$(git config "branch.$b.merge" 2>/dev/null)" ]; then
+      echo "SIBLING $1: could not check -- no upstream for $b"; exit 0
+    fi
+    if [ -n "$SIB_HAVE_TIMEOUT" ]; then
+      GIT_TERMINAL_PROMPT=0 timeout "$3" git fetch --quiet "$r" </dev/null >/dev/null 2>&1; rc=$?
+    else
+      # No `timeout` command: a watchdog polls the background fetch and kills it at the bound.
+      GIT_TERMINAL_PROMPT=0 git fetch --quiet "$r" </dev/null >/dev/null 2>&1 &
+      pid=$!; t0=$SECONDS; rc=""
+      while kill -0 "$pid" 2>/dev/null; do
+        if [ $((SECONDS - t0)) -ge "$3" ]; then kill "$pid" 2>/dev/null; rc=124; break; fi
+        sleep 0.2 2>/dev/null || sleep 1
+      done
+      [ -n "$rc" ] || { wait "$pid"; rc=$?; }
+    fi
+    if [ "$rc" -eq 124 ]; then echo "SIBLING $1: could not check -- fetch timed out after $3s"; exit 0; fi
+    if [ "$rc" -ne 0 ]; then echo "SIBLING $1: could not check -- fetch failed (rc=$rc)"; exit 0; fi
+    up=$(git rev-parse --abbrev-ref "@{upstream}" 2>/dev/null) && n=$(git rev-list --count "HEAD..@{upstream}" 2>/dev/null) \
+      || { echo "SIBLING $1: could not check -- no upstream for $b"; exit 0; }
+    echo "SIBLING $1: behind $n ($b vs $up)"
+  ) 2>/dev/null
+}
+
+emit_sibling_repos() {
+  local root self line raw shown pre rest dir cdir wdir why s dup t a args skip explicit n=0 more=0 hdr="" seen=() words=() SIB_HAVE_TIMEOUT=""
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || root=$(pwd)
+  [ -f "$root/CLAUDE.md" ] || return 0
+  t=${CURRENCY_SIBLING_TIMEOUT:-15}
+  case "$t" in ''|*[!0-9]*) t=15 ;; esac
+  t=$((10#$t)); [ "$t" -ge 1 ] || t=15
+  command -v timeout >/dev/null 2>&1 && SIB_HAVE_TIMEOUT=1
+  # The project's own repository, by git common dir: its own `cd <this repo> && git pull` line and a
+  # linked worktree of it are never listed. -ef, not a string compare: Windows paths differ in case.
+  self=$(cd "$root" 2>/dev/null && s=$(git rev-parse --git-common-dir 2>/dev/null) && cd "$s" && pwd -P)
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'\r'}
+    if [[ $line =~ $SIB_CD_RE ]] || [[ $line =~ $SIB_GITC_RE ]]; then raw=${BASH_REMATCH[1]}; else continue; fi
+    # What follows `pull`: a flag is fine (with its value, SIB_PULL_VALUE_OPTS), and so is a command chained
+    # after it (`;`, `&&`, `|`, glued to the last word or not), but a remote or branch named
+    # on the line is a target the gate does not check. That line says could not check, never the configured
+    # upstream's count for a pull that goes somewhere else.
+    explicit=""; skip=""
+    args=${BASH_REMATCH[2]}
+    args=${args%%[;&|]*}   # a command chained after the pull ends it, whether or not a space comes first
+    read -r -a words <<< "$args"
+    for a in ${words[@]+"${words[@]}"}; do
+      if [ -n "$skip" ]; then skip=""; continue; fi
+      case "$a" in
+        '#'*) break ;;
+        -*) case "$SIB_PULL_VALUE_OPTS" in *" $a "*) skip=1 ;; esac ;;
+        *) explicit=1; break ;;
+      esac
+    done
+    case "$raw" in
+      \"*\"|\'*\') shown=${raw:1:${#raw}-2} ;;
+      *) shown=$raw ;;
+    esac
+    pre=""; rest=$shown
+    case "$rest" in
+      "~"|'$HOME'|'${HOME}') pre=$HOME; rest="" ;;
+      "~/"*) pre=$HOME; rest=${rest:1} ;;
+      '$HOME/'*) pre=$HOME; rest=${rest:5} ;;
+      '${HOME}/'*) pre=$HOME; rest=${rest:7} ;;
+    esac
+    why=""; dir=""; cdir=""
+    case "$rest" in *'$'*) why="the path uses a shell variable the gate does not expand" ;; esac
+    if [ -z "$why" ]; then
+      dir=$pre$rest
+      case "$dir" in /*|[A-Za-z]:[/\\]*) ;; *) dir="$root/$dir" ;; esac
+      if [ ! -d "$dir" ]; then
+        why="no such folder"
+      else
+        cdir=$(cd "$dir" 2>/dev/null && unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR \
+          && s=$(git rev-parse --git-common-dir 2>/dev/null) && cd "$s" && pwd -P)
+        if [ -z "$cdir" ]; then
+          why="not a git repository"
+        else
+          [ -n "$self" ] && [ "$cdir" -ef "$self" ] && continue
+          # De-duplicated by the checked-out folder, not the common dir: two linked worktrees of one sibling
+          # repo hold their own branches and upstreams, so each gets its own line; one folder named twice gets one.
+          # Keyed on the kind of pull too: a folder pulled plainly AND with its own target gets both lines, so a
+          # plain pull's count can never stand in for the target the gate did not check, in either order.
+          wdir=$(cd "$dir" 2>/dev/null && unset GIT_DIR GIT_WORK_TREE GIT_COMMON_DIR \
+            && s=$(git rev-parse --show-toplevel 2>/dev/null) && cd "$s" && pwd -P)
+          [ -n "$wdir" ] || wdir=$dir
+          dup=""
+          for s in ${seen[@]+"${seen[@]}"}; do
+            [ "${s%%|*}" = "x$explicit" ] && [ "$wdir" -ef "${s#*|}" ] && dup=1 && break
+          done
+          [ -n "$dup" ] && continue
+          seen+=("x$explicit|$wdir")
+        fi
+      fi
+    fi
+    [ -z "$why" ] && [ -n "$explicit" ] && why="the pull names its own remote or branch, which the gate does not check"
+    if [ "$n" -ge "$SIB_MAX" ]; then more=$((more + 1)); continue; fi
+    n=$((n + 1))
+    if [ -z "$hdr" ]; then
+      hdr=1
+      echo
+      echo "== SIBLING REPOS (other repos this project's CLAUDE.md pulls at session start) =="
+      # The routing line keeps the other sections' "(state lines, not FINDINGs -- carry " form, which
+      # _arrival_unrouted drops under --arrival; the arrival path routes these lines itself.
+      echo "(state lines, not FINDINGs -- carry them into the briefing; a sibling behind or not checked means this project's session-start sequence (its CLAUDE.md) did not run here: run it before other work)"
+    fi
+    if [ -n "$why" ]; then
+      echo "SIBLING $shown: could not check -- $why"
+    else
+      _sib_check "$shown" "$dir" "$t"
+    fi
+  done < "$root/CLAUDE.md"
+  [ "$more" -gt 0 ] && echo "SIBLING REPOS: could not check $more more (the gate checks at most $SIB_MAX sibling repos)"
+  return 0
+}
+
+# Counts the short paths key on: every SIBLING line, and those behind (N > 0) or not checked.
+count_sibling_lines() {   # $1 = captured output holding the SIBLING REPOS section
+  SIBLING_LINES_N=$(printf '%s\n' "$1" | grep -c '^SIBLING ')
+  SIBLING_STALE_N=$(printf '%s\n' "$1" | grep -cE '^SIBLING .*(: behind [1-9][0-9]* \(|could not check)')
+}
+
 # ---------- no-git fallback ----------
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   echo
@@ -512,6 +677,10 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
   # commits-behind analogue — a project with no history cannot have work land "after the
   # wrap" in any observable way, so the gate is dropped rather than faked, and the class
   # line says so instead of implying a check that did not run.
+  # The SIBLING REPOS section prints here too (G#359), and is counted before the class block reads it.
+  SIBLING_OUT=$(emit_sibling_repos | _arrival_unrouted)
+  if [ -n "$SIBLING_OUT" ]; then printf '%s\n' "$SIBLING_OUT"; fi
+  count_sibling_lines "$SIBLING_OUT"
   NG_DOC=""
   for f in "${DOCS[@]}"; do [ -f "$f" ] && NG_DOC="$f" && break; done
   if [ -n "$NG_DOC" ]; then
@@ -592,6 +761,9 @@ echo
 echo "== UPSTREAM =="
 UP=$(git log HEAD..@{upstream} --oneline 2>/dev/null | head -5)
 if [ -n "$UP" ]; then printf '%s\n' "$UP" | sed 's/^/FINDING unpulled-upstream: /'; else echo "no upstream drift (or no upstream configured)"; fi
+
+# The other repos this project's CLAUDE.md pulls at session start (state lines; prints nothing when none).
+emit_sibling_repos
 
 if [ -n "$DOC" ]; then
   echo
@@ -792,6 +964,7 @@ REPORT=$(emit_report | _arrival_unrouted)
 printf '%s\n' "$REPORT"
 FINDINGS_N=$(printf '%s\n' "$REPORT" | grep -c '^FINDING')
 WORKTREE_LINES_N=$(printf '%s\n' "$REPORT" | grep -cE '^(NOTE worktree-|WORKTREES: could not check)')
+count_sibling_lines "$REPORT"
 
 if [ -n "$DOC" ]; then
   # Git-path inputs to the shared emitter. Age comes from the last COMMIT touching the doc

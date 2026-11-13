@@ -3,7 +3,7 @@ name: reflect-upgrades
 description: Use after substantial work or a real finding to decide where each lesson should act - reuse an existing tool, fix the code, add a check the project already runs, a shared guard, a path rule, a skill step or a note - and to build one per session, early (never at a wrap). Fires on "did we learn anything that would help build or upgrade our tools", "reflect on upgrades", "/reflect-upgrades", at every update-context wrap, or proactively when a session produced durable learnings. A lesson stays in its own project unless it is a platform trap, a verified second bite, a fix to a shared artifact, or catastrophic-if-wrong.
 ---
 
-<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-11-07.1 -->
+<!-- canonical: ~/.claude/skills/reflect-upgrades/SKILL.md · version: 2026-11-12.2 -->
 <!-- Version-stamped so cross-estate reconciliations diff against a stamp, not archaeology.
      Bump the date-tag on any substantive edit; a fork adds its own provenance line here. -->
 
@@ -232,7 +232,9 @@ A build started at the wrap is one the owner waits for, however it runs.
    `run_in_background: true` and an agent type that has a shell and **no isolation flag**. A lean build
    agent that loads no instruction files is much cheaper to start, if you define one; it then knows only
    its brief, so the brief carries the project's rules (item 6's forbidden files included) and names the
-   suites to run: the build's own and the project's cross-cutting lints, which scan every test file. It
+   suites to run: the build's own and the project's cross-cutting lints, which scan every test file.
+   Where the project's runner prints its lint roster, the brief pastes that output, never a hand list
+   (for example `bash run-tests.sh --list-lints`; three hand lists each left one out). It
    is told to work
    only in that worktree's absolute path, **never to use `cd ..` or a `../` path, and to put scratch
    files in a `mktemp -d` dir** (2 of 3 helpers told only "write nothing outside it" still wrote a
@@ -242,7 +244,10 @@ A build started at the wrap is one the owner waits for, however it runs.
    `git rev-parse --local-env-vars` lists removed from the environment** (a git hook in a linked
    worktree exports `GIT_DIR` and `GIT_INDEX_FILE`, and a child that inherits them re-initialises or
    stages into the real repository). It returns the diff plus RED and
-   GREEN evidence. (Not the
+   GREEN evidence. **A mutation proof is delivered as a committed harness** in the project's own
+   harness home (the brief names the folder and a model file) or inside the build's own test file,
+   never a scratch run, and the brief's list of files it may change includes that harness (two builds
+   in one project proved their guards from a scratch copy and deleted it; each cost a second build). (Not the
    Agent tool's `isolation` option: it creates `<project root>/.claude/worktrees/agent-<id>/`, inside
    the tree, and, unless the `worktree.baseRef` setting is `head`, cuts it from origin's default
    branch rather than the local HEAD. Measured once: while one existed, every `rglob` test in the main
@@ -254,8 +259,10 @@ A build started at the wrap is one the owner waits for, however it runs.
    a wrap would run for those files (for a skill, `update-context`'s Step 7 probe):
    `python ~/.claude/skills/reflect-upgrades/scripts/land-build.py <worktree> --item "<queue title>" --subject "<subject>" --upgrade "<one plain sentence>" --verify "<the project's quick verify loop>"`
    (for example `--verify "bash run-tests.sh --quick"`, whatever the project's own quick test command
-   is). It runs through the platform's default shell, `cmd.exe` on Windows, so a bash-form `VAR=x cmd`
-   goes inside `bash -c '...'`. `--item` takes the title after `## YYYY-MM-DD · ` or that whole heading,
+   is), and with `--pre-verify "<the project's lint command>"`, which runs it in the build worktree on
+   the committed branch and refuses the landing if it fails (for example
+   `--pre-verify "bash run-tests.sh --lints"`). Both run through the platform's default shell, `cmd.exe`
+   on Windows, so a bash-form `VAR=x cmd` goes inside `bash -c '...'`. `--item` takes the title after `## YYYY-MM-DD · ` or that whole heading,
    `YYYY-MM-DD · <title>`; a landing with no queue entry (a fix-forward of a landed build, a design
    build) passes `--no-item "<why>"` instead: no queue edit and no `Upgrade:` trailer, every other
    check kept. **Pass the project's quick verify loop, not
@@ -264,7 +271,11 @@ A build started at the wrap is one the owner waits for, however it runs.
    the queue entry (and a Partial's `.patch` and `.base`) in one commit with the trailer and a pathspec,
    so a sibling session's staged work stays out. It refuses, changing nothing, a dirty worktree, a path
    main also changed since the branch's base, a main checkout dirty in a path it touches, or a title
-   that is not exactly one queue heading. It warns, never refuses, about anything in the worktree's
+   that is not exactly one queue heading. If your setup has a memory-headroom module
+   (`~/.claude/machine_load.py`; its contract is in the script's docstring), before it starts a test
+   tier it prints the machine's memory headroom and refuses under its floor (exit 75: finish or archive
+   an idle session, then land again); without one it prints that the headroom could not be read and
+   goes on. It warns, never refuses, about anything in the worktree's
    parent newer than the worktree. It byte-checks the COMMITTED tree (a check before `git add`
    reads an untracked new file as deleted and fails on identical bytes), and only then removes the
    worktree, before the gating verify run: `git worktree unlock <path>` first if the harness locked it,

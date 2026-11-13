@@ -9,7 +9,7 @@ was the only one run, so an estate lint its new test tripped stayed red; and the
 
   python land-build.py <worktree> (--item "<queue title>" | --no-item "<why there is no queue entry>")
                        --subject "<commit subject>" [--upgrade "<one plain sentence>"]
-                       (--verify "<command>" | --no-verify)
+                       (--verify "<command>" | --no-verify) [--pre-verify "<lint command>"]
                        [--body-file F] [--trailer "Key: value" ...] [--queue FILE] [--repo <checkout>]
                        [--no-codex-review | --codex-wait-min N] [--dry-run]
 
@@ -81,6 +81,16 @@ Run it from the main checkout (or name it with --repo). In order:
      Pass the project's quick verify loop, not only the build's own test: cross-cutting lints scan every
      test file, so a new test can turn a DIFFERENT suite red. --no-verify must be explicit and says loudly
      that nothing was verified.
+--pre-verify "<command>" runs the project's lint command IN THE BUILD WORKTREE, after step 1 and the parent check
+and before the review and step 2, through the same platform shell as --verify.
+The worktree holds the helper's commits and nothing uncommitted (step 1), so a lint that scans only the files git
+tracks sees the branch's new files: run in the main checkout before the commit it could not (measured: thirteen
+lints green before a helper's commit, one red after it). A non-zero exit refuses the landing with exit 74, naming
+the command and showing the end of its output; nothing on main changed and the worktree and branch are kept. The
+command is the project's own (for example `bash run-tests.sh --lints`); this tool hardcodes none.
+After a passing pre-verify every plan check runs again: a path this landing touches edited on main meanwhile, or a
+new commit on the branch, refuses with exit 70 and the edit is left as it is.
+Without the flag a landing is as before and prints one `PRE-VERIFY: none` line; --dry-run names the planned one.
 Between steps 1 and 2, on --dry-run too, it checks the worktree's PARENT: every top-level entry newer than the
 worktree (the mtime of its `.git` file), skipping the worktree and any repo or worktree, is printed with its
 mtime under a `PARENT CHECK WARNING` line, repeated after the verify. A helper that wrote outside its worktree
@@ -131,7 +141,20 @@ with --no-item, neither --item nor --no-item, neither --verify nor --no-verify, 
 refused, nothing changed (dry-run included); 71 committed, but the commit does not match the branch (the worktree
 and branch are kept, the verify is not run); 72 committed and byte-checked, but the worktree's folder is left
 INSIDE the main checkout (the verify is not run: it would read that folder); 73 the commit failed AND restoring
-the main checkout did not complete (the message names what is left).
+the main checkout did not complete (the message names what is left); 74 the --pre-verify command failed in the
+build worktree, nothing changed; 75 the machine is short of memory, nothing changed.
+
+MEMORY AND THE TIER LOCK (optional). Right after the step-1 checks, on --dry-run too, a landing that will run a
+--verify or --pre-verify (each one a test tier, which can take a long time) reads this machine's memory headroom
+through an optional module at ~/.claude/machine_load.py (LAND_BUILD_MACHINE_LOAD names another copy, honoured only
+with LAND_BUILD_TEST=1). Its contract: `check_headroom(what)` returns (verdict, line), the verdict "LOW" under the
+machine's floor and anything else otherwise, and `holder_line()` returns a line naming the test tier that holds a
+machine-wide tier lock, or "" when none does. The line is printed as one `MEMORY:` line; on a "LOW" verdict the
+landing is refused with exit 75 and nothing changed (measured: several landings' test tiers at once preceded a blue
+screen). With no such module, or one that cannot be loaded or raises, it prints `MEMORY: could not be read` and the
+landing goes on: a failed read never reads as room, and never blocks. Before the pre-verify and before the verify,
+when another test tier holds the tier lock, one `TIER LOCK:` line names it, so a landing that waits for it is not
+mistaken for a hung one (the pre-verify's own output is captured, so its waiting line would show only on failure).
 """
 import argparse
 import importlib.util
@@ -204,6 +227,17 @@ EXIT_REFUSED = 70
 EXIT_MISMATCH = 71
 EXIT_KEPT = 72
 EXIT_UNDO_FAILED = 73
+EXIT_PRE_VERIFY = 74
+EXIT_HEADROOM = 75
+
+# The machine's memory headroom and its test-tier lock (MEMORY AND THE TIER LOCK in the docstring): an optional
+# module; none at this path is one `MEMORY: could not be read` line, never a refusal. LAND_BUILD_MACHINE_LOAD, honoured
+# only with LAND_BUILD_TEST=1, names another copy (a test's, never this machine's real reading).
+MACHINE_LOAD = Path.home() / ".claude" / "machine_load.py"
+
+
+class PreVerifyFailed(Exception):
+    """The --pre-verify command exited non-zero in the build worktree; nothing on main was changed."""
 
 
 class Refused(Exception):
@@ -220,6 +254,10 @@ class Kept(Exception):
 
 class UndoFailed(Exception):
     """The commit failed and the main checkout could not be fully restored."""
+
+
+class HeadroomLow(Exception):
+    """The machine's memory headroom is under its floor; nothing was changed."""
 
 
 # A failed call's output lines that name a failure, printed ahead of its tail when the tail leaves them out.
@@ -848,6 +886,108 @@ def codex_finish(p, a):
               "unaffected" % (call_id, code, proc.returncode, c["err"]))
 
 
+def machine_load():
+    """(module, None), or (None, why it could not be loaded). Never raises."""
+    path = MACHINE_LOAD
+    if os.environ.get("LAND_BUILD_TEST") == "1" and os.environ.get("LAND_BUILD_MACHINE_LOAD"):
+        path = Path(os.environ["LAND_BUILD_MACHINE_LOAD"])
+    try:
+        spec = importlib.util.spec_from_file_location("machine_load", str(path))
+        if spec is None or spec.loader is None:
+            raise ImportError("no module at %s" % path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod, None
+    except Exception as e:  # noqa: BLE001 -- said as a reading that could not be made, never as room
+        return None, "%s could not be loaded: %s: %s" % (path, type(e).__name__, e)
+
+
+def check_memory(a):
+    """The MEMORY: line, before anything starts a tier; HeadroomLow under the machine's floor. A landing that runs
+    no verify and no pre-verify starts no tier and is not checked."""
+    if not (a.verify or a.pre_verify):
+        return
+    mod, why = machine_load()
+    verdict = None
+    if mod is not None:
+        try:
+            verdict, line = mod.check_headroom("this landing's test tiers")
+        except Exception as e:  # noqa: BLE001
+            why = "machine_load.check_headroom raised %s: %s" % (type(e).__name__, e)
+    if verdict is None:
+        print("MEMORY: could not be read (%s), so nothing says there is room for this landing's test tiers; not "
+              "blocking on it" % why)
+        return
+    print("MEMORY: " + line)
+    if verdict == "LOW":
+        raise HeadroomLow("the machine is short of memory (the MEMORY line above), so this landing does not start "
+                          "its test tiers; nothing changed, and the worktree and branch are kept. Land again once "
+                          "there is room")
+
+
+def say_tier(what):
+    """One TIER LOCK: line when another test tier holds the machine-wide lock, so a wait is not read as a hang."""
+    mod, _ = machine_load()
+    if mod is None:
+        return
+    try:
+        line = mod.holder_line()
+    except Exception:  # noqa: BLE001 -- an informational line only
+        return
+    if line:
+        print("TIER LOCK: %s; %s waits its turn if it runs a test tier" % (line, what))
+        sys.stdout.flush()
+
+
+NO_PRE_VERIFY = ("PRE-VERIFY: none -- no lint roster was run on the branch before the landing (--pre-verify "
+                 "\"<command>\" runs the project's lints in the build worktree first)")
+
+
+def run_pre_verify(p, a):
+    """--pre-verify: the project's own lint command, run IN THE BUILD WORKTREE before anything on main changes. The
+    worktree holds the helper's commits (step 1 refused uncommitted or untracked files), so a lint that scans only
+    the files git tracks sees the branch's new ones: the same lints run in the main checkout before the landing
+    commit cannot (a lint green before a helper's commit went red after it). The command is the project's, never
+    this tool's: land-build is shared, and knows no project's runner. A non-zero exit refuses the landing
+    (EXIT_PRE_VERIFY) naming the command and showing its output's end; nothing on main has changed, and the
+    worktree and branch are kept."""
+    if not a.pre_verify:
+        print(NO_PRE_VERIFY)
+        return
+    print("PRE-VERIFY: %s  (in the build worktree %s)" % (a.pre_verify, p["wt"]))
+    say_tier("the pre-verify")
+    sys.stdout.flush()
+    sys.stderr.flush()
+    r = subprocess.run(a.pre_verify, shell=True, cwd=str(p["wt"]), capture_output=True)
+    rc = r.returncode if r.returncode >= 0 else 128 - r.returncode
+    if rc:
+        raise PreVerifyFailed("the pre-verify \"%s\" exited %d in the build worktree %s, so the landing is refused: "
+                              "nothing on main changed, and the worktree and branch %s are kept. Fix the branch and "
+                              "land again. Its output ends:\n  %s" % (a.pre_verify, rc, p["wt"], p["branch"],
+                                                                       tail_text(r, what="pre-verify")))
+    print("PRE-VERIFY PASSED rc 0 (in the build worktree, on %s at %s)" % (p["branch"], p["tip"][:7]))
+
+
+def replan(p, a):
+    """After a pre-verify ran: every plan check again, so no long step sits between the last look at main and the
+    landing's first write. The pre-verify can take minutes while other sessions share the main checkout; an
+    uncommitted edit they made meanwhile to a path this landing touches (the queue, most likely) would otherwise be
+    overwritten, since main's HEAD did not move and the byte check compares against the old plan. A branch whose tip
+    moved is refused too: the lints passed on a different tree. Returns the fresh plan, carrying what main()
+    attached to the first one (parent_note)."""
+    try:
+        fresh = plan(a)
+    except Refused as e:
+        raise Refused("the main checkout or the build branch changed while the pre-verify ran, so the landing is "
+                      "refused and nothing on main was changed: %s" % e)
+    if fresh["tip"] != p["tip"]:
+        raise Refused("%s moved from %s to %s while the pre-verify ran: its lints passed on a different tree, so "
+                      "the landing is refused and nothing on main was changed; land again"
+                      % (p["branch"], p["tip"][:7], fresh["tip"][:7]))
+    fresh.update((k, v) for k, v in p.items() if k not in fresh)
+    return fresh
+
+
 def show(p, a):
     counts = {k: sum(1 for kk, _ in p["changes"] if kk[:1] == k) for k in "AMD"}
     print("DRY RUN -- nothing changed.")
@@ -863,6 +1003,11 @@ def show(p, a):
         print("queue: remove %r (%d line(s)) from %s" % (heading, len(p["entry"]), p["queue_rel"]))
     for path in p["partial_paths"]:
         print("partial: remove %s" % path)
+    if a.pre_verify:
+        print("pre-verify: run in the build worktree %s, before anything on main changes; a non-zero exit refuses "
+              "the landing (exit %d): %s" % (p["wt"], EXIT_PRE_VERIFY, a.pre_verify))
+    else:
+        print("pre-verify: none -- no lint roster will be run on the branch before the landing")
     print("commit message:")
     for ln in p["message"].splitlines():
         print("  | %s" % ln)
@@ -1204,6 +1349,7 @@ def land(p, a):
         repeat_leftover(p)
         return 0
     print("VERIFY: %s" % a.verify)
+    say_tier("the verify")
     sys.stdout.flush()
     sys.stderr.flush()
     verify_rc = subprocess.run(a.verify, shell=True, cwd=str(top)).returncode
@@ -1240,6 +1386,10 @@ def main(argv=None):
                    help="the project's verify loop, run from the main checkout through the platform's default "
                         "shell: cmd.exe on Windows, so a bash-form VAR=x cmd goes inside bash -c '...'")
     v.add_argument("--no-verify", action="store_true", help="run no verify (says so loudly)")
+    ap.add_argument("--pre-verify", metavar="COMMAND",
+                    help="the project's lint command, run IN THE BUILD WORKTREE (the committed branch) before "
+                         "anything on main changes, through the same shell as --verify; a non-zero exit refuses "
+                         "the landing (exit %d). Without it one line says no lint roster was run" % EXIT_PRE_VERIFY)
     ap.add_argument("--queue", default=DEFAULT_QUEUE, help="the queue file, relative to the checkout (default: %s)"
                     % DEFAULT_QUEUE)
     ap.add_argument("--repo", help="the main checkout (default: the current directory)")
@@ -1266,6 +1416,8 @@ def main(argv=None):
         ap.error("--subject must be one non-empty line")
     if a.verify is not None and not a.verify.strip():
         ap.error("--verify is empty: name the project's verify loop, or pass --no-verify")
+    if a.pre_verify is not None and not a.pre_verify.strip():
+        ap.error("--pre-verify is empty: name the project's lint command, or leave the flag out")
     for t in a.trailer:
         if not TRAILER.match(t.strip()) or t.strip().lower().startswith("upgrade:"):
             ap.error("--trailer %r is not one 'Key: value' line (and Upgrade: comes from --upgrade)" % t)
@@ -1281,11 +1433,24 @@ def main(argv=None):
         p = plan(a)
         # Before anything changes: a warning, never a refusal, and no exit code of its own.
         p["parent_note"] = parent_check(p["wt"])
+        # Before anything starts a tier, on a dry run too: under the machine's memory floor nothing changes (exit 75).
+        check_memory(a)
         if a.dry_run:
             return show(p, a)
+        # In the worktree, before the review and before anything on main: a refusal here changes nothing.
+        run_pre_verify(p, a)
+        if a.pre_verify:
+            # The pre-verify took minutes: plan again, so main is checked right before the landing writes it.
+            p = replan(p, a)
         # Before the commit, and never waited on here: the review never gates the landing.
         p["codex"] = codex_start(p, a)
         rc = land(p, a)
+    except PreVerifyFailed as e:
+        print("PRE-VERIFY FAILED: %s" % e)
+        rc = EXIT_PRE_VERIFY
+    except HeadroomLow as e:
+        print("REFUSED: %s" % e)
+        rc = EXIT_HEADROOM
     except Refused as e:
         print("REFUSED: %s" % e)
         rc = EXIT_REFUSED

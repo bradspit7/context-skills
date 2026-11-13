@@ -127,16 +127,31 @@ the same app id when both carry one, otherwise the same CLI id. The wrap declare
       cannot see). `no matching stamped commits found` with no branch or folder to look at is
       unknown, never clean. Exit 0 clear, 1 open, 2 usage or inspection incomplete (merges nothing).
       With nothing to merge it runs no merge-check and costs what --sessions costs.
+      A conflict only in docket files (the ones analyze-context's docket_corpus.py finds: roadmap.md,
+      docket.md and their archives) is settled row by row before it is reported NOT MERGED. In each
+      conflict block (git merge-file --diff3), a line that is one row on all three sides comes from
+      the side that changed it; whole lines a side added after the shared ones are kept (ours, then
+      theirs); a row both sides changed is settled only when one side only inserted text: ours
+      first, theirs' addition after it. Anything else stays NOT MERGED and says why: a conflict
+      outside a docket file, a changed line that is not one row on all three sides, a block a side
+      shortened, a row both sides rewrote. Bytes are kept exactly, line endings included, and the
+      MERGED line says how many rows were settled. merge-check runs on the result as on any merge,
+      so a row both sides changed always stops there (restated-fact), and the report names the
+      settled commit to accept and land once the finding is re-derived.
 Every git call is bounded by GIT_TIMEOUT seconds; a call past it exits 2.
 """
 import argparse
 import hashlib
 import json
 import os
+import posixpath
 import re
+import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
+import types
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -1617,6 +1632,326 @@ def changed_since(repo, base, rev):
     return set(git(repo, "diff", "--name-only", "--no-renames", base, rev).stdout.splitlines())
 
 
+# ----------------------------------------------------------------------------------------------
+# A docket conflict that needs no decision, settled row by row. Measured on one project's evening of
+# 2026-11-11/12: 7 of 26 wrap merges stopped on `conflict in continuation/memory/roadmap.md`. That
+# docket keeps one row per physical line and git merges line hunks, so two sessions that each edit
+# their OWN row conflict whenever the rows are adjacent. Each was settled by hand the same way, at
+# about 8 tool calls apiece: in each conflict block, each line from the side that changed it; a row
+# both sides changed, ours first and theirs' added text after it (the order merge-check's
+# restated-fact finding forced on #399); whole lines a side added after the shared ones, kept. This
+# does that on bytes and refuses everything else, which then stays NOT MERGED exactly as before.
+# ----------------------------------------------------------------------------------------------
+
+DOCKET_CORPUS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
+                                              "analyze-context", "scripts", "docket_corpus.py"))
+# The conflict markers git merge-file writes here. A side holding a line that begins like one is
+# refused: a markdown setext underline is a run of '=' and must never read as a block's separator.
+MARKER_SIZE = 32
+MARKS = (b"<", b"|", b"=", b">")
+_LOADED = []
+
+
+class Unsettled(Exception):
+    """Why a conflict is not settled row-wise: the merge stays NOT MERGED, as before. `quiet`: no
+    conflicted path is a docket file, so there was nothing to try and nothing to say."""
+
+    def __init__(self, why, quiet=False):
+        Exception.__init__(self, why)
+        self.quiet = quiet
+
+
+def docket_corpus():
+    """analyze-context's docket_corpus.py, compiled from source once (rotate-docket.py's loader)."""
+    if not _LOADED:
+        if not os.path.isfile(DOCKET_CORPUS):
+            raise Unsettled("%s is not there" % DOCKET_CORPUS)
+        mod = types.ModuleType("_wrap_completeness_docket_corpus")
+        mod.__file__ = DOCKET_CORPUS
+        try:
+            with open(DOCKET_CORPUS, encoding="utf-8") as fh:
+                exec(compile(fh.read(), DOCKET_CORPUS, "exec"), mod.__dict__)
+        except Exception as ex:  # noqa: BLE001 -- any failure to load is a reason not to settle
+            raise Unsettled("%s could not be loaded: %s" % (DOCKET_CORPUS, ex))
+        _LOADED.append(mod)
+    return _LOADED[0]
+
+
+def git_bytes(repo, *args, data=None, env=None):
+    """git with bytes in and out: a blob is bytes, never decoded, never newline-translated."""
+    try:
+        return subprocess.run(["git", "-c", "core.quotePath=false", "-C", repo] + list(args), input=data,
+                              capture_output=True, env=env, timeout=GIT_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        raise Usage("git %s timed out after %ss" % (" ".join(args), GIT_TIMEOUT)) from None
+
+
+def _err(r):
+    return " ".join(r.stderr.decode("utf-8", "replace").split())
+
+
+def split_lines_kept(data):
+    """`data` split after each LF; every line keeps its own ending (CRLF, LF), lone CRs inside it."""
+    return [ln for ln in re.split(b"(?<=\n)", data) if ln]
+
+
+def _body(line):
+    """(a line without its ending, the ending)."""
+    if line.endswith(b"\r\n"):
+        return line[:-2], b"\r\n"
+    if line.endswith(b"\n"):
+        return line[:-1], b"\n"
+    return line, b""
+
+
+def _marker(line, mark):
+    body = _body(line)[0]
+    return body == mark * MARKER_SIZE or body.startswith(mark * MARKER_SIZE + b" ")
+
+
+def docket_kinds(repo, paths):
+    """{path: kind} for the conflicted paths that are docket files: the ones docket_corpus.py's own
+    discovery finds in this checkout (what the session-start briefing and rotate-docket.py read)."""
+    dc = docket_corpus()
+    top = git(repo, "rev-parse", "--show-toplevel").stdout.strip()
+    try:
+        found = [f for f in dc.discover(project="root:" + top) if f["kind"] in dc.DOCKET_KINDS]
+    except Exception as ex:  # noqa: BLE001 -- a discovery that failed found nothing to settle
+        raise Unsettled("docket_corpus.py could not list this checkout's docket files: %s" % ex)
+    kinds = dict((str(f["rel"]).replace("\\", "/").casefold(), f["kind"]) for f in found)
+    return dict((p, kinds[p.casefold()]) for p in paths if p.casefold() in kinds)
+
+
+def conflict_stages(repo, head, tip):
+    """(the tree git merge-tree wrote, {path: {stage: (mode, oid)}} for each conflicted file)."""
+    r = git_bytes(repo, "merge-tree", "--write-tree", "-z", "--no-messages", head, tip)
+    fields = r.stdout.split(b"\0")
+    tree = fields[0].decode("ascii", "replace")
+    if r.returncode != 1 or not _SHA_RE.fullmatch(tree):
+        raise Unsettled("git merge-tree did not report the conflict again: %s" % (_err(r) or "exit %d" % r.returncode))
+    stages = {}
+    for entry in fields[1:]:
+        if not entry:
+            break
+        meta, tab, raw = entry.partition(b"\t")
+        parts = meta.split(b" ")
+        if not tab or len(parts) != 3 or parts[2] not in (b"1", b"2", b"3"):
+            raise Unsettled("git merge-tree wrote a conflict entry this cannot read: %r" % entry[:80])
+        try:
+            path = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            raise Unsettled("a conflicted path is not UTF-8")
+        stages.setdefault(path, {})[int(parts[2])] = (parts[0].decode("ascii"), parts[1].decode("ascii"))
+    return tree, stages
+
+
+def row_keys(dc, data, kind, name):
+    """line -> the id of the row that line heads in this version, by docket_corpus's own parse of the
+    whole file (a table row's id depends on its header), or None: not a row head, an id local to its
+    line number, or a line that heads rows with different ids."""
+    rows, _row_of, lines, _err_cfg = dc.parse_bytes(data, kind=kind, rel=name)
+    heads = {}
+    for r in rows:
+        if not r["key"].startswith("@"):
+            heads.setdefault(lines[r["line"] - 1], set()).add(r["id"])
+
+    def key(line):
+        ids = heads.get(_body(line)[0].decode("utf-8", "replace"))
+        return next(iter(ids)) if ids and len(ids) == 1 else None
+    return key
+
+
+def _boundary(text, p):
+    """Whether byte offset p starts a character of UTF-8 `text` (or is its end)."""
+    return p == 0 or p == len(text) or not 0x80 <= text[p] <= 0xBF
+
+
+def inserted(base, line, rightmost=True):
+    """(p, added) when `line` is `base` with `added` inserted at byte p, a character boundary (the
+    rightmost such p, or the leftmost), else None."""
+    n, k = len(base), len(line) - len(base)
+    if k <= 0:
+        return None
+    pre = 0
+    while pre < n and base[pre] == line[pre]:
+        pre += 1
+    suf = 0
+    while suf < n and base[n - 1 - suf] == line[len(line) - 1 - suf]:
+        suf += 1
+    spots = [p for p in range(n - suf, pre + 1) if _boundary(base, p)]
+    if not spots:
+        return None
+    p = spots[-1] if rightmost else spots[0]
+    return p, line[p:p + k]
+
+
+def settle_row(b, o, t):
+    """One row both sides changed, differently: the settled line, or None. Settled only when one
+    side only inserted text and the other side's change lies wholly on ours' side of it: ours stays
+    first, theirs' addition after it (a note of theirs ahead of ours' row head is the mis-order
+    merge-check caught on #399). Line endings must agree on all three sides."""
+    (bb, be), (ob, oe), (tb, te) = _body(b), _body(o), _body(t)
+    if not be == oe == te:
+        return None
+    got = inserted(bb, tb, rightmost=True)
+    if got:  # theirs only inserted: after everything ours changed before that point
+        p, added = got
+        if ob.endswith(bb[p:]):
+            return ob[:len(ob) - (len(bb) - p)] + added + bb[p:] + be
+    got = inserted(bb, ob, rightmost=False)
+    if got:  # ours only inserted: theirs' change lies wholly after it
+        p, added = got
+        if tb.startswith(bb[:p]):
+            return bb[:p] + added + tb[p:] + be
+    return None
+
+
+def _show(line):
+    text = _body(line)[0].decode("utf-8", "replace")
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
+def settle_block(base, ours, theirs, keys, path):
+    """One diff3 conflict block settled row by row: (its lines, how many came from a side's change),
+    or raise Unsettled. A line is taken positionally only when it is one row on all three sides:
+    every line a side changed must head the row with the merge base line's id, which also refuses a
+    side that inserted or deleted a line inside the block (its rows no longer line up)."""
+    n = len(base)
+    if len(ours) < n or len(theirs) < n:
+        raise Unsettled("%s: a side has fewer lines than the merge base in a conflict block" % path)
+    out, rows = [], 0
+    for i in range(n):
+        b, o, t = base[i], ours[i], theirs[i]
+        row = keys["base"](b)
+        for side, x in (("ours", o), ("theirs", t)):
+            if x != b and (row is None or keys[side](x) != row):
+                raise Unsettled("%s: a line %s changed in a conflict block is not one row on all three sides: %s"
+                                % (path, side, _show(x)))
+        if o == t or t == b:
+            line = o
+        elif o == b:
+            line = t
+        else:
+            line = settle_row(b, o, t)
+            if line is None:
+                raise Unsettled("%s: both sides changed row %s and neither only inserted text clear of the "
+                                "other's change" % (path, row))
+        out.append(line)
+        rows += line != b
+    more_o, more_t = ours[n:], theirs[n:]
+    if more_o and more_t and more_o != more_t and set(more_o) & set(more_t):
+        raise Unsettled("%s: both sides added lines after the shared ones, some of them the same" % path)
+    added = more_o + ([] if more_t == more_o else more_t)
+    return out + added, rows + len(added)
+
+
+def settle_file(repo, path, kind, stages):
+    """A conflicted docket file's merge with each conflict block settled row by row: (its bytes,
+    conflict blocks, rows from a side), or raise Unsettled."""
+    if sorted(stages) != [1, 2, 3]:
+        raise Unsettled("%s: not a change on both sides of one merge-base version (added, deleted or renamed)"
+                        % path)
+    modes = set(mode for mode, _oid in stages.values())
+    if len(modes) != 1 or not modes <= {"100644", "100755"}:
+        raise Unsettled("%s: not the same regular file mode on all three sides" % path)
+    dc = docket_corpus()
+    data = {}
+    for side, stage in (("base", 1), ("ours", 2), ("theirs", 3)):
+        got = git_bytes(repo, "cat-file", "blob", stages[stage][1])
+        if got.returncode != 0:
+            raise Unsettled("%s: git cat-file failed: %s" % (path, _err(got)))
+        blob = got.stdout
+        if blob and not blob.endswith(b"\n"):  # git merge-file would add the missing line ending
+            raise Unsettled("%s: the last line of the %s version has no line ending" % (path, side))
+        if any(_marker(ln, mark) for ln in split_lines_kept(blob) for mark in MARKS):
+            raise Unsettled("%s: a line of the %s version begins like a conflict marker" % (path, side))
+        data[side] = blob
+    keys = dict((side, row_keys(dc, data[side], kind, posixpath.basename(path))) for side in data)
+    tmp = tempfile.mkdtemp(prefix="wrap-merge-rows-")
+    try:
+        files = []
+        for side in ("ours", "base", "theirs"):
+            files.append(os.path.join(tmp, side))
+            with open(files[-1], "wb") as fh:
+                fh.write(data[side])
+        r = git_bytes(repo, "merge-file", "-p", "--diff3", "--diff-algorithm=histogram",
+                      "--marker-size=%d" % MARKER_SIZE, "-L", "ours", "-L", "base", "-L", "theirs", *files)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    if not 0 < r.returncode < 128:
+        raise Unsettled("%s: git merge-file found no conflict to settle, or failed: %s"
+                        % (path, _err(r) or "exit %d" % r.returncode))
+    lines, merged, blocks, rows, i = split_lines_kept(r.stdout), [], 0, 0, 0
+    while i < len(lines):
+        if _marker(lines[i], b"<"):
+            part, side = {"ours": []}, "ours"
+            i += 1
+            while True:
+                if i == len(lines):
+                    raise Unsettled("%s: a conflict block git merge-file wrote never closes" % path)
+                ln, nxt = lines[i], {"ours": b"|", "base": b"=", "theirs": b">"}[side]
+                if _marker(ln, nxt):
+                    if side == "theirs":
+                        break
+                    side = {"ours": "base", "base": "theirs"}[side]
+                    part[side] = []
+                elif any(_marker(ln, mark) for mark in MARKS):
+                    raise Unsettled("%s: git merge-file wrote conflict markers out of order" % path)
+                else:
+                    part[side].append(ln)
+                i += 1
+            got, n = settle_block(part["base"], part["ours"], part["theirs"], keys, path)
+            merged += got
+            blocks += 1
+            rows += n
+        elif any(_marker(lines[i], mark) for mark in MARKS):
+            raise Unsettled("%s: git merge-file wrote a conflict marker outside a block" % path)
+        else:
+            merged.append(lines[i])
+        i += 1
+    return b"".join(merged), blocks, rows
+
+
+def settle_docket_conflict(repo, head, tip, paths):
+    """The merge of head and tip with each conflict settled row by row: (its tree, {path: (conflict
+    blocks, rows)}), or raise Unsettled when a conflict is outside a docket file or is not one this
+    settles. Writes only objects: the settled blobs, and a tree built in a throwaway index."""
+    kinds = docket_kinds(repo, paths)
+    if not kinds:
+        raise Unsettled("no conflicted file is a docket file", quiet=True)
+    others = [p for p in paths if p not in kinds]
+    if others:
+        raise Unsettled("%s %s not a docket file" % (", ".join(others), "is" if len(others) == 1 else "are"))
+    tree, stages = conflict_stages(repo, head, tip)
+    if sorted(stages) != sorted(paths):
+        raise Unsettled("git merge-tree named other conflicted files on a second run: %s" % ", ".join(sorted(stages)))
+    settled, entries = {}, []
+    for path in sorted(stages):
+        data, blocks, rows = settle_file(repo, path, kinds[path], stages[path])
+        made = git_bytes(repo, "hash-object", "-w", "--stdin", data=data)  # stdin: no filters, the bytes as given
+        if made.returncode != 0:
+            raise Unsettled("git hash-object failed: %s" % _err(made))
+        entries.append("%s,%s,%s" % (stages[path][2][0], made.stdout.decode("ascii").strip(), path))
+        settled[path] = (blocks, rows)
+    tmp = tempfile.mkdtemp(prefix="wrap-merge-rows-")
+    try:
+        env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"))
+        for args in [("read-tree", tree)] + [("update-index", "--cacheinfo", e) for e in entries] + [("write-tree",)]:
+            r = git_bytes(repo, *args, env=env)
+            if r.returncode != 0:
+                raise Unsettled("git %s failed: %s" % (args[0], _err(r)))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return r.stdout.decode("ascii").strip(), settled
+
+
+def settled_words(settled):
+    """'N docket row(s) row-wise' and the per-file detail, for the report and the merge commit."""
+    rows = sum(n for _b, n in settled.values())
+    detail = "; ".join("%s (%d conflict block(s), %d row(s))" % (p, b, n) for p, (b, n) in sorted(settled.items()))
+    return "%d docket row(s) row-wise" % rows, detail
+
+
 def merge_branch(repo, tok, branch, s, left_out):
     """One started session's branch into HEAD, or the reason it stays out. Nothing changes until the
     final fast-forward, which git refuses, changing nothing, when HEAD moved, a dirty or untracked
@@ -1624,7 +1959,7 @@ def merge_branch(repo, tok, branch, s, left_out):
     is never aborted). Returns merged (the commit), nothing (HEAD reaches the branch), or why."""
     g, head_branch = s["graph"], s["head_branch"]
     m = {"token": tok, "branch": branch, "merged": None, "nothing": False, "why": None, "findings": [], "both": [],
-         "ahead": 0, "mine": 0, "by_hand": False}
+         "ahead": 0, "mine": 0, "by_hand": False, "settled": None, "commit": None}
     ref = "refs/heads/" + branch  # a tag of the same name would win over the bare name
     got = git(repo, "rev-parse", "--verify", "-q", ref + "^{commit}", check=False)
     if got.returncode != 0:
@@ -1659,23 +1994,30 @@ def merge_branch(repo, tok, branch, s, left_out):
     m["both"] = sorted(changed_since(repo, base, head) & changed_since(repo, base, tip))
     built = git(repo, "merge-tree", "--write-tree", "-z", "--name-only", "--no-messages", head, tip, check=False)
     fields = built.stdout.split("\x00")
+    tree = fields[0]
     if built.returncode == 1 and _SHA_RE.fullmatch(fields[0]):
-        m["why"] = "conflict in %s" % ", ".join(f for f in fields[1:] if f)
-        m["by_hand"] = True
-        return m
-    if built.returncode != 0:
+        paths = [f for f in fields[1:] if f]
+        try:
+            tree, m["settled"] = settle_docket_conflict(repo, head, tip, paths)
+        except Unsettled as ex:
+            m["why"] = "conflict in %s" % ", ".join(paths) + ("" if ex.quiet else "; not settled row-wise: %s" % ex)
+            m["by_hand"] = True
+            return m
+    elif built.returncode != 0:
         m["why"] = "git merge-tree failed (it needs git 2.38 or later): %s" % " ".join(built.stderr.split())
         return m
     msg = ["-m", "Merge started session's branch %s into %s" % (branch, head_branch),
            "-m", "Session: %s. %d commit(s). Wrap merge: merge-check clean, verify loop not run." % (tok, len(ahead))]
+    if m["settled"]:
+        msg += ["-m", "Docket conflict settled row by row: %s: %s." % settled_words(m["settled"])]
     value, _why = session_from_env()
     if value:
         msg += ["-m", "%s: %s" % (SESSION_KEY, value)]
-    made = git(repo, "commit-tree", fields[0], "-p", head, "-p", tip, *msg, check=False)
+    made = git(repo, "commit-tree", tree, "-p", head, "-p", tip, *msg, check=False)
     if made.returncode != 0:
         m["why"] = "git commit-tree failed: %s" % " ".join(made.stderr.split())
         return m
-    commit = made.stdout.strip()
+    commit = m["commit"] = made.stdout.strip()
     rc, out = merge_check(repo, commit)
     if rc is None:
         m["why"] = "merge-check could not run: %s" % out
@@ -1698,8 +2040,11 @@ def print_merge(m):
     if m["nothing"]:
         print("  nothing to merge: HEAD reaches it")
     elif m["merged"]:
-        print("  MERGED %d commit(s), %d with its stamp, as %s; ran merge-check (clean); did not run the verify loop"
-              % (m["ahead"], m["mine"], m["merged"][:9]))
+        print("  MERGED %d commit(s), %d with its stamp, as %s; %sran merge-check (clean); did not run the verify loop"
+              % (m["ahead"], m["mine"], m["merged"][:9],
+                 "settled %s; " % settled_words(m["settled"])[0] if m["settled"] else ""))
+        if m["settled"]:
+            print("  settled row by row: %s" % settled_words(m["settled"])[1])
         print("  both sides changed %s" % ("%d file(s): %s" % (len(m["both"]), ", ".join(m["both"])) if m["both"]
                                            else "no file"))
     else:
@@ -1710,6 +2055,10 @@ def print_merge(m):
             print("  by hand, in a worktree, so this checkout never holds a merge: git worktree add --detach <path> HEAD")
             print("    there: git merge --no-ff --no-edit refs/heads/%s; settle and check it under device-sync Step 1a"
                   % m["branch"])
+            if m["settled"] and m["commit"]:
+                print("    the docket conflict is already settled row by row (%s) in %s: there, git checkout %s -- %s "
+                      "takes it; accept a restated row only once it is re-derived from live source"
+                      % (settled_words(m["settled"])[1], m["commit"][:9], m["commit"], " ".join(sorted(m["settled"]))))
             print("    here: git %s <its sha>; if HEAD moved it refuses: merge HEAD there and repeat" % " ".join(FF_LAND))
 
 

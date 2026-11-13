@@ -2080,6 +2080,9 @@ def print_merge(m):
                 print("    the docket conflict is already settled row by row (%s) in %s: there, git checkout %s -- %s "
                       "takes it; check a combined or restated row against live source before you land it"
                       % (settled_words(m["settled"])[1], m["commit"][:9], m["commit"], " ".join(sorted(m["settled"]))))
+                if combined_rows(m["settled"]):  # whatever merge-check said: it does not read every row grammar
+                    print("    rows it combined from both sides' changes, ours first, each to check: %s"
+                          % combined_rows(m["settled"]))
             print("    here: git %s <its sha>; if HEAD moved it refuses: merge HEAD there and repeat" % " ".join(FF_LAND))
 
 

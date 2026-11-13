@@ -136,8 +136,9 @@ the same app id when both carry one, otherwise the same CLI id. The wrap declare
       outside a docket file, a changed line that is not one row on all three sides, a block a side
       shortened, a row both sides rewrote. Bytes are kept exactly, line endings included, and the
       MERGED line says how many rows were settled. merge-check runs on the result as on any merge,
-      so a row both sides changed always stops there (restated-fact), and the report names the
-      settled commit to accept and land once the finding is re-derived.
+      and a merge that combined a row both sides changed is never landed here, whatever merge-check
+      says: it reads NOT MERGED with each combined row named, and the by-hand path names the settled
+      commit to check and land.
 Every git call is bounded by GIT_TIMEOUT seconds; a call past it exits 2.
 """
 import argparse
@@ -1640,7 +1641,9 @@ def changed_since(repo, base, rev):
 # about 8 tool calls apiece: in each conflict block, each line from the side that changed it; a row
 # both sides changed, ours first and theirs' added text after it (the order merge-check's
 # restated-fact finding forced on #399); whole lines a side added after the shared ones, kept. This
-# does that on bytes and refuses everything else, which then stays NOT MERGED exactly as before.
+# does that on bytes and refuses everything else, which then stays NOT MERGED exactly as before. A
+# row it combined from both sides' changes is settled but never landed: a person checks it first
+# (merge-check's restated-fact cannot be relied on to stop it: it does not read every docket grammar).
 # ----------------------------------------------------------------------------------------------
 
 DOCKET_CORPUS = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..",
@@ -1812,14 +1815,15 @@ def _show(line):
 
 
 def settle_block(base, ours, theirs, keys, path):
-    """One diff3 conflict block settled row by row: (its lines, how many came from a side's change),
-    or raise Unsettled. A line is taken positionally only when it is one row on all three sides:
-    every line a side changed must head the row with the merge base line's id, which also refuses a
-    side that inserted or deleted a line inside the block (its rows no longer line up)."""
+    """One diff3 conflict block settled row by row: (its lines, how many came from a side's change,
+    the ids of the rows it combined from both sides' changes), or raise Unsettled. A line is taken
+    positionally only when it is one row on all three sides: every line a side changed must head the
+    row with the merge base line's id, which also refuses a side that inserted or deleted a line
+    inside the block (its rows no longer line up)."""
     n = len(base)
     if len(ours) < n or len(theirs) < n:
         raise Unsettled("%s: a side has fewer lines than the merge base in a conflict block" % path)
-    out, rows = [], 0
+    out, rows, combined = [], 0, []
     for i in range(n):
         b, o, t = base[i], ours[i], theirs[i]
         row = keys["base"](b)
@@ -1836,18 +1840,19 @@ def settle_block(base, ours, theirs, keys, path):
             if line is None:
                 raise Unsettled("%s: both sides changed row %s and neither only inserted text clear of the "
                                 "other's change" % (path, row))
+            combined.append(row)
         out.append(line)
         rows += line != b
     more_o, more_t = ours[n:], theirs[n:]
     if more_o and more_t and more_o != more_t and set(more_o) & set(more_t):
         raise Unsettled("%s: both sides added lines after the shared ones, some of them the same" % path)
     added = more_o + ([] if more_t == more_o else more_t)
-    return out + added, rows + len(added)
+    return out + added, rows + len(added), combined
 
 
 def settle_file(repo, path, kind, stages):
     """A conflicted docket file's merge with each conflict block settled row by row: (its bytes,
-    conflict blocks, rows from a side), or raise Unsettled."""
+    conflict blocks, rows from a side, ids of rows combined from both sides), or raise Unsettled."""
     if sorted(stages) != [1, 2, 3]:
         raise Unsettled("%s: not a change on both sides of one merge-base version (added, deleted or renamed)"
                         % path)
@@ -1881,7 +1886,7 @@ def settle_file(repo, path, kind, stages):
     if not 0 < r.returncode < 128:
         raise Unsettled("%s: git merge-file found no conflict to settle, or failed: %s"
                         % (path, _err(r) or "exit %d" % r.returncode))
-    lines, merged, blocks, rows, i = split_lines_kept(r.stdout), [], 0, 0, 0
+    lines, merged, blocks, rows, combined, i = split_lines_kept(r.stdout), [], 0, 0, [], 0
     while i < len(lines):
         if _marker(lines[i], b"<"):
             part, side = {"ours": []}, "ours"
@@ -1900,22 +1905,24 @@ def settle_file(repo, path, kind, stages):
                 else:
                     part[side].append(ln)
                 i += 1
-            got, n = settle_block(part["base"], part["ours"], part["theirs"], keys, path)
+            got, n, both = settle_block(part["base"], part["ours"], part["theirs"], keys, path)
             merged += got
             blocks += 1
             rows += n
+            combined += both
         elif any(_marker(lines[i], mark) for mark in MARKS):
             raise Unsettled("%s: git merge-file wrote a conflict marker outside a block" % path)
         else:
             merged.append(lines[i])
         i += 1
-    return b"".join(merged), blocks, rows
+    return b"".join(merged), blocks, rows, combined
 
 
 def settle_docket_conflict(repo, head, tip, paths):
     """The merge of head and tip with each conflict settled row by row: (its tree, {path: (conflict
-    blocks, rows)}), or raise Unsettled when a conflict is outside a docket file or is not one this
-    settles. Writes only objects: the settled blobs, and a tree built in a throwaway index."""
+    blocks, rows, ids of rows combined from both sides)}), or raise Unsettled when a conflict is
+    outside a docket file or is not one this settles. Writes only objects: the settled blobs, and a
+    tree built in a throwaway index."""
     kinds = docket_kinds(repo, paths)
     if not kinds:
         raise Unsettled("no conflicted file is a docket file", quiet=True)
@@ -1927,12 +1934,12 @@ def settle_docket_conflict(repo, head, tip, paths):
         raise Unsettled("git merge-tree named other conflicted files on a second run: %s" % ", ".join(sorted(stages)))
     settled, entries = {}, []
     for path in sorted(stages):
-        data, blocks, rows = settle_file(repo, path, kinds[path], stages[path])
+        data, blocks, rows, combined = settle_file(repo, path, kinds[path], stages[path])
         made = git_bytes(repo, "hash-object", "-w", "--stdin", data=data)  # stdin: no filters, the bytes as given
         if made.returncode != 0:
             raise Unsettled("git hash-object failed: %s" % _err(made))
         entries.append("%s,%s,%s" % (stages[path][2][0], made.stdout.decode("ascii").strip(), path))
-        settled[path] = (blocks, rows)
+        settled[path] = (blocks, rows, combined)
     tmp = tempfile.mkdtemp(prefix="wrap-merge-rows-")
     try:
         env = dict(os.environ, GIT_INDEX_FILE=os.path.join(tmp, "index"))
@@ -1947,9 +1954,17 @@ def settle_docket_conflict(repo, head, tip, paths):
 
 def settled_words(settled):
     """'N docket row(s) row-wise' and the per-file detail, for the report and the merge commit."""
-    rows = sum(n for _b, n in settled.values())
-    detail = "; ".join("%s (%d conflict block(s), %d row(s))" % (p, b, n) for p, (b, n) in sorted(settled.items()))
+    rows = sum(n for _b, n, _c in settled.values())
+    detail = "; ".join("%s (%d conflict block(s), %d row(s))" % (p, b, n) for p, (b, n, _c) in sorted(settled.items()))
     return "%d docket row(s) row-wise" % rows, detail
+
+
+def combined_rows(settled):
+    """'<path> <id>, <id>; ...' for the rows a settlement combined from both sides' changes, or ''.
+    Such a merge is never landed by this tool: merge-check's restated-fact reads only some docket
+    grammars (not a numbered row, not a table row with a bare number) and only some file names, so
+    the hold is the settlement's own, by the row ids it combined, whatever merge-check says."""
+    return "; ".join("%s %s" % (p, ", ".join(c)) for p, (_b, _n, c) in sorted(settled.items()) if c)
 
 
 def merge_branch(repo, tok, branch, s, left_out):
@@ -2027,6 +2042,12 @@ def merge_branch(repo, tok, branch, s, left_out):
         m["findings"] = [ln for ln in out.splitlines() if ln.startswith(("FINDING", "UNUSED"))] or out.splitlines()
         m["by_hand"] = True
         return m
+    both = combined_rows(m["settled"]) if m["settled"] else ""
+    if both:
+        m["why"] = ("rows both sides changed were combined, ours first and theirs' addition after it (%s): a person "
+                    "checks each before it lands" % both)
+        m["by_hand"] = True
+        return m
     landed = git(repo, *FF_LAND, commit, check=False)
     if landed.returncode != 0:
         m["why"] = "git refused the fast-forward: %s" % " ".join((landed.stderr or landed.stdout).split())
@@ -2057,7 +2078,7 @@ def print_merge(m):
                   % m["branch"])
             if m["settled"] and m["commit"]:
                 print("    the docket conflict is already settled row by row (%s) in %s: there, git checkout %s -- %s "
-                      "takes it; accept a restated row only once it is re-derived from live source"
+                      "takes it; check a combined or restated row against live source before you land it"
                       % (settled_words(m["settled"])[1], m["commit"][:9], m["commit"], " ".join(sorted(m["settled"]))))
             print("    here: git %s <its sha>; if HEAD moved it refuses: merge HEAD there and repeat" % " ".join(FF_LAND))
 

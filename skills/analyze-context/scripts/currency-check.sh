@@ -184,6 +184,11 @@ emit_arrival_surface() {
     echo "   The WORKTREES lines count on the Open line; to clear them, park a stopped build helper's (reflect-upgrades'"
     echo "   park-worktree.py), drop the rest, never commit one's files."
   fi
+  # Only when the FOLLOW-UPS section printed: a due date allows a check, it never lifts a hold.
+  if [ -n "${FOLLOWUPS_OUT:-}" ]; then
+    echo "   The FOLLOW-UPS section printed: put each due follow-up on the Open line in plain words. Check a due entry"
+    echo "   right after the briefing, read-only, from its Evidence; a Then step that writes, sends or lifts a hold waits for the owner."
+  fi
   # Only when a SIBLING REPOS line is behind or could not check: one at 0 needs nothing from the owner.
   if [ "${SIBLING_STALE_N:-0}" -gt 0 ]; then
     echo "   A SIBLING REPOS line is behind or not checked: say on the Do this line that the session-start pulls did not reach that repo, and run them before other work."
@@ -209,7 +214,7 @@ _arrival_unrouted() {
 # the docket, so the numbers have to come from here. A part with nothing to say is not printed, and
 # a count that could not be taken says so: a dropped helper must never read as a zero (G#444).
 emit_open_facts() {
-  local dc py="" c out rc n upn re src top wk em bt un wparts="" lines=() bad note rest re2
+  local dc py="" c out rc n upn re src top wk em bt un wparts="" lines=() bad note rest re2 re3
   dc="$(dirname "${BASH_SOURCE[0]}")/docket_corpus.py"
   # `python` first: on Windows a bare `python3` can resolve to the Microsoft Store alias stub.
   for c in python python3 py; do
@@ -263,6 +268,15 @@ emit_open_facts() {
   [ "$bt" -gt 0 ] && wparts="$wparts, $bt holding a mutation battery"
   [ "$un" -gt 0 ] && wparts="$wparts, $un could not check"
   [ -n "$wparts" ] && lines+=("OPEN worktrees: ${wparts#, }")
+  # The follow-ups count is the FOLLOW-UPS section's own summary line, never a second reading of the files.
+  if [ -n "${FOLLOWUPS_OUT:-}" ]; then
+    re3='^follow-ups: ([0-9]+) due here, [0-9]+ later; ([0-9]+) due in other projects(; ([0-9]+) could not check)?$'
+    if [[ "$(printf '%s\n' "$FOLLOWUPS_OUT" | head -1)" =~ $re3 ]]; then
+      lines+=("OPEN follow-ups: ${BASH_REMATCH[1]} due here, ${BASH_REMATCH[2]} in other projects${BASH_REMATCH[3]:+, ${BASH_REMATCH[4]} could not check}")
+    else
+      lines+=("OPEN follow-ups: could not check -- the FOLLOW-UPS section printed no count")
+    fi
+  fi
   echo
   echo "== OPEN (counts for the arrival briefing's Open line; a part with nothing to say is not printed) =="
   if [ "${#lines[@]}" -gt 0 ]; then
@@ -492,6 +506,49 @@ emit_rulings() {
   fi
 }
 
+# ---------- FOLLOW-UPS: dated checks due here and in the other projects -- BOTH paths, every mode ----------
+# FOLLOW-UPS.md at a project root holds one `## YYYY-MM-DD · <title>` entry per dated check (Check /
+# Evidence / Then / Hold bullets). The reader prints this project's due entries in full and one line per
+# other project with a due entry, so a quiet project nobody opens still resurfaces; nothing due prints
+# nothing. It runs once, before the report, so the OPEN count and the arrival surface read the same
+# output the section prints. A missing helper or a crash is LOUD, never an empty section (G#444).
+run_followups() {
+  local fu c py="" out rc top
+  FOLLOWUPS_OUT=""
+  fu="$(dirname "${BASH_SOURCE[0]}")/followups.py"
+  if [ ! -f "$fu" ]; then
+    FOLLOWUPS_OUT="could not check: followups.py is missing beside currency-check.sh"
+    return 0
+  fi
+  for c in python python3 py; do
+    if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' >/dev/null 2>&1; then
+      py="$c"; break
+    fi
+  done
+  if [ -z "$py" ]; then
+    FOLLOWUPS_OUT="could not check: no Python 3.9+ on PATH"
+    return 0
+  fi
+  top=$(git rev-parse --show-toplevel 2>/dev/null) || top=$(pwd)
+  out=$("$py" "$fu" due --root "$top" 2>&1); rc=$?
+  out=${out//$'\r'/}
+  if [ "$rc" -ne 0 ]; then
+    FOLLOWUPS_OUT="could not check: followups.py exited $rc (a crash, not a verdict): $(printf '%s\n' "$out" | tail -1)"
+  else
+    FOLLOWUPS_OUT="$out"
+  fi
+}
+
+emit_followups() {
+  [ -n "${FOLLOWUPS_OUT:-}" ] || return 0
+  {
+    echo
+    echo "== FOLLOW-UPS =="
+    echo "(state lines, not FINDINGs -- carry them into the briefing; check each due entry right after it, read-only)"
+    printf '%s\n' "$FOLLOWUPS_OUT"
+  } | _arrival_unrouted
+}
+
 # ---------- SIBLING REPOS: the other repos this project's CLAUDE.md pulls at session start -- BOTH paths ----------
 # Some projects start every session by pulling OTHER repos too (a `cd <path> && git pull` block in their
 # CLAUDE.md), and this gate fetched only the current one. One project's session start pulls two other
@@ -681,6 +738,7 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
   SIBLING_OUT=$(emit_sibling_repos | _arrival_unrouted)
   if [ -n "$SIBLING_OUT" ]; then printf '%s\n' "$SIBLING_OUT"; fi
   count_sibling_lines "$SIBLING_OUT"
+  run_followups
   NG_DOC=""
   for f in "${DOCS[@]}"; do [ -f "$f" ] && NG_DOC="$f" && break; done
   if [ -n "$NG_DOC" ]; then
@@ -693,6 +751,7 @@ if ! git rev-parse --git-dir >/dev/null 2>&1; then
   fi
   emit_upgrade_status
   emit_rulings
+  emit_followups
   echo
   echo "== VERDICT =="
   echo "No git history to verify currency against. Any NOTE above => flag staleness in the briefing header; in-content dates are the staleness evidence."
@@ -958,8 +1017,10 @@ fi
 
 emit_upgrade_status
 emit_rulings
+emit_followups
 }
 
+run_followups
 REPORT=$(emit_report | _arrival_unrouted)
 printf '%s\n' "$REPORT"
 FINDINGS_N=$(printf '%s\n' "$REPORT" | grep -c '^FINDING')

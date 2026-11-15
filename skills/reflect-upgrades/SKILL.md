@@ -233,6 +233,7 @@ A build started at the wrap is one the owner waits for, however it runs.
    agent that loads no instruction files is much cheaper to start, if you define one; it then knows only
    its brief, so the brief carries the project's rules (item 6's forbidden files included) and names the
    suites to run: the build's own and the project's cross-cutting lints, which scan every test file.
+   Start the brief from `~/.claude/skills/orchestrate/helper-brief.md`; this item adds the build-specific lines.
    Where the project's runner prints its lint roster, the brief pastes that output, never a hand list
    (for example `bash run-tests.sh --list-lints`; three hand lists each left one out). It
    is told to work

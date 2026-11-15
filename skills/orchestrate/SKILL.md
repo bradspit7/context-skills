@@ -18,6 +18,31 @@ The contracts below are deliberately mechanical. Follow them as written — they
 
 **Check the catalog before authoring a fan-out script:** glob `~/.claude/catalog/Workflow-recipes/` (start at `_index.md`) for a proven runnable that matches the pattern, and adapt it rather than re-deriving its hardening. (A hand-authored sweep convergently re-derived a proven runnable's guards at full authoring cost — and still missed one of its stages.)
 
+## Delegate by default
+
+**The line:** a job you expect to need 10 or more tool calls goes out; questions, decisions,
+conversation, one edit and a lookup stay here. A main session re-reads its whole context on every
+call, and a lean helper does not. Measured over two weeks of one user's sessions, jobs of 10 or
+more held 97% of what handing out saves, and handing out a job under 5 calls cost more than it saved.
+
+- **A lean helper is the default:** `lean-reader` to read; when a reader needs a shell,
+  `Explore` or `Plan` with an explicit `model`, told to read every file it judges in full;
+  a lean build agent in its own worktree to edit (`lean-builder`, if you define one). Never
+  `general-purpose` where a lean type fits: it started at a median 130K tokens, the lean types
+  at 6K to 14K.
+- **A full session only when** the user wants to talk to it or watch it, it needs their decisions
+  along the way, it will outlive this session, or it belongs to another repository. In the same
+  measurement a full session saved under a third of what a lean helper did.
+- **The brief starts from `helper-brief.md` beside this file:** goal and done means, where to
+  work, the rules, the checks, the report.
+- **Check what comes back before acting on it or telling the user.** A read: open the quoted lines
+  you will act on and confirm the words are there. An edit: land it with
+  `python ~/.claude/skills/reflect-upgrades/scripts/land-build.py <worktree> --subject "<subject>" --pre-verify "<lint command>" --verify "<verify loop>"`,
+  adding `--no-item "<why>"` for work outside the upgrade queue; its pre-verify runs the lints
+  in the helper's worktree and refuses before main changes.
+- **One line to the user per finished piece**, after the check: what changed, and its commit.
+  Nothing while it runs, unless they ask.
+
 ## The prompt contract (every dispatch, no exceptions)
 
 Subagents inherit NOTHING from this conversation. Every prompt must carry:

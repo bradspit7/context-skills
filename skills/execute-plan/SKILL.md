@@ -23,6 +23,15 @@ For each task, in order:
 
 1. Mark in_progress.
 2. Follow the steps **exactly as written** — the plan is the contract. The executor's judgment is for noticing problems, not for silently "improving" the plan.
+
+   **Place a step's code, never retype it.** When a step's fenced block is the exact text to write, put it in the file with the block placer, naming the block by the line number of its opening fence in the plan. Retyping costs output and lets the built file drift from the plan.
+
+   ```bash
+   python ~/.claude/skills/execute-plan/scripts/plan-blocks.py index <plan>
+   python ~/.claude/skills/execute-plan/scripts/plan-blocks.py create <plan> <fence line> <new file>
+   ```
+
+   `append`, `replace <old fence> <new fence>`, `delete` and `above "<exact line>"` place into a file that exists and keep its line endings; each refuses, changing nothing, unless the text it must find is there exactly once (`--help` lists every form). **Before handing tasks to a helper, copy the plan to a frozen file and work from the copy,** so later edits to the plan do not move the fence lines. **After the build, run `check <frozen plan> <built files or folders>` and explain every block it does not find** (the old side of a replace pair, a one-off command, a file that changed since); pass `--lang python` to check only the blocks with that language tag.
 3. Run every verification step and **read its output**. Expected-FAIL steps must actually fail; expected-PASS steps must actually pass. Never narrate a verification you didn't run.
 4. Check the checkbox in the plan file, commit per the task's commit step, mark completed. One task at a time — never batch-complete.
 

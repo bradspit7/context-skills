@@ -35,6 +35,8 @@ Slim session resumption for same-day continuation. The cheap sibling to `analyze
 
 ### Step 0 — Machine identity check
 
+Name the session first (Step 4.5's first call): the prefix carries the time the session started, so it is set before anything else runs.
+
 Run `hostname` (or `echo $COMPUTERNAME` on Windows) and match it against a known-machines mapping kept somewhere persistent (e.g., a section in your `~/.claude/CLAUDE.md`). Surface the result in the summary header: `**Machine:** <machine-name>`. If unknown, flag it: *"Unknown hostname `<x>` — verify cross-machine setup."*
 
 Cost: 1 bash command. Trivial.
@@ -91,6 +93,14 @@ Then wait for direction. **Don't produce the slim summary on stale data** — th
 ```
 
 Reproduce the handoff's docket section (its "Next tasks" / open-items / docket rows) in the order it lists them, **one line each, preserving each row's status marker** (🟢/🟡/⏸ etc.) so a parked or deprioritized row is never shown as actionable — surface each by its stable ID (`G#`/`#N`). Include still-open pending decisions. **Skip only rows the handoff has moved to its Resolved/done section** (`✅`/`✖`); a row that still lives in the open docket but reads "closed/deprioritized" stays, carrying its marker. Don't expand into the full briefing's per-item detail — one line each is the contract. If the handoff only *points* to a separate docket file as the home of open items, read that one file too (cheap, and it's the whole point of a resume). Optionally append: *"Want full briefing? `/analyze-context`."*
+
+### Step 4.5 — Name the session
+
+The session names itself in the sidebar, with `mcp__ccd_session_mgmt__set_session_title` and `session_id: "self"`, in two calls: as the skill starts (before Step 0's check), the prefix alone (`<device> <M/D> <h:mm><am|pm>`, from the machine and the local time now); when the first task is known, the same prefix followed by the task in a few words, the telling word first. A title is not a context-layer write.
+
+**Title format:** `<device> <M/D> <h:mm><am|pm> <what the session is doing>`, for example `PC 11/18 9:05pm Sidebar look` or `LT 11/18 11:49am Docket pass`. The device is `PC` on a desktop and `LT` on a laptop, as the user's instructions name this machine (else its hostname); the date and time are local, written with no leading zeros and a lowercase am or pm, and stay fixed once set, because they say when the session began.
+
+The tool belongs to the desktop app and may be listed as deferred: load it first (`ToolSearch`, `select:mcp__ccd_session_mgmt__set_session_title`). **Skip the step in silence** where the tool does not exist (a terminal or cloud session), inside a subagent, and in a session another session started, when its brief told it to name itself (it did so as it started); one whose brief did not names itself here like any other. Never rename any other session.
 
 ### Step 5 — Stop
 

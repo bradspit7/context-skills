@@ -15,6 +15,12 @@ Safe to use as a general session-start (a no-op pull + no-op sync still just bri
 
 ## Step 0 — Probe (never parse a guessed shape)
 
+**First, name the session:** set its title to the prefix alone (`<device> <M/D> <h:mm><am|pm>`, from the machine and the local time now) with `mcp__ccd_session_mgmt__set_session_title` and `session_id: "self"`; `analyze-context`'s naming step keeps this prefix and adds the task.
+
+**Title format:** `<device> <M/D> <h:mm><am|pm> <what the session is doing>`, for example `PC 11/18 9:05pm Sidebar look` or `LT 11/18 11:49am Docket pass`. The device is `PC` on a desktop and `LT` on a laptop, as the user's instructions name this machine (else its hostname); the date and time are local, written with no leading zeros and a lowercase am or pm, and stay fixed once set, because they say when the session began.
+
+The tool belongs to the desktop app and may be listed as deferred: load it first (`ToolSearch`, `select:mcp__ccd_session_mgmt__set_session_title`). **Skip the step in silence** where the tool does not exist (a terminal or cloud session), inside a subagent, and in a session another session started, when its brief told it to name itself (it did so as it started); one whose brief did not names itself here like any other. Never rename any other session.
+
 Run the bundled probe from the project root (Bash tool; works on Windows git-bash and macOS):
 
 ```bash

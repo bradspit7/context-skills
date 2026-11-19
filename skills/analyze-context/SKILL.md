@@ -28,6 +28,8 @@ Do NOT fire when:
 
 ## Step 1 — Currency gate (before reading ANY content file)
 
+Name the session first (the section below, its first call): the prefix carries the time the session started, so it is set before the gate runs.
+
 Run the bundled script from the project root (Bash tool; works on Windows git-bash and macOS):
 
 ```bash
@@ -49,7 +51,9 @@ One run replaces the old Step 0 + Step 1.5 + pre-briefing checkpoint. It reports
 - **`NOTE worktree-...` lines in the `WORKTREES` section (printed only when a linked worktree holds work HEAD does not carry, is emptied or prunable, or holds a mutation battery's sentinel)** → state lines, never FINDINGs, carried into Known issues on the full and slim paths and counted, in plain words, on the arrival path's `Open:` line. A `worktree-work` line is usually a stopped build helper's partial diff, machine-local: say so and offer to park it (`reflect-upgrades`' `park-worktree.py`) or drop it; never commit its files. Its queue entry's `- **Partial:**` bullet is where the next build starts (`reflect-upgrades` Step 5).
 - **`SIBLING REPOS` section (printed only when the project's CLAUDE.md pulls other repos at session start)** → state lines, never FINDINGs; carried into Known issues on the full and slim paths. A sibling `behind N` (N > 0) or `could not check` means that session-start sequence did not run here (typing `/analyze-context` instead of `device-sync` skips it): run the sequence from the project's CLAUDE.md before other work.
 - **`SAME-DAY RESUME CANDIDATE` (RESUME CLASS section) + zero FINDINGs → take the slim path.** Unless the user explicitly asked for a full briefing ("catch me up", "brief me", "what's the state") or their message implies new scope: read the primary doc fully and deliver `analyze-handoff`'s 3-line summary (last completed / next intended / blocker) **plus the docket** (open items by ID, one line each, preserving each row's status marker so a parked/deprioritized row is never shown as actionable; skip only rows moved to the handoff's Resolved/✅ section; source it from the doc's own next-tasks/open-items section — or the separate docket file the handoff points to, if any. **Bound that file: `wc -c` first; at or under ~40KB read it fully, above that read only its open-item region — header plus open/next-tasks, stopping at the first Resolved/Archived/Closed heading — and state the remainder as a number (`381KB of closed history not read`), never a silent omission. Step 3's size valve applies on the slim path too, even though Steps 2–4 are skipped; full rule in `analyze-handoff` Step 2**), **plus the `UPGRADES` / `CI` / `RULED OUT` / `DEPLOY PARITY` / `SITE TOOLS` lines the gate printed, verbatim** (the same-day resume is exactly when a ruled-out option gets proposed back), with a one-line "full briefing on request" offer — do NOT run Steps 2–4's deep reads. This in-skill downgrade IS the analyze-context↔analyze-handoff routing; invocation-time routing measurably never happens (2026-07-04 audit: 0 slim-path uses in 204 sessions while 20+ same-day resumes paid the full read). A `FULL BRIEFING` class, any FINDING, or an explicit full-picture request proceeds normally — the class line's stated reasons say which.
-- **`ARRIVAL BRIEFING` (RESUME CLASS section, printed only under `--arrival`) + zero FINDINGs → take the arrival path.** Unless the user explicitly asked for a full briefing: read the primary doc as the class block's `MEASURED` line says (whole at or under ~40KB, otherwise only its current-state portion, with the unread remainder stated as a number). **Do not read the docket:** the gate's `OPEN` section holds the counts the `Open:` line needs, and a project with no docket simply has no count there. **Skip Steps 2 through 4.5:** no depth reads (memory topic files, specs, archive), no reading helpers or subagents, no refutation cross-check, no test or verify runs. **One exception: Step 4.5's this-machine row still runs.** When the Blocked line or an open item the handoff names points at a past action of this machine, or says something lives only on it, check this machine's runtime logs and that day's session transcripts as that row says, in the main thread, before listing it; ask the owner only what they do not answer. **The queue's build still starts:** when the `UPGRADES` line shows a non-empty `UPGRADE-QUEUE.md`, or an empty one with entries in `UPGRADE-NEXT.md`, this session's one build starts right after the briefing, in the background, exactly as the `UPGRADES` bullet above says, unless nothing on it passes that check; it is the one subagent an arrival launches. Deliver this short format and nothing else, start that build if there is one to start, process a pending inbox, then stop:
+
+  On the slim path too, name the session (below) with its task once one is known.
+- **`ARRIVAL BRIEFING` (RESUME CLASS section, printed only under `--arrival`) + zero FINDINGs → take the arrival path.** Unless the user explicitly asked for a full briefing: read the primary doc as the class block's `MEASURED` line says (whole at or under ~40KB, otherwise only its current-state portion, with the unread remainder stated as a number). **Do not read the docket:** the gate's `OPEN` section holds the counts the `Open:` line needs, and a project with no docket simply has no count there. **Skip Steps 2 through 4.5:** no depth reads (memory topic files, specs, archive), no reading helpers or subagents, no refutation cross-check, no test or verify runs. **One exception: Step 4.5's this-machine row still runs.** When the Blocked line or an open item the handoff names points at a past action of this machine, or says something lives only on it, check this machine's runtime logs and that day's session transcripts as that row says, in the main thread, before listing it; ask the owner only what they do not answer. **The queue's build still starts:** when the `UPGRADES` line shows a non-empty `UPGRADE-QUEUE.md`, or an empty one with entries in `UPGRADE-NEXT.md`, this session's one build starts right after the briefing, in the background, exactly as the `UPGRADES` bullet above says, unless nothing on it passes that check; it is the one subagent an arrival launches. Deliver this short format and nothing else, name the session (below) with its task once one is known, start that build if there is one to start, process a pending inbox, then stop:
 
   ```markdown
   ## <Project> · arrival
@@ -205,9 +209,20 @@ Multi-dev briefings add: open PRs by author, lane allocation, and unanswered fee
 
 **Sizing is structural, not numeric.** Clean docket ≈ 200-300 words; complex multi-workstream state may need 600-800. Compress, link instead of copying, scope to what the resumer needs first. "Short" is not a virtue if it drops real state; a padded-thin briefing that hid half the in-flight items is the actual failure.
 
+## Name the session (every path: the prefix first, the task when it is known)
+
+A session the user starts with a start command is titled from that command, so every such row in the sidebar reads the same and none can be told apart. So the session names itself, with `mcp__ccd_session_mgmt__set_session_title` and `session_id: "self"` (a title the app made is replaced without a prompt):
+
+1. **As the skill starts, before the currency gate:** the prefix alone, `<device> <M/D> <h:mm><am|pm>`, from the machine and the local time now; when `device-sync` already set it, keep it.
+2. **When the first real task is known** (the build this briefing starts, or the user's first request after it): the same prefix followed by the task in a few words, the telling word first. Rename again only if the session's work clearly becomes something else; `update-context` sets the final title at the wrap.
+
+**Title format:** `<device> <M/D> <h:mm><am|pm> <what the session is doing>`, for example `PC 11/18 9:05pm Sidebar look` or `LT 11/18 11:49am Docket pass`. The device is `PC` on a desktop and `LT` on a laptop, as the user's instructions name this machine (else its hostname); the date and time are local, written with no leading zeros and a lowercase am or pm, and stay fixed once set, because they say when the session began.
+
+The tool belongs to the desktop app and may be listed as deferred: load it first (`ToolSearch`, `select:mcp__ccd_session_mgmt__set_session_title`). **Skip the step in silence** where the tool does not exist (a terminal or cloud session), inside a subagent, and in a session another session started, when its brief told it to name itself (it did so as it started); one whose brief did not names itself here like any other. Never rename any other session, and leave the rename out of the briefing: the sidebar shows it.
+
 ## Step 6 — Stop. The user drives.
 
-Deliver the briefing, then wait. Drill-downs, redirects, and "continue with next step" are all user calls.
+Deliver the briefing, name the session (above) with its task once one is known, then wait. Drill-downs, redirects, and "continue with next step" are all user calls.
 
 **Dispute rules — in order:**
 1. **User contests current-state or next-step ("we moved past this", "that's not where we are")** → re-run the Step 1 script FIRST. Currency drift the gate missed is the most common cause of a wrong briefing — not a missing file. Static-file deepening comes second.
@@ -233,7 +248,7 @@ Deliver the briefing, then wait. Drill-downs, redirects, and "continue with next
 
 ## Do NOT
 
-- Write anything — read-only skill; writes are `update-context`'s job (a temporary extract into the session scratchpad for a reader, per Step 4, is not a context-layer write)
+- Write anything — read-only skill; writes are `update-context`'s job (a temporary extract into the session scratchpad for a reader, per Step 4, is not a context-layer write); naming the session is not a context-layer write either
 - Invoke `update-context` in the same action — lifecycle bookends, not a compound
 - Skip files "for token efficiency" — delegate instead
 - Read other devs' per-dev files in depth by default (multi-dev) — scan for cross-lane context only

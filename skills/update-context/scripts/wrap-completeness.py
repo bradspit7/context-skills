@@ -124,7 +124,14 @@ the same app id when both carry one, otherwise the same CLI id. The wrap declare
       the --sessions report, then the verdict: `clear:`, or `open:` with one line per item that
       withholds the wrap's closing line (a branch not merged and why; a running session; commits
       HEAD does not reach, stamped or not; a session's uncommitted files, by name; a session it
-      cannot see). `no matching stamped commits found` with no branch or folder to look at is
+      cannot see). A session whose --folder is the checkout this runs in is read differently: its
+      commits are on HEAD already, and an uncommitted path there may be the session's or the wrap's
+      own, which nothing here can tell apart. So that checkout's uncommitted paths are one `open:`
+      item, by name, naming every started session that shares it: classify each before the wrap
+      commits, and never commit them as the wrap's own unread. `clear:` is never printed over them
+      (it was until 2026-11-19, when they were skipped as the wrap's own). A dirty checkout that no
+      started session's --folder names adds no item: the wrap's own triage reads it, as before.
+      `no matching stamped commits found` with no branch or folder to look at is
       unknown, never clean. Exit 0 clear, 1 open, 2 usage or inspection incomplete (merges nothing).
       With nothing to merge it runs no merge-check and costs what --sessions costs.
       A conflict only in docket files (the ones analyze-context's docket_corpus.py finds: roadmap.md,
@@ -2130,7 +2137,7 @@ def open_items(repo, s, merged, running, named):
                 continue
             looked = True
             if f["here"]:
-                continue  # this checkout: its dirty paths and its commits are the wrap's own
+                continue  # this checkout: its commits are on HEAD, and its dirty paths are read once, below
             if f["uncommitted"]:
                 paths = uncommitted_paths(f["path"])
                 items.append("session %s: folder %s: %d uncommitted, never committed for it: %s"
@@ -2144,6 +2151,21 @@ def open_items(repo, s, merged, running, named):
         if not t["on_head"] and not t["elsewhere"] and not looked and tok not in running:
             items.append("session %s: unknown: no matching stamped commits found, and no branch or folder to look at"
                          % tok)
+    # The checkout this runs in, when a started session's folder is that same checkout: an uncommitted
+    # path there may be the session's or the wrap's own, and nothing here can say which. So it is
+    # never the session's "never committed for it" and never skipped as the wrap's own (which read
+    # `clear:` over a started session's unreviewed changes): the paths are named once, with every
+    # session that shares the checkout. A dirty checkout no started session shares adds nothing.
+    # Who shares it comes from the --folder given, and whether it is dirty from this one read, never from
+    # the count each folder's inspection took earlier: a path that arrived or left between the two reads
+    # then moves neither the sessions named nor the count (Codex review 20261119-103413-1c689a).
+    sharing = [t["token"] for t in s["tokens"] if any(f["here"] for f in t["folders"])]
+    paths = uncommitted_paths(s["repo"]) if sharing else []
+    if paths:
+        who = "session %s shares" % sharing[0] if len(sharing) == 1 else "sessions %s share" % ", ".join(sharing)
+        items.append("this checkout holds %d uncommitted path(s) that started %s: classify each before commit; never "
+                     "commit them as the wrap's own without knowing whose they are: %s"
+                     % (len(paths), who, ", ".join(paths)))
     return items
 
 
